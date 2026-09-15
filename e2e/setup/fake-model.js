@@ -28,6 +28,7 @@ const CHUNK_DELAY_MS = Number(process.env.MOCK_LLM_CHUNK_DELAY_MS) || 10;
 const CREATE_SKILL_MARKER = 'E2E_CREATE_SKILL:';
 const EDIT_SKILL_MARKER = 'E2E_EDIT_SKILL:';
 const ASSERT_SKILLS_MARKER = 'E2E_ASSERT_SKILLS:';
+const ASSERT_PROMPT_CACHE_MARKER = 'E2E_ASSERT_PROMPT_CACHE:';
 const ASSERT_MANUAL_SKILL_MARKER = 'E2E_ASSERT_MANUAL_SKILL:';
 const INVOKE_SKILL_MARKER = 'E2E_INVOKE_SKILL:';
 const ASSERT_PROVIDER_FILE_MARKER = 'E2E_ASSERT_PROVIDER_FILE:';
@@ -326,6 +327,7 @@ async function getStreamAgentView({ graph, messages, options, runManager }) {
   const toolDefinitions = collectToolDefinitions(agentContext ? [agentContext] : []);
   return {
     agentId,
+    agentContext,
     messages: promptMessages,
     toolDefinitions,
     toolNames: new Set(toolDefinitions.keys()),
@@ -543,6 +545,13 @@ function quoteAssertionResponses({ messages, text }) {
   }
   return {
     responses: [`E2E quote assertion failed: no blockquote containing "${expected}" in the prompt`],
+  };
+}
+
+function promptCacheAssertionResponses(agentContext) {
+  const promptCacheKey = agentContext?.clientOptions?.promptCacheKey;
+  return {
+    responses: [`PROMPT_CACHE_KEY=${promptCacheKey ?? 'none'}`],
   };
 }
 
@@ -3431,6 +3440,20 @@ function resolveResponses({ graph, messages, text, toolNames }) {
   const quoteAssertion = quoteAssertionResponses({ messages, text });
   if (quoteAssertion) {
     return quoteAssertion;
+  }
+  if (text.includes(ASSERT_PROMPT_CACHE_MARKER)) {
+    return {
+      responses: [MOCK_REPLY],
+      resolveOnStream: async (streamMessages, streamOptions, runManager) => {
+        const agentView = await getStreamAgentView({
+          graph,
+          messages: streamMessages,
+          options: streamOptions,
+          runManager,
+        });
+        return promptCacheAssertionResponses(agentView.agentContext);
+      },
+    };
   }
 
   if (text.includes(ASSERT_SKILLS_MARKER)) {
