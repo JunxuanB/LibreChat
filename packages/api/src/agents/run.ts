@@ -110,6 +110,7 @@ import {
   isRunFileSharingSupported,
 } from './files/runtime';
 import { applyCustomHandoffPromptKeyCompatibility } from '~/agents/handoffPromptKeyCompatibility';
+import { buildPromptCacheKey, supportsExplicitPromptCache } from '~/endpoints/openai/promptCache';
 import { stripIntentFromToolRegistry, stripIntentFromToolDefinitions } from '~/agents/intent';
 import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
 import { extractDefaultParams, resolveReasoningParams } from '~/endpoints/openai/llm';
@@ -118,7 +119,6 @@ import { CREATE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '~/agents/tools';
 import { buildAgentInitialToolSessions } from '~/agents/codeFilesSession';
 import { getDirectDispatcher, getProxyDispatcher } from '~/utils/proxy';
 import { getAzureCredentials, constructAzureURL } from '~/utils/azure';
-import { buildPromptCacheKey, supportsExplicitPromptCache } from '~/endpoints/openai/promptCache';
 import { getBuiltInBaseURL } from '~/endpoints/openai/initialize';
 import { getProviderConfig } from '~/endpoints/config/providers';
 import { buildToolApprovalHooks } from '~/agents/hitl/hooks';
@@ -1492,12 +1492,24 @@ function shapeSummarizationConfig(
    * body parameters outright rather than ignoring them — so an unsupported
    * summary model has it withheld, unless the summarization config asked for
    * it itself.
+   *
+   * Read from the deployment the summary request addresses, not only from the
+   * visible model: on Azure an alias such as `production-chat` can front a
+   * supported deployment, and clearing the flag there would disable caching an
+   * administrator configured. `resolveAzureSummarization` puts the resolved
+   * deployment on `modelKwargs.model`, the same override the wire uses.
    */
+  const summaryWireModel = isPlainObject(parameters?.modelKwargs)
+    ? parameters.modelKwargs.model
+    : undefined;
+  const summarySupportsExplicitCache =
+    supportsExplicitPromptCache(model) ||
+    (typeof summaryWireModel === 'string' && supportsExplicitPromptCache(summaryWireModel));
   if (
     provider === fallbackProvider &&
     agentParameters?.promptCacheExplicit === true &&
     userParameters?.promptCacheExplicit == null &&
-    !supportsExplicitPromptCache(model)
+    !summarySupportsExplicitCache
   ) {
     parameters = { ...parameters, promptCacheExplicit: undefined };
   }
@@ -1893,6 +1905,7 @@ function finalizePromptCacheKey(input: AgentInputs, handoffEdges?: readonly unkn
   delete options.promptCacheScope;
   delete options.promptCacheScopeId;
   delete options.promptCacheStableInstructions;
+  delete options.promptCacheDiscoveredToolNames;
 }
 
 /**
@@ -2651,6 +2664,15 @@ export async function createRun({
      */
     let toolDefinitions = agent.toolDefinitions ?? [];
     let toolRegistry = agent.toolRegistry;
+    /**
+     * Definitions promoted below come from this conversation's tool_search
+     * results, so they must not reach the cache identity: hashing them would
+     * give every conversation its own entry, which is the reuse the key
+     * exists for. Recorded by name rather than filtered here, because the
+     * model does receive them — they belong on the request, just not in the
+     * name of the prefix the agent is configured to send.
+     */
+    const promotedDiscoveredToolNames: string[] = [];
     if (!isSubagent && discoveredTools.size > 0 && agent.toolRegistry) {
       overrideDeferLoadingForDiscoveredTools(agent.toolRegistry, discoveredTools);
 
@@ -2663,6 +2685,7 @@ export async function createRun({
         const toolDef = agent.toolRegistry.get(toolName);
         if (toolDef) {
           toolDefinitions = [...toolDefinitions, toolDef];
+          promotedDiscoveredToolNames.push(toolName);
         }
       }
     } else if (isSubagent && agent.toolRegistry) {
@@ -2781,6 +2804,9 @@ export async function createRun({
        * broken). Inline the field in the literal once the dependency is bumped.
        */
       (agentInput as AgentInputs & { graphTools?: GenericTool[] }).graphTools = graphTools;
+    }
+    if (promotedDiscoveredToolNames.length > 0) {
+      cacheOptions.promptCacheDiscoveredToolNames = promotedDiscoveredToolNames;
     }
     return agentInput;
   };
