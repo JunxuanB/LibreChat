@@ -602,6 +602,31 @@ export function applyDefaultParams(
   }
 }
 
+/**
+ * Removes every administrator-owned prompt-cache field from one set of client
+ * options and from any fallback client options nested under it.
+ *
+ * The fallbacks matter as much as the top level: `withModelCallbacks` builds a
+ * fallback client from its own `clientOptions`, so an author-supplied key or a
+ * billed `24h` retention there would reach the provider the moment the primary
+ * client failed — past the policy this enforces.
+ */
+function stripPromptCacheControls(options: Record<string, unknown>): void {
+  for (const field of PROMPT_CACHE_ADMIN_FIELDS) {
+    delete options[field];
+  }
+  const fallbacks = options.fallbacks;
+  if (!Array.isArray(fallbacks)) {
+    return;
+  }
+  for (const fallback of fallbacks) {
+    const nested = (fallback as { clientOptions?: unknown } | null)?.clientOptions;
+    if (nested != null && typeof nested === 'object') {
+      stripPromptCacheControls(nested as Record<string, unknown>);
+    }
+  }
+}
+
 export function getOpenAILLMConfig({
   azure,
   apiKey,
@@ -679,9 +704,7 @@ export function getOpenAILLMConfig({
    * endpoint configuration, and `addParams` remains the administrator's route
    * to a pinned key.
    */
-  for (const field of PROMPT_CACHE_ADMIN_FIELDS) {
-    delete (llmConfig as Record<string, unknown>)[field];
-  }
+  stripPromptCacheControls(llmConfig as Record<string, unknown>);
 
   if (frequency_penalty != null) {
     llmConfig.frequencyPenalty = frequency_penalty;
@@ -1021,8 +1044,17 @@ export function getOpenAILLMConfig({
    */
   const promptCacheExplicitDropped = dropParams?.includes('promptCacheExplicit') === true;
   const applyExplicitPromptCache = (deploymentName?: string) => {
+    /**
+     * Every name the request can address. `modelKwargs.model` overrides the
+     * visible one on the wire — the digest already keys on it — so a supported
+     * visible model fronting an unsupported override must not pass this gate,
+     * and a deployment alias fronting a supported one must.
+     */
+    const wireModel = (llmConfig.modelKwargs as { model?: unknown } | undefined)?.model;
     const supported =
-      supportsExplicitPromptCache(llmConfig.model) || supportsExplicitPromptCache(deploymentName);
+      (supportsExplicitPromptCache(llmConfig.model) ||
+        supportsExplicitPromptCache(deploymentName)) &&
+      (typeof wireModel !== 'string' || supportsExplicitPromptCache(wireModel));
     if (
       firstPartyEndpoint &&
       promptCacheExplicit === true &&
