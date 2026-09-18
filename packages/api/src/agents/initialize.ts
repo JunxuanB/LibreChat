@@ -114,14 +114,11 @@ import {
   hydrateChatProjectContextResources,
 } from '../projects/context';
 import {
-  appendConfiguredAdditionalInstructions,
-  captureConfiguredAdditionalInstructions,
-} from './context';
-import {
   createStatefulCodeEnvironmentPolicyError,
   isFatalAgentInitializationError,
 } from './errors';
 import { assertChatProjectInstructions, ChatProjectResourcesChangedError } from '../projects/turn';
+import { appendAgentInstructionTail, captureConfiguredAdditionalInstructions } from './context';
 import { extractAgentContent, extractSkillContent } from '../protection/adapters/submissions';
 import { createConfiguredContentInspector, inspectContent } from '../protection/runtime';
 import { assertAgentAttachmentLimits, isModelBoundAttachmentFile } from './attachments';
@@ -278,13 +275,16 @@ function hasTemporalSpecialVars(text: string): boolean {
   return temporalSpecialVarRegex.test(text);
 }
 
-function appendAdditionalInstructions(agent: Agent, text?: string | null): void {
-  if (text == null || text === '') {
-    return;
-  }
-  agent.additional_instructions = [agent.additional_instructions ?? '', text]
-    .filter(Boolean)
-    .join('\n\n');
+function appendAdditionalInstructions(
+  agent: Agent,
+  text?: string | null,
+  options: { stable?: boolean } = {},
+): void {
+  appendAgentInstructionTail(
+    agent as Agent & { configuredAdditionalInstructions?: string },
+    text,
+    options,
+  );
 }
 
 function appendProjectContextInstructions(
@@ -1179,6 +1179,12 @@ export async function initializeAgent(
     isInitialAgent = false,
     useChatProjectContext,
   } = params;
+  /**
+   * Before anything appends to the instruction tail: the author's text is the
+   * identity's starting point, and every configuration-derived addition below
+   * accumulates onto it while request-scoped ones opt out.
+   */
+  captureConfiguredAdditionalInstructions(agent);
   const runtime =
     params.runtime ?? (params.req ? createRequestAgentExecutionContext(params.req) : null);
   if (runtime == null) {
@@ -2432,13 +2438,6 @@ export async function initializeAgent(
     (agent.model_parameters as Record<string, unknown>).configuration = options.configOptions;
   }
 
-  /**
-   * Before the temporal branch below moves a resolved instruction block into
-   * `additional_instructions`: that text carries today's date, so it belongs
-   * with the volatile tail rather than in the prompt cache identity.
-   */
-  captureConfiguredAdditionalInstructions(agent);
-
   if (agent.instructions && agent.instructions !== '') {
     const resolvedInstructions = replaceSpecialVars({
       text: agent.instructions,
@@ -2448,7 +2447,8 @@ export async function initializeAgent(
     });
     if (hasTemporalSpecialVars(agent.instructions)) {
       agent.instructions = undefined;
-      appendAdditionalInstructions(agent, resolvedInstructions);
+      /** Resolved per run — today's date — so it is not part of the identity. */
+      appendAdditionalInstructions(agent, resolvedInstructions, { stable: false });
     } else {
       agent.instructions = resolvedInstructions;
     }
@@ -2479,15 +2479,6 @@ export async function initializeAgent(
       artifacts: agent.artifacts as never,
     });
     appendAdditionalInstructions(agent, artifactsPromptResult);
-    /**
-     * The artifact mode is configuration, so switching it changes the system
-     * text the model reads and has to retire the prompt cache identity — the
-     * run context appended to the same field must not.
-     */
-    appendConfiguredAdditionalInstructions(
-      agent as Agent & { configuredAdditionalInstructions?: string },
-      artifactsPromptResult,
-    );
   }
 
   let skillCount = 0;
