@@ -114,6 +114,10 @@ import {
   hydrateChatProjectContextResources,
 } from '../projects/context';
 import {
+  appendConfiguredAdditionalInstructions,
+  captureConfiguredAdditionalInstructions,
+} from './context';
+import {
   createStatefulCodeEnvironmentPolicyError,
   isFatalAgentInitializationError,
 } from './errors';
@@ -126,7 +130,6 @@ import { assertModelBoundContent } from '../middleware/modelBoundContent';
 import { isImplicitStatefulCodeRouteAvailable } from '../code/config';
 import { PARTIAL_RESOLVED_CONVERSATION } from './conversationSymbols';
 import { registerMemoryTools, memoryToolUsageGuard } from './memory';
-import { captureConfiguredAdditionalInstructions } from './context';
 import { applyIntentLabels, sanitizeIntentLabels } from './intent';
 import { ContentFilterError } from '../middleware/contentFilter';
 import { resolveToolRoleGrants } from '~/tools/rolePermissions';
@@ -2476,6 +2479,15 @@ export async function initializeAgent(
       artifacts: agent.artifacts as never,
     });
     appendAdditionalInstructions(agent, artifactsPromptResult);
+    /**
+     * The artifact mode is configuration, so switching it changes the system
+     * text the model reads and has to retire the prompt cache identity — the
+     * run context appended to the same field must not.
+     */
+    appendConfiguredAdditionalInstructions(
+      agent as Agent & { configuredAdditionalInstructions?: string },
+      artifactsPromptResult,
+    );
   }
 
   let skillCount = 0;
