@@ -2935,6 +2935,26 @@ export type TOpenIdDiscoveryConfig = z.infer<typeof openIdDiscoverySchema>;
 /** Maximum CAS attempts per ACL document, including the initial attempt. */
 export const permissionWriteAttemptsSchema = z.number().int().min(1).max(100).default(3);
 
+export const knowledgeBasePostgresConfigSchema = z.object({
+  /** Exact private host:port exceptions. Public destinations need no entry. */
+  allowedAddresses: allowedAddressesSchema,
+  /** Disables TLS only when an administrator explicitly opts in for a trusted deployment. */
+  allowPlaintext: z.boolean().default(false),
+  connectionTimeoutMs: z.number().int().min(100).max(60_000).default(10_000),
+  statementTimeoutMs: z.number().int().min(100).max(120_000).default(15_000),
+  maxRows: z.number().int().min(1).max(10_000).default(10_000),
+  maxBytes: z
+    .number()
+    .int()
+    .min(1_024)
+    .max(20 * 1024 * 1024)
+    .default(10 * 1024 * 1024),
+});
+
+export const knowledgeBaseConnectorConfigSchema = z.object({
+  postgresql: knowledgeBasePostgresConfigSchema.optional(),
+});
+
 export const configSchema = z.object({
   version: z.string(),
   permissions: z.object({ maxWriteAttempts: permissionWriteAttemptsSchema }).optional(),
@@ -2945,6 +2965,7 @@ export const configSchema = z.object({
   memory: memorySchema.optional(),
   summarization: summarizationConfigSchema.optional(),
   skillSync: skillSyncConfigSchema,
+  knowledgeBaseConnectors: knowledgeBaseConnectorConfigSchema.optional(),
   secureImageLinks: z.boolean().optional(),
   imageOutputType: z.nativeEnum(EImageOutputType).default(EImageOutputType.PNG),
   includedTools: z.array(z.string()).optional(),

@@ -22,7 +22,13 @@ const source = (overrides = {}) => ({
   ...overrides,
 });
 
-const build = ({ changes, current = null, sourceOverrides = {}, registry } = {}) => {
+const build = ({
+  changes,
+  current = null,
+  sourceOverrides = {},
+  registry,
+  serviceOverrides = {},
+} = {}) => {
   const record = source(sourceOverrides);
   const connectorRegistry = registry ?? {
     get: jest.fn(() => ({
@@ -53,6 +59,7 @@ const build = ({ changes, current = null, sourceOverrides = {}, registry } = {})
     deleteVectors,
     fetch: jest.fn(),
     assertSafeUrl: jest.fn(async () => undefined),
+    ...serviceOverrides,
   });
   return { service, database, uploadVectors, deleteVectors };
 };
@@ -138,7 +145,14 @@ describe('knowledge source ingestion service', () => {
     expect(database.deleteFile).toHaveBeenCalledWith('old-file');
   });
 
-  it('fails PostgreSQL explicitly when no hardened query executor is configured', async () => {
+  it('loads the administrator PostgreSQL policy and supplies the hardened executor', async () => {
+    const executeReadOnlyQuery = jest.fn(async (_connection, query) =>
+      query === 'SELECT 1 AS connected' ? [{ connected: 1 }] : [],
+    );
+    const createReadOnlyPostgresExecutor = jest.fn(() => executeReadOnlyQuery);
+    const getAppConfig = jest.fn(async () => ({
+      knowledgeBaseConnectors: { postgresql: { maxRows: 25 } },
+    }));
     const { service, database } = build({
       registry: createDefaultKnowledgeConnectorRegistry(),
       sourceOverrides: {
@@ -150,20 +164,22 @@ describe('knowledge source ingestion service', () => {
           contentColumns: ['body'],
         },
       },
+      serviceOverrides: { createReadOnlyPostgresExecutor, getAppConfig },
     });
     database.getKnowledgeConnectionSecrets.mockResolvedValue({
       connectionString: 'postgres://readonly:secret@example.com/db',
     });
 
-    await expect(service.syncKnowledgeSource('kb-1', 'source-1')).rejects.toThrow(
-      'PostgreSQL query execution is not configured',
+    await expect(service.syncKnowledgeSource('kb-1', 'source-1')).resolves.toEqual(
+      expect.objectContaining({ _id: 'source-1' }),
     );
-    expect(database.updateKnowledgeSourceSyncState).toHaveBeenLastCalledWith(
-      'source-1',
-      expect.objectContaining({
-        syncStatus: 'failed',
-        syncError: 'PostgreSQL query execution is not configured',
-      }),
+    expect(getAppConfig).toHaveBeenCalledWith({ baseOnly: true });
+    expect(createReadOnlyPostgresExecutor).toHaveBeenCalledWith({ maxRows: 25 });
+    expect(executeReadOnlyQuery).toHaveBeenCalledWith(
+      'postgres://readonly:secret@example.com/db',
+      'SELECT 1 AS connected',
+      [],
+      undefined,
     );
   });
 

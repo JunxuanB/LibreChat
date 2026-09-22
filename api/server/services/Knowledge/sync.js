@@ -10,7 +10,9 @@ const {
 } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const db = require('~/models');
+const { getAppConfig } = require('~/server/services/Config');
 const { deleteVectors, uploadVectors } = require('~/server/services/Files/VectorDB/crud');
+const { createReadOnlyPostgresExecutor } = require('./postgres');
 
 const MAX_CONNECTOR_FILE_BYTES = 20 * 1024 * 1024;
 
@@ -48,6 +50,18 @@ function createKnowledgeSourceSyncService(overrides = {}) {
   const assertSafeUrl =
     overrides.assertSafeUrl ??
     ((url) => validateEndpointURL(url.toString(), 'knowledge source connector'));
+  const loadAppConfig = overrides.getAppConfig ?? getAppConfig;
+  const createPostgresExecutor =
+    overrides.createReadOnlyPostgresExecutor ?? createReadOnlyPostgresExecutor;
+  let postgresExecutorPromise;
+  const executeReadOnlyQuery =
+    overrides.executeReadOnlyQuery ??
+    (async (...args) => {
+      postgresExecutorPromise ??= Promise.resolve(loadAppConfig({ baseOnly: true })).then((config) =>
+        createPostgresExecutor(config?.knowledgeBaseConnectors?.postgresql),
+      );
+      return (await postgresExecutorPromise)(...args);
+    });
   const activeSources = new Map();
 
   const loadSource = async (knowledgeBaseId, sourceId) => {
@@ -186,7 +200,7 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     loadSource,
     loadCredentials: (connectionId) => database.getKnowledgeConnectionSecrets(connectionId),
     connectorRegistry: registry,
-    connectorContext: { fetch: fetchImpl, assertSafeUrl },
+    connectorContext: { fetch: fetchImpl, assertSafeUrl, executeReadOnlyQuery },
     upsertDocument,
     deleteDocument,
     reconcileDocuments,

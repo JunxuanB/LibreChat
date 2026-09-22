@@ -1142,6 +1142,31 @@ describe('allowedAddressesSchema', () => {
       expect(result.success).toBe(true);
     });
 
+    it('validates PostgreSQL knowledge connector runtime policy', () => {
+      const result = configSchema.parse({
+        version: '1.0',
+        knowledgeBaseConnectors: {
+          postgresql: { allowedAddresses: ['postgres.internal:5432'] },
+        },
+      });
+      expect(result.knowledgeBaseConnectors?.postgresql).toEqual({
+        allowedAddresses: ['postgres.internal:5432'],
+        allowPlaintext: false,
+        connectionTimeoutMs: 10_000,
+        statementTimeoutMs: 15_000,
+        maxRows: 10_000,
+        maxBytes: 10 * 1024 * 1024,
+      });
+      expect(
+        configSchema.safeParse({
+          version: '1.0',
+          knowledgeBaseConnectors: {
+            postgresql: { allowedAddresses: ['postgres.internal'] },
+          },
+        }).success,
+      ).toBe(false);
+    });
+
     it('defaults and validates MCP catalog recovery controls', () => {
       const defaults = configSchema.parse({ version: '1.0', mcpSettings: {} });
       expect(defaults.mcpSettings?.catalogRecovery).toEqual({

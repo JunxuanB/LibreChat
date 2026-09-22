@@ -515,6 +515,20 @@ actions:
 #     - 'host.docker.internal:8080'
 #     - '127.0.0.1:8080'
 
+# Knowledge base connector runtime policy.
+# PostgreSQL connections use certificate-verified TLS, a read-only transaction,
+# and bounded queries by default. Private targets are blocked unless an administrator
+# allows one exact host and port here. User-created source config cannot change these limits.
+# knowledgeBaseConnectors:
+#   postgresql:
+#     allowedAddresses:
+#       - 'postgres.internal:5432'
+#     allowPlaintext: false # Only enable for a trusted database that cannot serve TLS.
+#     connectionTimeoutMs: 10000
+#     statementTimeoutMs: 15000
+#     maxRows: 10000
+#     maxBytes: 10485760
+
 # Example MCP Servers Object Structure
 # mcpServers:
 #   everything:
