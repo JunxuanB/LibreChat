@@ -9,7 +9,7 @@ jest.mock('librechat-data-provider', () => ({
     listKnowledgeDocuments: jest.fn(),
     createKnowledgeDocument: jest.fn(),
   },
-  request: { get: jest.fn(), post: jest.fn(), delete: jest.fn() },
+  request: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
 
 describe('knowledgeBaseApi', () => {
@@ -88,6 +88,10 @@ describe('knowledgeBaseApi', () => {
     (request.post as jest.Mock).mockResolvedValue({ _id: 'source-1' });
 
     await knowledgeBaseApi.sources('kb 1');
+    await knowledgeBaseApi.updateSource('kb 1', 'source/1', {
+      name: 'Updated',
+      config: { folderId: 'folder-2' },
+    });
     await knowledgeBaseApi.syncSource('kb 1', 'source/1');
 
     expect(request.get).toHaveBeenCalledWith('/api/knowledge-bases/kb%201/sources');
@@ -95,5 +99,9 @@ describe('knowledgeBaseApi', () => {
       '/api/knowledge-bases/kb%201/sources/source%2F1/sync',
       {},
     );
+    expect(request.patch).toHaveBeenCalledWith('/api/knowledge-bases/kb%201/sources/source%2F1', {
+      name: 'Updated',
+      config: { folderId: 'folder-2' },
+    });
   });
 });

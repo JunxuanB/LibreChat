@@ -100,9 +100,7 @@ export default function KnowledgeBasesView() {
   if (isCreate) {
     content = <KnowledgeBaseForm />;
   } else if (!knowledgeBaseId) {
-    content = (
-      <EmptySelection canCreate={canCreate} onCreate={() => navigate('/knowledge/new')} />
-    );
+    content = <EmptySelection canCreate={canCreate} onCreate={() => navigate('/knowledge/new')} />;
   } else if (detail.isLoading) {
     content = (
       <div className="flex h-full items-center justify-center">
@@ -374,52 +372,52 @@ function KnowledgeBaseForm({ knowledgeBase }: { knowledgeBase?: KnowledgeBase })
   return (
     <div className="mx-auto max-w-3xl p-6 md:p-10">
       <form className="space-y-4" onSubmit={submit}>
-          <h2 className="text-2xl font-semibold text-text-primary">
-            {localize(knowledgeBase ? 'com_ui_knowledge_edit' : 'com_ui_knowledge_create')}
-          </h2>
-          <div>
-            <Label htmlFor="knowledge-name">{localize('com_ui_name')}</Label>
-            <Input
-              id="knowledge-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              maxLength={120}
-            />
-          </div>
-          <div>
-            <Label id="knowledge-description-label" htmlFor="knowledge-description">
-              {localize('com_ui_description')}
-            </Label>
-            <TextareaAutosize
-              id="knowledge-description"
-              aria-labelledby="knowledge-description-label"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              minRows={3}
-              maxLength={1000}
-              className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
-            />
-          </div>
-          {(mutations.create.isError || mutations.update.isError) && (
-            <p role="alert" className="text-sm text-text-destructive">
-              {localize('com_ui_knowledge_save_error')}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() =>
-                navigate(knowledgeBase ? `/knowledge/${knowledgeBase._id}` : '/knowledge')
-              }
-            >
-              {localize('com_ui_cancel')}
-            </Button>
-            <Button type="submit" disabled={!name.trim()}>
-              {localize('com_ui_save')}
-            </Button>
-          </div>
+        <h2 className="text-2xl font-semibold text-text-primary">
+          {localize(knowledgeBase ? 'com_ui_knowledge_edit' : 'com_ui_knowledge_create')}
+        </h2>
+        <div>
+          <Label htmlFor="knowledge-name">{localize('com_ui_name')}</Label>
+          <Input
+            id="knowledge-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            maxLength={120}
+          />
+        </div>
+        <div>
+          <Label id="knowledge-description-label" htmlFor="knowledge-description">
+            {localize('com_ui_description')}
+          </Label>
+          <TextareaAutosize
+            id="knowledge-description"
+            aria-labelledby="knowledge-description-label"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            minRows={3}
+            maxLength={1000}
+            className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
+          />
+        </div>
+        {(mutations.create.isError || mutations.update.isError) && (
+          <p role="alert" className="text-sm text-text-destructive">
+            {localize('com_ui_knowledge_save_error')}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() =>
+              navigate(knowledgeBase ? `/knowledge/${knowledgeBase._id}` : '/knowledge')
+            }
+          >
+            {localize('com_ui_cancel')}
+          </Button>
+          <Button type="submit" disabled={!name.trim()}>
+            {localize('com_ui_save')}
+          </Button>
+        </div>
       </form>
     </div>
   );
