@@ -278,4 +278,23 @@ describe('loadDefaultInterface', () => {
 
     expect(interfaceConfig?.traceViewer).toBeUndefined();
   });
+
+  it('passes through configured knowledge base actions', async () => {
+    const knowledgeBases = { use: true, create: true, share: true, public: false };
+    const interfaceConfig = await loadDefaultInterface({
+      config: { interface: { knowledgeBases } },
+      configDefaults: getConfigDefaults(),
+    });
+
+    expect(interfaceConfig?.knowledgeBases).toEqual(knowledgeBases);
+  });
+
+  it('leaves knowledge bases unset when not configured', async () => {
+    const interfaceConfig = await loadDefaultInterface({
+      config: {},
+      configDefaults: getConfigDefaults(),
+    });
+
+    expect(interfaceConfig).not.toHaveProperty('knowledgeBases');
+  });
 });

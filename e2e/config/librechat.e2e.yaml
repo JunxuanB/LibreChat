@@ -20,6 +20,13 @@ interface:
   schedules:
     use: true
     minIntervalMinutes: 1
+  # Exercises the complete Knowledge Base management surface in
+  # knowledge-bases.spec.ts, including role-derived action gates.
+  knowledgeBases:
+    use: true
+    create: true
+    share: true
+    public: true
 
 # Enables the memory feature so the MEMORIES.USE permission is granted and the
 # ephemeral memory badge (inline set_memory/delete_memory tools) is available.
