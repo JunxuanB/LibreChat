@@ -1173,6 +1173,7 @@ export const tConversationSchema = z.object({
   /* Files */
   resendFiles: z.boolean().optional(),
   file_ids: z.array(z.string()).optional(),
+  knowledge_base_ids: z.array(z.string()).optional(),
   /* vision */
   imageDetail: eImageDetailSchema.optional(),
   /* OpenAI: Reasoning models only */

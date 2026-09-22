@@ -63,6 +63,7 @@ const {
 const { getMCPRequestContext } = require('~/server/services/MCPRequestContext');
 const { createOpenIDSessionTokenProvider } = require('~/server/services/OpenIDSessionRefresh');
 const { createFileSearchTool, primeFiles: primeSearchFiles } = require('./fileSearch');
+const { knowledgeRetrieval } = require('~/server/services/Knowledge/retrieval');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
@@ -419,6 +420,9 @@ const loadTools = async ({
         const { files, toolContext } = await primeSearchFiles({
           ...options,
           agentId: agent?.id,
+          knowledgeRetrieval,
+          knowledgeBaseIds: options.req?.body?.knowledge_base_ids,
+          knowledgeBaseOnly: options.req?.body?.knowledge_base_only === true,
         });
         if (toolContext) {
           dynamicToolContextMap[tool] = toolContext;

@@ -80,6 +80,10 @@ export const conversationPreset: {
     }[];
     default: undefined;
   };
+  knowledge_base_ids: {
+    type: { type: StringConstructor }[];
+    default: undefined;
+  };
   // deprecated
   resendImages: {
     type: BooleanConstructor;
@@ -279,6 +283,7 @@ export const conversationPreset: {
     required: false,
   },
   file_ids: { type: [{ type: String }], default: undefined },
+  knowledge_base_ids: { type: [{ type: String }], default: undefined },
   // deprecated
   resendImages: {
     type: Boolean,

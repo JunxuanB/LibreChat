@@ -985,7 +985,10 @@ describe('ToolService - Action Capability Gating', () => {
         agentId: 'agent_123',
         agentResourceType: ResourceType.REMOTE_AGENT,
       };
-      expect(mockPrimeSearchFiles).toHaveBeenCalledWith(expectedParams);
+      expect(mockPrimeSearchFiles).toHaveBeenCalledWith({
+        ...expectedParams,
+        knowledgeBaseOnly: false,
+      });
       expect(mockPrimeCodeFiles).toHaveBeenCalledWith({
         ...expectedParams,
         codeApiBaseUrl: 'https://api.librechat.ai',

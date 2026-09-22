@@ -109,6 +109,8 @@ export type TEndpointOption = Pick<
   modelsConfig?: TModelsConfig;
   // File attachments (processed by middleware)
   attachments?: TAttachment[];
+  /** Request-scoped: KB selection enabled file_search while legacy File Search is off. */
+  knowledge_base_only?: boolean;
   // Generated prompts
   artifactsPrompt?: string;
   // Agent-specific fields

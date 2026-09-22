@@ -45,6 +45,7 @@ import useCodeWorkspace from '~/hooks/Agents/useCodeWorkspace';
 import useGetSender from '~/hooks/Conversations/useGetSender';
 import { revealedQueuedTurnFamily } from '~/store/steer';
 import store, { useGetEphemeralAgent } from '~/store';
+import { resolveKnowledgeBaseToolMode } from '~/components/KnowledgeBases/toolMode';
 import { startupConfigKey } from '~/data-provider';
 import useUserKey from '~/hooks/Input/useUserKey';
 import { useAuthContext } from '~/hooks';
@@ -406,7 +407,11 @@ export default function useChatFunctions({
 
     setShowStopButton(false);
 
-    const ephemeralAgent = getEphemeralAgent(conversationId ?? Constants.NEW_CONVO);
+    const knowledgeBaseToolMode = resolveKnowledgeBaseToolMode(
+      getEphemeralAgent(conversationId ?? Constants.NEW_CONVO),
+      conversation?.knowledge_base_ids,
+    );
+    const ephemeralAgent = knowledgeBaseToolMode.ephemeralAgent;
     /**
      * Manual skill selection resolution:
      *  - Explicit `overrideManualSkills` wins (regenerate / save-and-submit
@@ -544,6 +549,7 @@ export default function useChatFunctions({
             : undefined),
       },
       convo,
+      { knowledge_base_only: knowledgeBaseToolMode.knowledgeBaseOnly || undefined },
       chatProjectId ? { chatProjectId } : {},
     ) as TEndpointOption;
     if (endpoint !== EModelEndpoint.agents) {

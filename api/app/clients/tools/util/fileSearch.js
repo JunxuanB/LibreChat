@@ -6,6 +6,7 @@ const {
   selectFileCitationSources,
   generateShortLivedToken,
   queryKnowledgeFiles,
+  rankKnowledgeCandidates,
   resolveAuthorizedKnowledgeFiles,
 } = require('@librechat/api');
 const { Tools, EModelEndpoint, EToolResources } = require('librechat-data-provider');
@@ -32,6 +33,7 @@ const fileSearchJsonSchema = {
  * @param {string} [options.agentId] - The agent ID for file access control
  * @param {string} [options.agentResourceType] - Permission resource type for the authorized agent route
  * @param {string[]} [options.knowledgeBaseIds]
+ * @param {boolean} [options.knowledgeBaseOnly=false]
  * @param {import('@librechat/api').KnowledgeRetrievalDependencies} [options.knowledgeRetrieval]
  * @returns {Promise<{
  *   files: Array<{ file_id: string; filename: string; fromAgent: boolean }>,
@@ -46,17 +48,32 @@ const primeFiles = async (options) => {
     agentResourceType,
     knowledgeRetrieval,
     knowledgeBaseIds: explicitKnowledgeBaseIds,
+    knowledgeBaseOnly = false,
   } = options;
-  const file_ids = tool_resources?.[EToolResources.file_search]?.file_ids ?? [];
-  const knowledgeBaseIds =
-    explicitKnowledgeBaseIds ??
-    tool_resources?.[EToolResources.file_search]?.knowledge_base_ids ??
-    [];
+  // `knowledge_base_only` separates an ephemeral chat's KB selection from the
+  // legacy direct-file toggle. A persisted Agent's configured files are part
+  // of that Agent's retrieval contract and must remain available when a chat
+  // temporarily adds a KB.
+  const excludeDirectFiles = knowledgeBaseOnly && !agentId;
+  const file_ids = excludeDirectFiles
+    ? []
+    : (tool_resources?.[EToolResources.file_search]?.file_ids ?? []);
+  const knowledgeBaseIds = Array.from(
+    new Set([
+      ...(explicitKnowledgeBaseIds ?? []),
+      ...(tool_resources?.[EToolResources.file_search]?.knowledge_base_ids ?? []),
+    ]),
+  );
   const agentResourceIds = new Set(file_ids);
-  const resourceFiles = tool_resources?.[EToolResources.file_search]?.files ?? [];
+  const resourceFiles = excludeDirectFiles
+    ? []
+    : (tool_resources?.[EToolResources.file_search]?.files ?? []);
 
   // Get all files first
-  const allFiles = (await getFiles({ file_id: { $in: file_ids } }, null, { text: 0 })) ?? [];
+  const allFiles =
+    file_ids.length > 0
+      ? ((await getFiles({ file_id: { $in: file_ids } }, null, { text: 0 })) ?? [])
+      : [];
 
   // Filter by access if user and agent are provided
   let dbFiles;
@@ -89,20 +106,12 @@ const primeFiles = async (options) => {
     );
   }
 
-  let toolContext = `- Note: Semantic search is available through the ${Tools.file_search} tool but no files are currently loaded. Request the user to upload documents to search through.`;
-
   const files = [];
   for (let i = 0; i < dbFiles.length; i++) {
     const file = dbFiles[i];
     if (!file) {
       continue;
     }
-    if (i === 0) {
-      toolContext = `- Note: Use the ${Tools.file_search} tool to find relevant information within:`;
-    }
-    toolContext += `\n\t- ${file.filename}${
-      agentResourceIds.has(file.file_id) ? '' : ' (just attached by user)'
-    }`;
     files.push({
       file_id: file.file_id,
       filename: file.filename,
@@ -115,15 +124,35 @@ const primeFiles = async (options) => {
     if (seenFileIds.has(file.file_id)) {
       continue;
     }
-    if (files.length === 0) {
-      toolContext = `- Note: Use the ${Tools.file_search} tool to find relevant information within:`;
-    }
-    toolContext += `\n\t- ${file.filename} (from knowledge base)`;
     files.push(file);
     seenFileIds.add(file.file_id);
   }
 
-  return { files, toolContext };
+  let toolContext;
+  if (files.length > 0) {
+    const visibleFiles = files.slice(0, 20);
+    toolContext = `- Note: Use the ${Tools.file_search} tool to find relevant information within:`;
+    toolContext += visibleFiles
+      .map((file) => {
+        if (file.fromKnowledgeBase === true) {
+          const provenance = [file.knowledge_base_name, file.knowledge_source_name]
+            .filter(Boolean)
+            .join(' / ');
+          return `\n\t- ${file.filename} (from knowledge base${provenance ? `: ${provenance}` : ''})`;
+        }
+        return `\n\t- ${file.filename}${file.fromAgent ? '' : ' (just attached by user)'}`;
+      })
+      .join('');
+    if (files.length > visibleFiles.length) {
+      toolContext += `\n\t- …and ${files.length - visibleFiles.length} more searchable documents`;
+    }
+  } else if (knowledgeBaseIds.length > 0) {
+    toolContext = `- Note: Use the ${Tools.file_search} tool to search the selected knowledge bases.`;
+  } else {
+    toolContext = `- Note: Semantic search is available through the ${Tools.file_search} tool but no files are currently loaded. Request the user to upload documents to search through.`;
+  }
+
+  return { files, toolContext, knowledgeBaseIds };
 };
 
 /**
@@ -228,18 +257,36 @@ const createFileSearchTool = async ({
         return ['No results found or errors occurred while searching the files.', undefined];
       }
 
-      const filenamesById = new Map(files.map((file) => [file.file_id, file.filename]));
-      const formattedResults = validResults
+      const filesById = new Map(files.map((file) => [file.file_id, file]));
+      const knowledgeFilesByKey = new Map(
+        knowledgeFiles.map((file) => [`${file.knowledge_base_id}:${file.file_id}`, file]),
+      );
+      const candidates = validResults
         .flatMap((result) =>
           result.data.map(([docInfo, distance]) => {
             const fileId = result.file_id ?? docInfo.metadata?.file_id;
+            const knowledgeBaseId = docInfo.metadata?.knowledge_base_id;
+            const matchedFile = filesById.get(fileId);
+            const knowledgeFile =
+              knowledgeFilesByKey.get(`${knowledgeBaseId}:${fileId}`) ??
+              (matchedFile?.fromKnowledgeBase === true ? matchedFile : undefined);
+            const file = knowledgeFile ?? matchedFile;
             const source = docInfo.metadata?.source;
             const sourceName = typeof source === 'string' ? source.split('/').pop() : undefined;
             return {
-              filename: filenamesById.get(fileId) ?? sourceName ?? fileId,
+              filename: file?.filename ?? sourceName ?? fileId,
               content: docInfo.page_content,
               distance,
               file_id: fileId,
+              canonicalUrl:
+                typeof docInfo.metadata?.canonical_url === 'string'
+                  ? docInfo.metadata.canonical_url
+                  : knowledgeFile?.canonical_url,
+              knowledgeBaseName: knowledgeFile?.knowledge_base_name,
+              knowledgeSourceName: knowledgeFile?.knowledge_source_name,
+              sourceType: knowledgeFile?.source_type,
+              sourceKey:
+                knowledgeFile?.knowledge_source_name ?? knowledgeFile?.knowledge_base_id ?? fileId,
               page:
                 Number.isInteger(docInfo.metadata?.page) && docInfo.metadata.page >= 0
                   ? docInfo.metadata.page + 1
@@ -247,9 +294,14 @@ const createFileSearchTool = async ({
             };
           }),
         )
-        .filter((result) => result.file_id && result.filename)
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, 10);
+        .filter((result) => result.file_id && result.filename);
+      const formattedResults = rankKnowledgeCandidates({
+        query,
+        candidates,
+        limit: 10,
+        maxPerSource: 4,
+        maxContentCharacters: 24_000,
+      }).map(({ candidate, score }) => ({ ...candidate, score }));
 
       if (formattedResults.length === 0) {
         return [
@@ -263,9 +315,13 @@ const createFileSearchTool = async ({
         fileId: result.file_id,
         content: result.content,
         fileName: result.filename,
-        relevance: 1.0 - result.distance,
+        relevance: result.score,
         pages: result.page ? [result.page] : [],
-        pageRelevance: result.page ? { [result.page]: 1.0 - result.distance } : {},
+        pageRelevance: result.page ? { [result.page]: result.score } : {},
+        canonicalUrl: result.canonicalUrl,
+        knowledgeBaseName: result.knowledgeBaseName,
+        knowledgeSourceName: result.knowledgeSourceName,
+        sourceType: result.sourceType,
       }));
 
       const citationConfig = appConfig?.endpoints?.[EModelEndpoint.agents];
@@ -275,11 +331,14 @@ const createFileSearchTool = async ({
       const formattedString = formattedResults
         .map((result, index) => {
           const citationIndex = citationSources.indexOf(sources[index]);
-          return `File: ${result.filename}${
+          const provenance = [result.knowledgeBaseName, result.knowledgeSourceName]
+            .filter(Boolean)
+            .join(' / ');
+          return `File: ${result.filename}${provenance ? `\nKnowledge source: ${provenance}` : ''}${
             citationIndex >= 0
               ? `\nAnchor: \\ue202turn0file${citationIndex} (${result.filename})`
               : ''
-          }\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nContent: ${result.content}\n`;
+          }\nRelevance: ${result.score.toFixed(4)}\nContent: ${result.content}\n`;
         })
         .join('\n---\n');
 

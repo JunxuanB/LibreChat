@@ -101,6 +101,56 @@ describe('fileSearch.js - agent file authorization', () => {
       }),
     ).rejects.toThrow('Knowledge-base retrieval dependencies are not configured');
   });
+
+  it('unions chat and agent knowledge-base selections', async () => {
+    const knowledgeRetrieval = {
+      authorizeKnowledgeBases: jest.fn(async ({ knowledgeBaseIds }) => knowledgeBaseIds),
+      getKnowledgeDocuments: jest.fn(async () => []),
+    };
+    await primeFiles({
+      req: { user: { id: 'user-1' } },
+      knowledgeBaseIds: ['chat-kb'],
+      knowledgeRetrieval,
+      tool_resources: { file_search: { knowledge_base_ids: ['agent-kb'] } },
+    });
+    expect(knowledgeRetrieval.authorizeKnowledgeBases).toHaveBeenCalledWith(
+      expect.objectContaining({ knowledgeBaseIds: ['chat-kb', 'agent-kb'] }),
+    );
+  });
+
+  it('searches only knowledge-base documents when KB selection alone exposed the tool', async () => {
+    const { getFiles } = require('~/models');
+    getFiles.mockClear();
+    const knowledgeRetrieval = {
+      authorizeKnowledgeBases: jest.fn(async ({ knowledgeBaseIds }) => knowledgeBaseIds),
+      getKnowledgeDocuments: jest.fn(async () => [
+        {
+          knowledgeBaseId: 'chat-kb',
+          file_id: 'knowledge-file',
+          name: 'handbook.pdf',
+          status: 'ready',
+        },
+      ]),
+    };
+
+    const result = await primeFiles({
+      req: { user: { id: 'user-1', role: 'USER' } },
+      knowledgeBaseIds: ['chat-kb'],
+      knowledgeBaseOnly: true,
+      knowledgeRetrieval,
+      tool_resources: {
+        file_search: {
+          file_ids: ['agent-file'],
+          files: [{ file_id: 'direct-file', filename: 'direct.pdf' }],
+        },
+      },
+    });
+
+    expect(getFiles).not.toHaveBeenCalled();
+    expect(result.files).toEqual([
+      expect.objectContaining({ file_id: 'knowledge-file', fromKnowledgeBase: true }),
+    ]);
+  });
 });
 
 describe('fileSearch.js - tuple return validation', () => {

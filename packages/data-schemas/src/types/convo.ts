@@ -270,6 +270,7 @@ export interface IConversation extends Document {
   presence_penalty?: number;
   frequency_penalty?: number;
   file_ids?: string[];
+  knowledge_base_ids?: string[];
   resendImages?: boolean;
   promptCache?: boolean;
   promptCacheTtl?: '5m' | '1h';

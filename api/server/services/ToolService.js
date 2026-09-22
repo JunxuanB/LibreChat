@@ -105,6 +105,7 @@ const {
 } = require('~/server/services/Config');
 const { processFileURL, uploadImageBuffer } = require('~/server/services/Files/process');
 const { primeFiles: primeSearchFiles } = require('~/app/clients/tools/util/fileSearch');
+const { knowledgeRetrieval } = require('~/server/services/Knowledge/retrieval');
 const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { manifestToolMap, toolkits } = require('~/app/clients/tools/manifest');
 const repositoryInstructionLoader = createRepositoryInstructionLoader();
@@ -1510,6 +1511,9 @@ async function loadToolDefinitionsWrapper({
         tool_resources,
         agentId: agent.id,
         agentResourceType,
+        knowledgeRetrieval,
+        knowledgeBaseIds: req.body?.knowledge_base_ids,
+        knowledgeBaseOnly: req.body?.knowledge_base_only === true,
       });
       if (toolContext) {
         dynamicToolContextMap[Tools.file_search] = toolContext;
