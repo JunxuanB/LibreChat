@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { knowledgeBaseApi } from './api';
-import type { KnowledgeBaseInput } from './types';
+import type { KnowledgeBaseInput, KnowledgeSourceInput, KnowledgeSourceUpdateInput } from './types';
 import type { TFile } from 'librechat-data-provider';
 
 export const knowledgeBaseKeys = {
   all: ['knowledge-bases'] as const,
   detail: (id: string) => ['knowledge-bases', id] as const,
   connectors: ['knowledge-bases', 'connectors'] as const,
+  sources: (id: string) => ['knowledge-bases', id, 'sources'] as const,
 };
 
 export const useKnowledgeBasesQuery = (enabled = true) =>
@@ -21,6 +22,17 @@ export const useKnowledgeConnectorsQuery = (enabled = true) =>
   useQuery(knowledgeBaseKeys.connectors, knowledgeBaseApi.connectors, {
     enabled,
     retry: false,
+  });
+
+export const useKnowledgeSourcesQuery = (id?: string, enabled = true) =>
+  useQuery(knowledgeBaseKeys.sources(id ?? ''), () => knowledgeBaseApi.sources(id as string), {
+    enabled: enabled && !!id,
+    refetchInterval: (data) =>
+      data?.sources.some(
+        (source) => source.syncStatus === 'queued' || source.syncStatus === 'syncing',
+      )
+        ? 2000
+        : false,
   });
 
 export function useKnowledgeBaseMutations() {
@@ -43,6 +55,33 @@ export function useKnowledgeBaseMutations() {
     removeDocument: useMutation(
       ({ id, documentId }: { id: string; documentId: string }) =>
         knowledgeBaseApi.removeDocument(id, documentId),
+      { onSuccess: refresh },
+    ),
+  };
+}
+
+export function useKnowledgeSourceMutations(knowledgeBaseId: string) {
+  const client = useQueryClient();
+  const refresh = () => {
+    void client.invalidateQueries(knowledgeBaseKeys.sources(knowledgeBaseId));
+    void client.invalidateQueries(knowledgeBaseKeys.detail(knowledgeBaseId));
+  };
+  return {
+    create: useMutation(
+      (input: KnowledgeSourceInput) => knowledgeBaseApi.createSource(knowledgeBaseId, input),
+      { onSuccess: refresh },
+    ),
+    update: useMutation(
+      ({ sourceId, input }: { sourceId: string; input: KnowledgeSourceUpdateInput }) =>
+        knowledgeBaseApi.updateSource(knowledgeBaseId, sourceId, input),
+      { onSuccess: refresh },
+    ),
+    remove: useMutation(
+      (sourceId: string) => knowledgeBaseApi.removeSource(knowledgeBaseId, sourceId),
+      { onSuccess: refresh },
+    ),
+    sync: useMutation(
+      (sourceId: string) => knowledgeBaseApi.syncSource(knowledgeBaseId, sourceId),
       { onSuccess: refresh },
     ),
   };

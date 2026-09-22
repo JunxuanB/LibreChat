@@ -6,6 +6,10 @@ import type {
   KnowledgeBaseListResponse,
   KnowledgeConnectorListResponse,
   KnowledgeDocument,
+  KnowledgeSource,
+  KnowledgeSourceInput,
+  KnowledgeSourceUpdateInput,
+  KnowledgeSourceListResponse,
 } from './types';
 
 const base = () => `${apiBaseUrl()}/api/knowledge-bases`;
@@ -91,5 +95,35 @@ export const knowledgeBaseApi = {
       }
       throw error;
     }
+  },
+  async sources(id: string): Promise<KnowledgeSourceListResponse> {
+    const response = await request.get<KnowledgeSource[] | KnowledgeSourceListResponse>(
+      `${base()}/${encodeURIComponent(id)}/sources`,
+    );
+    return Array.isArray(response) ? { sources: response } : response;
+  },
+  createSource(id: string, input: KnowledgeSourceInput): Promise<KnowledgeSource> {
+    return request.post(`${base()}/${encodeURIComponent(id)}/sources`, input);
+  },
+  updateSource(
+    id: string,
+    sourceId: string,
+    input: KnowledgeSourceUpdateInput,
+  ): Promise<KnowledgeSource> {
+    return request.patch(
+      `${base()}/${encodeURIComponent(id)}/sources/${encodeURIComponent(sourceId)}`,
+      input,
+    );
+  },
+  removeSource(id: string, sourceId: string): Promise<void> {
+    return request
+      .delete(`${base()}/${encodeURIComponent(id)}/sources/${encodeURIComponent(sourceId)}`)
+      .then(() => undefined);
+  },
+  syncSource(id: string, sourceId: string): Promise<KnowledgeSource> {
+    return request.post(
+      `${base()}/${encodeURIComponent(id)}/sources/${encodeURIComponent(sourceId)}/sync`,
+      {},
+    );
   },
 };

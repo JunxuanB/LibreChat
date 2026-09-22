@@ -65,7 +65,7 @@ describe('composeAgentUpdatePayload', () => {
 
     const { payload } = composeAgentUpdatePayload(form, 'agent_123');
 
-    expect(payload.knowledge_base_ids).toEqual(['kb-1', 'kb-2']);
+    expect(payload.tool_resources?.file_search?.knowledge_base_ids).toEqual(['kb-1', 'kb-2']);
   });
 
   it('includes avatar: null when resetting a persistent agent', () => {

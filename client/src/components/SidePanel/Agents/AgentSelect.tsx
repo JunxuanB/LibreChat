@@ -104,6 +104,7 @@ function AgentSelect({
         repositoryInstructions: fullAgent.repositoryInstructions,
         code_workspace_id: fullAgent.code_workspace_id,
         git_identity: fullAgent.git_identity,
+        knowledge_base_ids: fullAgent.tool_resources?.file_search?.knowledge_base_ids,
       };
 
       Object.entries(fullAgent).forEach(([name, value]) => {

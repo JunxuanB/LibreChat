@@ -9,7 +9,7 @@ jest.mock('librechat-data-provider', () => ({
     listKnowledgeDocuments: jest.fn(),
     createKnowledgeDocument: jest.fn(),
   },
-  request: { get: jest.fn() },
+  request: { get: jest.fn(), post: jest.fn(), delete: jest.fn() },
 }));
 
 describe('knowledgeBaseApi', () => {
@@ -81,5 +81,19 @@ describe('knowledgeBaseApi', () => {
   it('treats a missing connector catalog as an empty catalog', async () => {
     (request.get as jest.Mock).mockRejectedValue({ response: { status: 404 } });
     await expect(knowledgeBaseApi.connectors()).resolves.toEqual({ connectors: [] });
+  });
+
+  it('uses the source collection and sync routes', async () => {
+    (request.get as jest.Mock).mockResolvedValue({ sources: [] });
+    (request.post as jest.Mock).mockResolvedValue({ _id: 'source-1' });
+
+    await knowledgeBaseApi.sources('kb 1');
+    await knowledgeBaseApi.syncSource('kb 1', 'source/1');
+
+    expect(request.get).toHaveBeenCalledWith('/api/knowledge-bases/kb%201/sources');
+    expect(request.post).toHaveBeenCalledWith(
+      '/api/knowledge-bases/kb%201/sources/source%2F1/sync',
+      {},
+    );
   });
 });

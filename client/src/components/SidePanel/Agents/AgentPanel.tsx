@@ -120,6 +120,18 @@ export function composeAgentUpdatePayload(
   const model = _model ?? '';
   const provider =
     (typeof _provider === 'string' ? _provider : (_provider as StringOption).value) ?? '';
+  const knowledgeToolResources =
+    knowledge_base_ids === undefined
+      ? {}
+      : {
+          tool_resources: {
+            ...(data.agent?.tool_resources ?? {}),
+            file_search: {
+              ...(data.agent?.tool_resources?.file_search ?? {}),
+              knowledge_base_ids,
+            },
+          },
+        };
   /** Pruning reads the complete schema, not the rendered subset, so a role-gated
    *  parameter is preserved rather than deleted when someone without the
    *  permission saves an unrelated edit. `webSearchAllowed` narrows only
@@ -178,7 +190,7 @@ export function composeAgentUpdatePayload(
       /** A hidden stale 'agent' scope must not survive disabling memory —
        *  runtime partitioning keys off memory_scope alone. */
       memory_scope: data.memory === true ? memory_scope : MemoryScope.user,
-      knowledge_base_ids,
+      ...knowledgeToolResources,
       ...(shouldResetAvatar ? { avatar: null } : {}),
     },
     provider,
