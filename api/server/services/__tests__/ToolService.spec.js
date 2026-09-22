@@ -168,9 +168,11 @@ jest.mock('~/server/services/Threads', () => ({
   recordUsage: jest.fn(),
 }));
 const mockGetRoleByName = jest.fn();
+const mockGetKnowledgeDocuments = jest.fn();
 jest.mock('~/models', () => ({
   findPluginAuthsByKeys: jest.fn(),
   getRoleByName: (...args) => mockGetRoleByName(...args),
+  getKnowledgeDocuments: (...args) => mockGetKnowledgeDocuments(...args),
 }));
 jest.mock('~/config', () => ({
   getFlowStateManager: jest.fn(() => mockFlowManager),
@@ -988,6 +990,12 @@ describe('ToolService - Action Capability Gating', () => {
       expect(mockPrimeSearchFiles).toHaveBeenCalledWith({
         ...expectedParams,
         knowledgeBaseOnly: false,
+        knowledgeBaseIds: undefined,
+        knowledgeRetrieval: expect.objectContaining({
+          authorizeKnowledgeBases: expect.any(Function),
+          getKnowledgeDocuments: expect.any(Function),
+          queryExternalKnowledge: expect.any(Function),
+        }),
       });
       expect(mockPrimeCodeFiles).toHaveBeenCalledWith({
         ...expectedParams,
@@ -995,6 +1003,52 @@ describe('ToolService - Action Capability Gating', () => {
         executionProfile: 'default',
       });
     });
+
+    it.each([
+      ['full chat', 'agent-chat', ['chat-kb'], {}],
+      [
+        'persisted agent',
+        'agent-persisted',
+        [],
+        { file_search: { knowledge_base_ids: ['persisted-kb'] } },
+      ],
+      [
+        'ephemeral agent',
+        'ephemeral-agent-runtime',
+        [],
+        { file_search: { knowledge_base_ids: ['ephemeral-kb'] } },
+      ],
+    ])(
+      'propagates %s knowledge-base IDs into file-search priming',
+      async (_kind, agentId, chatKnowledgeBaseIds, tool_resources) => {
+        const capabilities = [AgentCapabilities.tools, AgentCapabilities.file_search];
+        const req = createMockReq(capabilities);
+        req.body = { knowledge_base_ids: chatKnowledgeBaseIds };
+        mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+
+        await loadAgentTools({
+          req,
+          res: {},
+          agent: { id: agentId, tools: [Tools.file_search] },
+          tool_resources,
+          definitionsOnly: true,
+        });
+
+        expect(mockPrimeSearchFiles).toHaveBeenCalledWith(
+          expect.objectContaining({
+            req,
+            agentId,
+            tool_resources,
+            knowledgeBaseIds: chatKnowledgeBaseIds,
+            knowledgeRetrieval: expect.objectContaining({
+              authorizeKnowledgeBases: expect.any(Function),
+              getKnowledgeDocuments: expect.any(Function),
+              queryExternalKnowledge: expect.any(Function),
+            }),
+          }),
+        );
+      },
+    );
 
     it('primes code files through the initializer-selected stateful route', async () => {
       const capabilities = [AgentCapabilities.tools, AgentCapabilities.execute_code];
@@ -2580,6 +2634,39 @@ describe('ToolService - Action Capability Gating', () => {
   });
 
   describe('loadToolsForExecution — action tool gating', () => {
+    it('exposes file_search when the selected knowledge base has only live external sources', async () => {
+      const capabilities = [AgentCapabilities.tools, AgentCapabilities.file_search];
+      const req = createMockReq(capabilities);
+      req.body = { knowledge_base_ids: ['external-only-kb'] };
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      mockLoadToolsUtil.mockResolvedValue({
+        loadedTools: [{ name: Tools.file_search }],
+        toolContextMap: {},
+      });
+
+      const result = await loadToolsForExecution({
+        req,
+        res: {},
+        agent: { id: 'agent-external', tools: [Tools.file_search] },
+        toolNames: [Tools.file_search],
+        tool_resources: { file_search: { knowledge_base_ids: ['external-only-kb'] } },
+        actionsEnabled: false,
+      });
+
+      expect(result.loadedTools).toEqual([{ name: Tools.file_search }]);
+      expect(mockLoadToolsUtil).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tools: [Tools.file_search],
+          options: expect.objectContaining({
+            req,
+            tool_resources: {
+              file_search: { knowledge_base_ids: ['external-only-kb'] },
+            },
+          }),
+        }),
+      );
+    });
+
     it('should preserve the remote-agent permission boundary for deferred tool loading', async () => {
       const capabilities = [AgentCapabilities.tools, AgentCapabilities.file_search];
       const req = createMockReq(capabilities);

@@ -3,12 +3,17 @@ const { ResourceType } = require('librechat-data-provider');
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => {
-  const { queryKnowledgeFiles, resolveAuthorizedKnowledgeFiles, selectFileCitationSources } =
-    jest.requireActual('@librechat/api');
+  const {
+    queryKnowledgeFiles,
+    rankKnowledgeCandidates,
+    resolveAuthorizedKnowledgeFiles,
+    selectFileCitationSources,
+  } = jest.requireActual('@librechat/api');
   return {
     generateShortLivedToken: jest.fn(),
     logAxiosError: jest.fn(),
     queryKnowledgeFiles,
+    rankKnowledgeCandidates,
     resolveAuthorizedKnowledgeFiles,
     selectFileCitationSources,
   };
@@ -150,6 +155,42 @@ describe('fileSearch.js - agent file authorization', () => {
     expect(result.files).toEqual([
       expect.objectContaining({ file_id: 'knowledge-file', fromKnowledgeBase: true }),
     ]);
+  });
+
+  it('preserves a persistent Agents configured files when chat adds a knowledge base', async () => {
+    const { getFiles } = require('~/models');
+    getFiles.mockResolvedValueOnce([
+      { file_id: 'agent-file', filename: 'agent-reference.pdf', user: 'agent-owner' },
+    ]);
+    const knowledgeRetrieval = {
+      authorizeKnowledgeBases: jest.fn(async ({ knowledgeBaseIds }) => knowledgeBaseIds),
+      getKnowledgeDocuments: jest.fn(async () => [
+        {
+          knowledgeBaseId: 'chat-kb',
+          file_id: 'knowledge-file',
+          name: 'handbook.pdf',
+          status: 'ready',
+        },
+      ]),
+    };
+
+    const result = await primeFiles({
+      req: { user: { id: 'viewer', role: 'USER' } },
+      agentId: 'agent-1',
+      agentResourceType: ResourceType.AGENT,
+      knowledgeBaseIds: ['chat-kb'],
+      knowledgeBaseOnly: true,
+      knowledgeRetrieval,
+      tool_resources: { file_search: { file_ids: ['agent-file'] } },
+    });
+
+    expect(getFiles).toHaveBeenCalledWith({ file_id: { $in: ['agent-file'] } }, null, { text: 0 });
+    expect(result.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file_id: 'agent-file' }),
+        expect.objectContaining({ file_id: 'knowledge-file', fromKnowledgeBase: true }),
+      ]),
+    );
   });
 });
 
@@ -336,6 +377,95 @@ describe('fileSearch.js - tuple return validation', () => {
         fileName: 'handbook.pdf',
         content: 'The retention period is 30 days.',
       });
+    });
+
+    it('preserves control-plane provenance when RAG metadata omits the source URL', async () => {
+      generateShortLivedToken.mockReturnValue('mock-jwt-token');
+      axios.post.mockResolvedValue({
+        data: [[{ page_content: 'Policy text', metadata: { file_id: 'file-1' } }, 0.1]],
+      });
+      const tool = await createFileSearchTool({
+        userId: 'user-1',
+        fileCitations: true,
+        files: [
+          {
+            file_id: 'file-1',
+            filename: 'policy.pdf',
+            knowledge_base_id: 'kb-1',
+            knowledge_base_name: 'Company Handbook',
+            knowledge_source_name: 'HR SharePoint',
+            source_type: 'sharepoint',
+            canonical_url: 'https://tenant.sharepoint.example/policy.pdf',
+            fromKnowledgeBase: true,
+          },
+        ],
+      });
+
+      const [content, artifact] = await tool.func({ query: 'policy' });
+
+      expect(content).toContain('Knowledge source: Company Handbook / HR SharePoint');
+      expect(artifact.file_search.sources[0]).toMatchObject({
+        canonicalUrl: 'https://tenant.sharepoint.example/policy.pdf',
+        knowledgeBaseName: 'Company Handbook',
+        knowledgeSourceName: 'HR SharePoint',
+        sourceType: 'sharepoint',
+      });
+    });
+
+    it('keeps multi-collection RAG namespaces and citation metadata aligned', async () => {
+      generateShortLivedToken.mockReturnValue('mock-jwt-token');
+      axios.post.mockImplementation(async (_url, body) => ({
+        data: [
+          [
+            {
+              page_content: `Content from ${body.entity_id}`,
+              metadata: {
+                file_id: body.file_ids[0],
+                page: body.entity_id === 'kb-a' ? 0 : 2,
+                canonical_url: `https://docs.example/${body.entity_id}`,
+              },
+            },
+            body.entity_id === 'kb-a' ? 0.2 : 0.1,
+          ],
+        ],
+      }));
+      const tool = await createFileSearchTool({
+        userId: 'user-1',
+        fileCitations: true,
+        files: [
+          {
+            file_id: 'file-a',
+            filename: 'A.pdf',
+            knowledge_base_id: 'kb-a',
+            fromKnowledgeBase: true,
+          },
+          {
+            file_id: 'file-b',
+            filename: 'B.pdf',
+            knowledge_base_id: 'kb-b',
+            fromKnowledgeBase: true,
+          },
+        ],
+      });
+
+      const [content, artifact] = await tool.func({ query: 'policy' });
+
+      expect(axios.post.mock.calls.map(([, body]) => body.entity_id)).toEqual(['kb-a', 'kb-b']);
+      expect(artifact.file_search.sources).toEqual([
+        expect.objectContaining({
+          fileId: 'file-b',
+          fileName: 'B.pdf',
+          pages: [3],
+          canonicalUrl: 'https://docs.example/kb-b',
+        }),
+        expect.objectContaining({
+          fileId: 'file-a',
+          fileName: 'A.pdf',
+          pages: [1],
+          canonicalUrl: 'https://docs.example/kb-a',
+        }),
+      ]);
+      expect(content).toContain('Anchor:');
     });
 
     it.each([

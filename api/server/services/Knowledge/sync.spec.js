@@ -42,6 +42,7 @@ const build = ({
     getKnowledgeConnectionSecrets: jest.fn(async () => ({ token: 'secret' })),
     updateKnowledgeSourceSyncState: jest.fn(async () => undefined),
     findKnowledgeDocumentBySource: jest.fn(async () => current),
+    findKnowledgeDocumentsBySourceId: jest.fn(async () => []),
     upsertKnowledgeDocumentBySource: jest.fn(async (input) => input),
     deleteKnowledgeDocumentBySource: jest.fn(async () => current),
     createFile: jest.fn(async (input) => input),
@@ -154,6 +155,117 @@ describe('knowledge source ingestion service', () => {
       'kb-1',
     );
     expect(database.deleteFile).toHaveBeenCalledWith('old-file');
+  });
+
+  it('runs an incremental connector through create, replace, and delete lifecycle', async () => {
+    const documents = new Map();
+    let feed = 0;
+    const fetch = jest.fn(async (_url, init = {}) => {
+      if (init.method === 'HEAD') return new Response('', { status: 200 });
+      feed += 1;
+      return new Response(
+        JSON.stringify(
+          feed === 1
+            ? {
+                items: [
+                  { id: 'kept', title: 'Kept', content: 'version one', revision: 'v1' },
+                  { id: 'removed', title: 'Removed', content: 'old', revision: 'v1' },
+                ],
+                cursor: 'cursor-1',
+              }
+            : {
+                items: [{ id: 'kept', title: 'Kept', content: 'version two', revision: 'v2' }],
+                deleted: ['removed'],
+                cursor: 'cursor-2',
+              },
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const { service, database, uploadVectors, deleteVectors } = build({
+      registry: createDefaultKnowledgeConnectorRegistry(),
+      sourceOverrides: {
+        type: 'custom_api',
+        config: { url: 'https://feed.example.test/documents' },
+        cursor: undefined,
+      },
+      serviceOverrides: { fetch },
+    });
+    database.findKnowledgeDocumentBySource.mockImplementation(async ({ externalId }) =>
+      documents.get(externalId),
+    );
+    database.upsertKnowledgeDocumentBySource.mockImplementation(async (document) => {
+      documents.set(document.externalId, document);
+      return document;
+    });
+    database.deleteKnowledgeDocumentBySource.mockImplementation(async ({ externalId }) => {
+      const document = documents.get(externalId);
+      documents.delete(externalId);
+      return document;
+    });
+    database.updateKnowledgeSourceSyncStateIfLeaseOwner.mockImplementation(
+      async (_id, _token, state) => {
+        if (state.cursor !== undefined) {
+          sourceRecord.cursor = state.cursor;
+        }
+        return true;
+      },
+    );
+    const sourceRecord = await database.getKnowledgeSourceForSync('kb-1', 'source-1');
+
+    await service.syncKnowledgeSource('kb-1', 'source-1');
+    await service.syncKnowledgeSource('kb-1', 'source-1');
+
+    expect(uploadVectors).toHaveBeenCalledTimes(3);
+    expect(documents.size).toBe(1);
+    expect(documents.get('kept')).toMatchObject({ revision: 'v2', externalId: 'kept' });
+    expect(deleteVectors).toHaveBeenCalledTimes(2);
+    expect(deleteVectors.mock.calls.every((call) => call[2] === 'kb-1')).toBe(true);
+    expect(fetch.mock.calls.filter(([, init]) => init?.method !== 'HEAD')[1][0].toString()).toBe(
+      'https://feed.example.test/documents?cursor=cursor-1',
+    );
+  });
+
+  it('removes persisted documents omitted from a completed connector snapshot', async () => {
+    const registry = {
+      get: jest.fn(() => ({
+        validate: jest.fn(async () => undefined),
+        sync: jest.fn(async () => ({
+          changes: [
+            {
+              operation: 'upsert',
+              item: { externalId: 'kept', title: 'Kept', content: 'current' },
+            },
+          ],
+          snapshot: true,
+        })),
+      })),
+    };
+    const stale = { source_id: 'removed', file_id: 'stale-file' };
+    const { service, database, deleteVectors } = build({
+      registry,
+      databaseOverrides: {
+        findKnowledgeDocumentsBySourceId: jest.fn(async () => [
+          { source_id: 'kept', file_id: 'kept-file' },
+          stale,
+        ]),
+        findKnowledgeDocumentBySource: jest.fn(async ({ externalId }) =>
+          externalId === 'removed' ? stale : null,
+        ),
+      },
+    });
+
+    await service.syncKnowledgeSource('kb-1', 'source-1');
+
+    expect(deleteVectors).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ file_id: 'stale-file' }),
+      'kb-1',
+    );
+    expect(database.deleteFile).toHaveBeenCalledWith('stale-file');
+    expect(database.deleteKnowledgeDocumentBySource).toHaveBeenCalledWith(
+      expect.objectContaining({ externalId: 'removed' }),
+    );
   });
 
   it('loads the administrator PostgreSQL policy and supplies the hardened executor', async () => {
@@ -346,14 +458,24 @@ describe('knowledge source ingestion service', () => {
       serviceOverrides: { leaseHeartbeatMs: 10, leaseDurationMs: 100 },
     });
     const running = service.syncKnowledgeSource('kb-1', 'source-1');
-    const rejected = expect(running).rejects.toMatchObject({
-      code: 'KNOWLEDGE_SOURCE_SYNC_LEASE_LOST',
-    });
+    const rejected = running.then(
+      () => undefined,
+      (error) => error,
+    );
     await Promise.resolve();
     await Promise.resolve();
     await jest.advanceTimersByTimeAsync(10);
-    await rejected;
-    expect(states).toEqual([{ syncStatus: 'syncing', syncError: null }]);
+    await expect(rejected).resolves.toMatchObject({
+      code: 'KNOWLEDGE_SOURCE_SYNC_LEASE_LOST',
+    });
+    expect(states).toEqual([
+      {
+        syncStatus: 'syncing',
+        syncError: null,
+        syncAttempts: 1,
+        nextSyncAt: null,
+      },
+    ]);
     expect(database.releaseKnowledgeSourceSyncLease).toHaveBeenCalled();
     jest.useRealTimers();
   });
