@@ -20,7 +20,7 @@ import {
 import ArtifactsSubMenu from '~/components/Chat/Input/ArtifactsSubMenu';
 import MCPSubMenu from '~/components/Chat/Input/MCPSubMenu';
 import KnowledgeBasesSubMenu from '~/components/Chat/Input/KnowledgeBasesSubMenu';
-import { isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
+import { isKnowledgeBasesEnabled } from '~/components/KnowledgeBases/feature';
 import { useGetStartupConfig } from '~/data-provider';
 import { useBadgeRowContext } from '~/Providers';
 import { cn } from '~/utils';

@@ -4,7 +4,8 @@ import { Button, Spinner } from '@librechat/client';
 import { useFormContext, useWatch } from 'react-hook-form';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import type { AgentForm } from '~/common';
-import { KnowledgeBaseSelectDialog, isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
+import KnowledgeBaseSelectDialog from '~/components/KnowledgeBases/KnowledgeBaseSelectDialog';
+import { isKnowledgeBasesEnabled } from '~/components/KnowledgeBases/feature';
 import { useGetStartupConfig, useKnowledgeBasesQuery } from '~/data-provider';
 import { useHasAccess, useLocalize } from '~/hooks';
 

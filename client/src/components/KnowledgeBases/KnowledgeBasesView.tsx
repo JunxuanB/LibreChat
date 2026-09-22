@@ -37,15 +37,6 @@ import { buildKnowledgeSourceInput } from './sourceConfig';
 
 type DialogName = 'files' | 'sources' | null;
 
-export function useKnowledgeBasesEnabled() {
-  const { data } = useGetStartupConfig();
-  const hasAccess = useHasAccess({
-    permissionType: PermissionTypes.KNOWLEDGE_BASES,
-    permission: Permissions.USE,
-  });
-  return hasAccess && isKnowledgeBasesEnabled(data?.interface?.knowledgeBases);
-}
-
 export default function KnowledgeBasesView() {
   const { data: startupConfig } = useGetStartupConfig();
   const featureConfig = startupConfig?.interface?.knowledgeBases;

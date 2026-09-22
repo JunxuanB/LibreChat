@@ -52,8 +52,8 @@ const loadProjectsView = () =>
   }));
 
 const loadKnowledgeBasesView = () =>
-  import('~/components/KnowledgeBases').then((m) => ({
-    Component: m.KnowledgeBasesView,
+  import('~/components/KnowledgeBases/KnowledgeBasesView').then((m) => ({
+    Component: m.default,
   }));
 
 const loadProjectWorkspace = () =>

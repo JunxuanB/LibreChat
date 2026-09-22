@@ -37,7 +37,8 @@ import { MemoryPanel } from '~/components/SidePanel/Memories';
 import FilesPanel from '~/components/SidePanel/Files/Panel';
 import { PromptsAccordion } from '~/components/Prompts';
 import { SkillsAccordion } from '~/components/Skills';
-import { KnowledgeBasesAccordion, isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
+import KnowledgeBasesAccordion from '~/components/KnowledgeBases/KnowledgeBasesAccordion';
+import { isKnowledgeBasesEnabled } from '~/components/KnowledgeBases/feature';
 
 export default function useSideNavLinks({
   hidePanel,
