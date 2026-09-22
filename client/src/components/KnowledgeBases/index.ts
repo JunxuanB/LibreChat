@@ -4,4 +4,4 @@ export { default as KnowledgeBasesSidePanel } from './KnowledgeBasesSidePanel';
 export { default as KnowledgeBasePicker } from './KnowledgeBasePicker';
 export { default as KnowledgeBaseSelectDialog } from './KnowledgeBaseSelectDialog';
 export { useKnowledgeBasesEnabled } from './KnowledgeBasesView';
-export { isKnowledgeBasesEnabled } from './feature';
+export { isKnowledgeBasesEnabled, isKnowledgeBaseActionEnabled } from './feature';

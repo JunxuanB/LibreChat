@@ -9,7 +9,7 @@ export function partitionConnectorValues(
   fields.forEach((field) => {
     const value = values[field.key];
     if (value === undefined || value === '') return;
-    if (field.secret) credentials[field.key] = String(value);
+    if (field.secret || field.type === 'password') credentials[field.key] = String(value);
     else config[field.key] = value;
   });
   return { config, credentials };

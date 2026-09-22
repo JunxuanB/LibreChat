@@ -32,7 +32,7 @@ import type {
 import { GenericGrantAccessDialog } from '~/components/Sharing';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
 import { useLocalize } from '~/hooks';
-import { isKnowledgeBasesEnabled } from './feature';
+import { isKnowledgeBaseActionEnabled, isKnowledgeBasesEnabled } from './feature';
 import { partitionConnectorValues } from './sourceConfig';
 
 type DialogName = 'files' | 'sources' | null;
@@ -43,7 +43,11 @@ export function useKnowledgeBasesEnabled() {
 }
 
 export default function KnowledgeBasesView() {
-  const enabled = useKnowledgeBasesEnabled();
+  const { data: startupConfig } = useGetStartupConfig();
+  const featureConfig = startupConfig?.interface?.knowledgeBases;
+  const enabled = isKnowledgeBasesEnabled(featureConfig);
+  const canCreate = isKnowledgeBaseActionEnabled(featureConfig, 'create');
+  const canShare = isKnowledgeBaseActionEnabled(featureConfig, 'share');
   const navigate = useNavigate();
   const location = useLocation();
   const { knowledgeBaseId } = useParams();
@@ -70,13 +74,17 @@ export default function KnowledgeBasesView() {
   if (isCreate) {
     content = <KnowledgeBaseForm />;
   } else if (!knowledgeBaseId) {
-    content = <EmptySelection onCreate={() => navigate('/knowledge/new')} />;
+    content = (
+      <EmptySelection canCreate={canCreate} onCreate={() => navigate('/knowledge/new')} />
+    );
   } else if (detail.isLoading) {
     content = (
       <div className="flex h-full items-center justify-center">
         <Spinner />
       </div>
     );
+  } else if (detail.isError) {
+    content = <QueryError onRetry={() => void detail.refetch()} />;
   } else if (detail.data) {
     content = isEdit ? (
       <KnowledgeBaseForm knowledgeBase={detail.data} />
@@ -86,6 +94,7 @@ export default function KnowledgeBasesView() {
         onEdit={() => navigate(`/knowledge/${detail.data?._id}/edit`)}
         onAddFiles={() => setDialog('files')}
         onAddSource={() => setDialog('sources')}
+        canShare={canShare}
       />
     );
   } else {
@@ -100,7 +109,6 @@ export default function KnowledgeBasesView() {
     <div className="flex h-full min-h-0 flex-col bg-presentation">
       <MobileSidebarToggle />
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{content}</main>
-
       {detail.data && (
         <>
           <AddFilesDialog
@@ -132,7 +140,7 @@ function MobileSidebarToggle() {
   );
 }
 
-function EmptySelection({ onCreate }: { onCreate: () => void }) {
+function EmptySelection({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   const localize = useLocalize();
   return (
     <div className="flex h-full items-center justify-center p-8 text-center">
@@ -144,11 +152,25 @@ function EmptySelection({ onCreate }: { onCreate: () => void }) {
         <p className="mt-2 text-sm text-text-secondary">
           {localize('com_ui_knowledge_no_selection_desc')}
         </p>
-        <Button className="mt-5" onClick={onCreate}>
-          <Plus className="mr-2 size-4" />
-          {localize('com_ui_knowledge_create')}
-        </Button>
+        {canCreate && (
+          <Button className="mt-5" onClick={onCreate}>
+            <Plus className="mr-2 size-4" />
+            {localize('com_ui_knowledge_create')}
+          </Button>
+        )}
       </div>
+    </div>
+  );
+}
+
+function QueryError({ onRetry }: { onRetry: () => void }) {
+  const localize = useLocalize();
+  return (
+    <div role="alert" className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+      <p className="text-sm text-text-secondary">{localize('com_ui_knowledge_load_error')}</p>
+      <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+        {localize('com_ui_retry')}
+      </Button>
     </div>
   );
 }
@@ -158,11 +180,13 @@ function KnowledgeBaseDetail({
   onEdit,
   onAddFiles,
   onAddSource,
+  canShare,
 }: {
   knowledgeBase: KnowledgeBase;
   onEdit: () => void;
   onAddFiles: () => void;
   onAddSource: () => void;
+  canShare: boolean;
 }) {
   const localize = useLocalize();
   const navigate = useNavigate();
@@ -201,7 +225,7 @@ function KnowledgeBaseDetail({
           >
             <Pencil className="size-4" />
           </Button>
-          {resourceType && (
+          {canShare && resourceType && (
             <GenericGrantAccessDialog
               resourceDbId={knowledgeBase._id}
               resourceName={knowledgeBase.name}
@@ -238,6 +262,11 @@ function KnowledgeBaseDetail({
         <h3 className="border-b border-border-light px-4 py-3 font-medium text-text-primary">
           {localize('com_ui_knowledge_documents')}
         </h3>
+        {mutations.removeDocument.isError && (
+          <p role="alert" className="px-4 py-2 text-sm text-text-destructive">
+            {localize('com_ui_knowledge_document_delete_error')}
+          </p>
+        )}
         {(knowledgeBase.documents ?? []).length === 0 ? (
           <p className="p-8 text-center text-sm text-text-secondary">
             {localize('com_ui_knowledge_documents_empty')}
@@ -247,7 +276,7 @@ function KnowledgeBaseDetail({
             <thead className="bg-surface-secondary text-xs text-text-secondary">
               <tr>
                 <th className="px-4 py-2">{localize('com_ui_name')}</th>
-                <th className="px-4 py-2">{localize('com_ui_status')}</th>
+                <th className="px-4 py-2">{localize('com_ui_knowledge_status')}</th>
                 <th className="w-12" />
               </tr>
             </thead>
@@ -260,13 +289,23 @@ function KnowledgeBaseDetail({
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label={localize('com_ui_delete')}
-                      onClick={() =>
-                        mutations.removeDocument.mutate({
-                          id: knowledgeBase._id,
-                          documentId: document._id,
-                        })
-                      }
+                      aria-label={localize('com_ui_knowledge_document_delete', {
+                        0: document.name,
+                      })}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            localize('com_ui_knowledge_document_delete_confirm', {
+                              0: document.name,
+                            }),
+                          )
+                        ) {
+                          mutations.removeDocument.mutate({
+                            id: knowledgeBase._id,
+                            documentId: document._id,
+                          });
+                        }
+                      }}
                     >
                       <Trash2 className="size-4" />
                     </Button>
@@ -309,47 +348,52 @@ function KnowledgeBaseForm({ knowledgeBase }: { knowledgeBase?: KnowledgeBase })
   return (
     <div className="mx-auto max-w-3xl p-6 md:p-10">
       <form className="space-y-4" onSubmit={submit}>
-        <h2 className="text-2xl font-semibold text-text-primary">
-          {localize(knowledgeBase ? 'com_ui_knowledge_edit' : 'com_ui_knowledge_create')}
-        </h2>
-        <div>
-          <Label htmlFor="knowledge-name">{localize('com_ui_name')}</Label>
-          <Input
-            id="knowledge-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            maxLength={120}
-          />
-        </div>
-        <div>
-          <Label id="knowledge-description-label" htmlFor="knowledge-description">
-            {localize('com_ui_description')}
-          </Label>
-          <TextareaAutosize
-            id="knowledge-description"
-            aria-labelledby="knowledge-description-label"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            minRows={3}
-            maxLength={1000}
-            className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
-          />
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              navigate(knowledgeBase ? `/knowledge/${knowledgeBase._id}` : '/knowledge')
-            }
-          >
-            {localize('com_ui_cancel')}
-          </Button>
-          <Button type="submit" disabled={!name.trim()}>
-            {localize('com_ui_save')}
-          </Button>
-        </div>
+          <h2 className="text-2xl font-semibold text-text-primary">
+            {localize(knowledgeBase ? 'com_ui_knowledge_edit' : 'com_ui_knowledge_create')}
+          </h2>
+          <div>
+            <Label htmlFor="knowledge-name">{localize('com_ui_name')}</Label>
+            <Input
+              id="knowledge-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              maxLength={120}
+            />
+          </div>
+          <div>
+            <Label id="knowledge-description-label" htmlFor="knowledge-description">
+              {localize('com_ui_description')}
+            </Label>
+            <TextareaAutosize
+              id="knowledge-description"
+              aria-labelledby="knowledge-description-label"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              minRows={3}
+              maxLength={1000}
+              className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
+            />
+          </div>
+          {(mutations.create.isError || mutations.update.isError) && (
+            <p role="alert" className="text-sm text-text-destructive">
+              {localize('com_ui_knowledge_save_error')}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() =>
+                navigate(knowledgeBase ? `/knowledge/${knowledgeBase._id}` : '/knowledge')
+              }
+            >
+              {localize('com_ui_cancel')}
+            </Button>
+            <Button type="submit" disabled={!name.trim()}>
+              {localize('com_ui_save')}
+            </Button>
+          </div>
       </form>
     </div>
   );
@@ -361,7 +405,14 @@ function KnowledgeSources({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const mutations = useKnowledgeSourceMutations(knowledgeBaseId);
   const [editing, setEditing] = useState<KnowledgeSource | null>(null);
   const sources = query.data?.sources ?? [];
-  if (query.isLoading || sources.length === 0) return null;
+  if (query.isLoading)
+    return (
+      <div className="flex justify-center p-6" aria-label={localize('com_ui_loading')}>
+        <Spinner />
+      </div>
+    );
+  if (query.isError) return <QueryError onRetry={() => void query.refetch()} />;
+  if (sources.length === 0) return null;
   return (
     <>
       <section className="mt-6 overflow-hidden rounded-xl border border-border-light">
@@ -547,12 +598,46 @@ function AddFilesDialog({
   onClose: () => void;
 }) {
   const localize = useLocalize();
-  const { data: files = [] } = useGetFiles<TFile[]>({ enabled: open });
+  const filesQuery = useGetFiles<TFile[]>({ enabled: open });
+  const files = filesQuery.data ?? [];
   const mutations = useKnowledgeBaseMutations();
   const linkedIds = useMemo(
     () => new Set((knowledgeBase.documents ?? []).map((document) => document.file_id)),
     [knowledgeBase.documents],
   );
+  let filesContent: React.ReactNode;
+  if (filesQuery.isError) {
+    filesContent = <QueryError onRetry={() => void filesQuery.refetch()} />;
+  } else if (filesQuery.isLoading) {
+    filesContent = (
+      <div className="flex justify-center p-6" aria-label={localize('com_ui_loading')}>
+        <Spinner />
+      </div>
+    );
+  } else if (files.length === 0) {
+    filesContent = (
+      <p className="p-6 text-center text-sm text-text-secondary">
+        {localize('com_ui_knowledge_no_files')}
+      </p>
+    );
+  } else {
+    filesContent = files.map((file) => (
+      <div
+        key={file.file_id}
+        className="flex items-center justify-between border-b border-border-light px-3 py-2 last:border-0"
+      >
+        <span className="min-w-0 truncate text-sm text-text-primary">{file.filename}</span>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={linkedIds.has(file.file_id) || mutations.addDocument.isLoading}
+          onClick={() => mutations.addDocument.mutate({ id: knowledgeBase._id, file })}
+        >
+          {localize('com_ui_add')}
+        </Button>
+      </div>
+    ));
+  }
   return (
     <OGDialog open={open} onOpenChange={(next) => !next && onClose()}>
       <OGDialogContent className="w-11/12 max-w-xl">
@@ -564,30 +649,7 @@ function AddFilesDialog({
             {localize('com_ui_knowledge_add_files_desc')}
           </p>
           <div className="mt-4 max-h-80 overflow-y-auto rounded-lg border border-border-light">
-            {files.length === 0 ? (
-              <p className="p-6 text-center text-sm text-text-secondary">
-                {localize('com_ui_knowledge_no_files')}
-              </p>
-            ) : (
-              files.map((file) => (
-                <div
-                  key={file.file_id}
-                  className="flex items-center justify-between border-b border-border-light px-3 py-2 last:border-0"
-                >
-                  <span className="min-w-0 truncate text-sm text-text-primary">
-                    {file.filename}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={linkedIds.has(file.file_id) || mutations.addDocument.isLoading}
-                    onClick={() => mutations.addDocument.mutate({ id: knowledgeBase._id, file })}
-                  >
-                    {localize('com_ui_add')}
-                  </Button>
-                </div>
-              ))
-            )}
+            {filesContent}
           </div>
         </div>
       </OGDialogContent>
@@ -614,6 +676,7 @@ function SourceCatalogDialog({
   const [values, setValues] = useState<Record<string, unknown>>({});
   const advertised = connectors.data?.connectors ?? [];
   const reset = () => {
+    mutations.create.reset();
     setSelected(null);
     setSourceName('');
     setValues({});
@@ -729,6 +792,11 @@ function SourceCatalogDialog({
                 onChange={(value) => setValues((current) => ({ ...current, [field.key]: value }))}
               />
             ))}
+            {mutations.create.isError && (
+              <p role="alert" className="text-sm text-text-destructive">
+                {localize('com_ui_knowledge_source_save_error')}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={close}>
                 {localize('com_ui_cancel')}
@@ -743,45 +811,7 @@ function SourceCatalogDialog({
             <h2 className="text-lg font-semibold text-text-primary">
               {localize('com_ui_knowledge_add_source')}
             </h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={onChooseFiles}
-                className="rounded-xl border border-border-light p-4 text-left hover:bg-surface-hover"
-              >
-                <FilePlus2 className="mb-3 size-5" />
-                <span className="font-medium text-text-primary">
-                  {localize('com_ui_knowledge_uploads')}
-                </span>
-                <span className="mt-1 block text-xs text-text-secondary">
-                  {localize('com_ui_knowledge_uploads_desc')}
-                </span>
-              </button>
-              {advertised.map((connector) => (
-                <button
-                  key={connector.type}
-                  type="button"
-                  onClick={() => {
-                    setSelected(connector);
-                    setSourceName(connector.name);
-                  }}
-                  className="rounded-xl border border-border-light p-4 text-left hover:bg-surface-hover"
-                >
-                  <Database className="mb-3 size-5" />
-                  <span className="font-medium text-text-primary">{connector.name}</span>
-                  {connector.description && (
-                    <span className="mt-1 block text-xs text-text-secondary">
-                      {connector.description}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {advertised.length === 0 && (
-              <p className="mt-4 text-xs text-text-secondary">
-                {localize('com_ui_knowledge_connectors_empty')}
-              </p>
-            )}
+            {catalogContent}
           </div>
         )}
       </OGDialogContent>
@@ -811,48 +841,60 @@ function ConnectorField({
         {field.label}
       </label>
     );
+  let fieldControl: React.ReactNode;
+  if (field.type === 'select') {
+    fieldControl = (
+      <select
+        id={inputId}
+        required={field.required}
+        value={String(value ?? '')}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-lg border border-border-medium bg-surface-primary px-3 text-sm text-text-primary"
+      >
+        <option value="" />
+        {(field.options ?? []).map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  } else if (field.type === 'textarea') {
+    fieldControl = (
+      <TextareaAutosize
+        id={inputId}
+        aria-label={field.label}
+        required={field.required}
+        value={String(value ?? '')}
+        placeholder={field.placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        minRows={3}
+        className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
+      />
+    );
+  } else {
+    fieldControl = (
+      <Input
+        id={inputId}
+        type={field.secret || field.type === 'password' ? 'password' : field.type}
+        required={field.required}
+        value={String(value ?? '')}
+        placeholder={field.placeholder}
+        autoComplete={field.secret || field.type === 'password' ? 'new-password' : 'off'}
+        onChange={(event) =>
+          onChange(
+            field.type === 'number' && event.target.value !== ''
+              ? Number(event.target.value)
+              : event.target.value,
+          )
+        }
+      />
+    );
+  }
   return (
     <div>
       <Label htmlFor={inputId}>{field.label}</Label>
-      {field.type === 'select' ? (
-        <select
-          id={inputId}
-          required={field.required}
-          value={String(value ?? '')}
-          onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-full rounded-lg border border-border-medium bg-surface-primary px-3 text-sm text-text-primary"
-        >
-          <option value="" />
-          {(field.options ?? []).map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      ) : field.type === 'textarea' ? (
-        <TextareaAutosize
-          id={inputId}
-          aria-label={field.label}
-          required={field.required}
-          value={String(value ?? '')}
-          placeholder={field.placeholder}
-          onChange={(event) => onChange(event.target.value)}
-          minRows={3}
-          className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
-        />
-      ) : (
-        <Input
-          id={inputId}
-          type={field.secret || field.type === 'password' ? 'password' : field.type}
-          required={field.required}
-          value={String(value ?? '')}
-          placeholder={field.placeholder}
-          autoComplete={field.secret ? 'new-password' : 'off'}
-          onChange={(event) =>
-            onChange(field.type === 'number' ? Number(event.target.value) : event.target.value)
-          }
-        />
-      )}
+      {fieldControl}
       {field.help && <p className="mt-1 text-xs text-text-secondary">{field.help}</p>}
     </div>
   );

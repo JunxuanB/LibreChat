@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Check, Database } from 'lucide-react';
+import { Button, Spinner } from '@librechat/client';
 import { useKnowledgeBasesQuery } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
@@ -14,8 +15,21 @@ export default function KnowledgeBasePicker({
   disabled?: boolean;
 }) {
   const localize = useLocalize();
-  const query = useKnowledgeBasesQuery(!disabled);
+  const query = useKnowledgeBasesQuery();
   const selected = useMemo(() => new Set(value), [value]);
+  if (query.isLoading) {
+    return <Spinner className="mx-auto my-6" aria-label={localize('com_ui_loading')} />;
+  }
+  if (query.isError) {
+    return (
+      <div role="alert" className="space-y-3 py-4 text-center">
+        <p className="text-sm text-text-secondary">{localize('com_ui_knowledge_load_error')}</p>
+        <Button type="button" size="sm" variant="outline" onClick={() => void query.refetch()}>
+          {localize('com_ui_retry')}
+        </Button>
+      </div>
+    );
+  }
   return (
     <div className="space-y-2" aria-label={localize('com_ui_knowledge_select')}>
       {(query.data?.knowledgeBases ?? []).map((base) => {
@@ -40,7 +54,7 @@ export default function KnowledgeBasePicker({
           </button>
         );
       })}
-      {!query.isLoading && (query.data?.knowledgeBases.length ?? 0) === 0 && (
+      {(query.data?.knowledgeBases.length ?? 0) === 0 && (
         <p className="py-3 text-center text-sm text-text-secondary">
           {localize('com_ui_knowledge_empty')}
         </p>

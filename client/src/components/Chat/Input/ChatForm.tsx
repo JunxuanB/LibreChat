@@ -70,7 +70,6 @@ import EditBadges from './EditBadges';
 import BadgeRow from './BadgeRow';
 import Mention from './Mention';
 import store from '~/store';
-import type { KnowledgeConversation } from '~/components/KnowledgeBases/conversation';
 
 export function toRestoredComposerFile(
   file: NonNullable<TMessage['files']>[number],
@@ -967,6 +966,7 @@ function ChatFormWrapper({
    * not on every metadata update (e.g., title generation during streaming).
    */
   const hasMessages = (conversation?.messages?.length ?? 0) > 0;
+  const knowledgeBaseIds = conversation?.knowledge_base_ids;
   const stableConversation = useMemo(
     () => conversation,
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -983,7 +983,7 @@ function ChatFormWrapper({
       conversation?.codeApprovalMode,
       conversation?.codeEnvironmentMode,
       conversation?.codeWorkspaces,
-      (conversation as KnowledgeConversation | null)?.knowledge_base_ids,
+      knowledgeBaseIds,
       hasMessages,
     ],
   );

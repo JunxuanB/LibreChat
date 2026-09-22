@@ -5,7 +5,7 @@ describe('partitionConnectorValues', () => {
     const result = partitionConnectorValues(
       [
         { key: 'url', label: 'URL', type: 'url' },
-        { key: 'token', label: 'Token', type: 'password', secret: true },
+        { key: 'token', label: 'Token', type: 'password' },
       ],
       { url: 'https://example.com', token: 'secret-value' },
     );

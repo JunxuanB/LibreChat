@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import KnowledgeBasesSidePanel from '../KnowledgeBasesSidePanel';
 
@@ -40,11 +40,13 @@ function renderPanel(path = '/knowledge') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Location />
-      <Routes>
-        <Route path="/knowledge" element={<KnowledgeBasesSidePanel />} />
-        <Route path="/knowledge/new" element={<KnowledgeBasesSidePanel />} />
-        <Route path="/knowledge/:knowledgeBaseId" element={<KnowledgeBasesSidePanel />} />
-      </Routes>
+      <aside>
+        <Routes>
+          <Route path="/knowledge" element={<KnowledgeBasesSidePanel />} />
+          <Route path="/knowledge/new" element={<KnowledgeBasesSidePanel />} />
+          <Route path="/knowledge/:knowledgeBaseId" element={<KnowledgeBasesSidePanel />} />
+        </Routes>
+      </aside>
     </MemoryRouter>,
   );
 }
@@ -85,6 +87,34 @@ describe('KnowledgeBasesSidePanel', () => {
     expect(createButton).toHaveAttribute('type', 'button');
     fireEvent.click(createButton);
     expect(screen.getByTestId('location')).toHaveTextContent('/knowledge/new');
+  });
+
+  it('keeps route controls disabled until the containing panel finishes expanding', async () => {
+    let finishAnimation: () => void = () => undefined;
+    const finished = new Promise<void>((resolve) => {
+      finishAnimation = resolve;
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'getAnimations');
+    Object.defineProperty(Element.prototype, 'getAnimations', {
+      configurable: true,
+      value: () => [{ finished }],
+    });
+
+    try {
+      renderPanel();
+      const createButton = screen.getByRole('button', { name: 'com_ui_knowledge_create' });
+      expect(createButton).toBeDisabled();
+      expect(screen.getByRole('button', { name: /Runbooks/ })).toBeDisabled();
+
+      await act(async () => finishAnimation());
+      await waitFor(() => expect(createButton).toBeEnabled());
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(Element.prototype, 'getAnimations', descriptor);
+      } else {
+        Reflect.deleteProperty(Element.prototype, 'getAnimations');
+      }
+    }
   });
 
   it('renders loading, empty, and retry states', () => {

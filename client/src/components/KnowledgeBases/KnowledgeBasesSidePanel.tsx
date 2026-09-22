@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, FilterInput, Spinner } from '@librechat/client';
 import { Plus } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -6,15 +6,19 @@ import { PanelContent } from '~/components/ui';
 import { useGetStartupConfig, useKnowledgeBasesQuery } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
-import { isKnowledgeBasesEnabled } from './feature';
+import { isKnowledgeBaseActionEnabled, isKnowledgeBasesEnabled } from './feature';
 
 interface KnowledgeBasesSidePanelProps {
   className?: string;
 }
 
 export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSidePanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [isPanelReady, setIsPanelReady] = useState(false);
   const { data: startupConfig } = useGetStartupConfig();
-  const enabled = isKnowledgeBasesEnabled(startupConfig?.interface?.knowledgeBases);
+  const featureConfig = startupConfig?.interface?.knowledgeBases;
+  const enabled = isKnowledgeBasesEnabled(featureConfig);
+  const canCreate = isKnowledgeBaseActionEnabled(featureConfig, 'create');
   const localize = useLocalize();
   const navigate = useNavigate();
   const { knowledgeBaseId } = useParams();
@@ -28,8 +32,31 @@ export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSid
       : knowledgeBases;
   }, [list.data, searchTerm]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const panel = panelRef.current?.closest('aside');
+    const animations = panel?.getAnimations?.({ subtree: true }) ?? [];
+
+    if (animations.length === 0) {
+      setIsPanelReady(true);
+      return;
+    }
+
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+      if (!cancelled) {
+        setIsPanelReady(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div
+      ref={panelRef}
+      aria-busy={!isPanelReady}
       className={cn(
         'flex h-full w-full flex-col overflow-hidden border-r border-border-light pt-2',
         className,
@@ -43,15 +70,18 @@ export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSid
           onChange={(event) => setSearchTerm(event.target.value)}
           containerClassName="flex-1"
         />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          aria-label={localize('com_ui_knowledge_create')}
-          onClick={() => navigate('/knowledge/new')}
-        >
-          <Plus className="size-4" aria-hidden="true" />
-        </Button>
+        {canCreate && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label={localize('com_ui_knowledge_create')}
+            disabled={!isPanelReady}
+            onClick={() => navigate('/knowledge/new')}
+          >
+            <Plus className="size-4" aria-hidden="true" />
+          </Button>
+        )}
       </div>
 
       <PanelContent
@@ -88,10 +118,11 @@ export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSid
               <button
                 key={base._id}
                 type="button"
+                disabled={!isPanelReady}
                 aria-current={knowledgeBaseId === base._id ? 'page' : undefined}
                 onClick={() => navigate(`/knowledge/${base._id}`)}
                 className={cn(
-                  'w-full rounded-lg px-3 py-2 text-left hover:bg-surface-hover',
+                  'w-full rounded-lg px-3 py-2 text-left hover:bg-surface-hover disabled:cursor-wait disabled:opacity-50',
                   knowledgeBaseId === base._id && 'bg-surface-active',
                 )}
               >
