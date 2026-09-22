@@ -2845,7 +2845,7 @@ function provisioningToolResponses({ text, toolNames }) {
       };
     }
     return {
-      responses: ['', `${FILE_SEARCH_FINAL_TEXT}: ${searchLabel}`],
+      responses: ['', ''],
       toolCalls: [
         {
           id: FILE_SEARCH_TOOL_CALL_ID,
@@ -2854,6 +2854,20 @@ function provisioningToolResponses({ text, toolNames }) {
           type: 'tool_call',
         },
       ],
+      resolveOnStream: (streamMessages) => {
+        const toolMessage = findLastToolMessage(streamMessages, FILE_SEARCH_TOOL_CALL_ID);
+        const toolOutput = getContentText(toolMessage?.content);
+        if (!toolOutput) return null;
+        const fact = toolOutput.match(/upload-only verification code is ([A-Za-z0-9-]+)/i)?.[1];
+        if (!fact) {
+          return {
+            responses: [`E2E file_search grounding failed: result did not contain the fact.`],
+          };
+        }
+        return {
+          responses: [`${FILE_SEARCH_FINAL_TEXT}: ${searchLabel}; grounded fact: ${fact}`],
+        };
+      },
     };
   }
 

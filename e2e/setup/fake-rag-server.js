@@ -23,9 +23,9 @@ const busboy = require('busboy');
 const PORT = parseInt(process.env.E2E_RAG_API_PORT || '8791', 10);
 const HOST = '127.0.0.1';
 
-/** @type {Array<{ file_id: string; filename: string; entity_id: string; bytes: number; auth: string }>} */
+/** @type {Array<{ file_id: string; filename: string; entity_id: string; bytes: number; auth: string; content: string }>} */
 const embedded = [];
-/** @type {Array<{ file_id: string; query: string }>} */
+/** @type {Array<{ file_id?: string; file_ids?: string[]; entity_id?: string; query: string }>} */
 const queries = [];
 /** @type {string[]} */
 const deleted = [];
@@ -40,18 +40,25 @@ function parseMultipart(req) {
     const bb = busboy({ headers: req.headers });
     /** @type {Record<string, string>} */
     const fields = {};
-    /** @type {Array<{ field: string; filename: string; bytes: number }>} */
+    /** @type {Array<{ field: string; filename: string; bytes: number; content: string }>} */
     const files = [];
     bb.on('field', (name, value) => {
       fields[name] = value;
     });
     bb.on('file', (name, stream, info) => {
       let bytes = 0;
+      const chunks = [];
       stream.on('data', (chunk) => {
         bytes += chunk.length;
+        chunks.push(chunk);
       });
       stream.on('end', () => {
-        files.push({ field: name, filename: info.filename, bytes });
+        files.push({
+          field: name,
+          filename: info.filename,
+          bytes,
+          content: Buffer.concat(chunks).toString('utf8'),
+        });
       });
       stream.on('error', reject);
     });
@@ -86,6 +93,7 @@ async function handleEmbed(req, res) {
     entity_id: fields.entity_id || '',
     bytes: files[0]?.bytes ?? 0,
     auth: req.headers['authorization'] || '',
+    content: files[0]?.content ?? '',
   });
   sendJson(res, 200, { status: true, known_type: true });
 }
@@ -94,6 +102,29 @@ async function handleQuery(req, res) {
   const body = await readJson(req);
   queries.push({ file_id: body.file_id || '', query: body.query || '' });
   sendJson(res, 200, []);
+}
+
+async function handleQueryMultiple(req, res) {
+  const body = await readJson(req);
+  const fileIds = Array.isArray(body.file_ids) ? body.file_ids.map(String) : [];
+  const entityId = typeof body.entity_id === 'string' ? body.entity_id : '';
+  queries.push({ file_ids: fileIds, entity_id: entityId, query: String(body.query || '') });
+  const results = embedded
+    .filter((entry) => fileIds.includes(entry.file_id) && entry.entity_id === entityId)
+    .slice(0, Number(body.k) || 10)
+    .map((entry, index) => [
+      {
+        page_content: entry.content,
+        metadata: {
+          file_id: entry.file_id,
+          filename: entry.filename,
+          entity_id: entry.entity_id,
+          page: 1,
+        },
+      },
+      0.01 + index / 100,
+    ]);
+  sendJson(res, 200, results);
 }
 
 async function handleDeleteDocuments(req, res) {
@@ -135,6 +166,11 @@ const server = http.createServer((req, res) => {
 
     if (pathname === '/query' && req.method === 'POST') {
       await handleQuery(req, res);
+      return;
+    }
+
+    if (pathname === '/query_multiple' && req.method === 'POST') {
+      await handleQueryMultiple(req, res);
       return;
     }
 

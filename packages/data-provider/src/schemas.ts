@@ -1449,6 +1449,7 @@ export type TConversationTag = z.infer<typeof tConversationTagSchema>;
 
 export const googleBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   modelLabel: true,
   promptPrefix: true,
@@ -1524,6 +1525,7 @@ export function removeNullishValues<T extends Record<string, unknown>>(
 
 const assistantBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   assistant_id: true,
   instructions: true,
@@ -1560,6 +1562,7 @@ export const assistantSchema = assistantBaseSchema
 
 const compactAssistantBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   assistant_id: true,
   instructions: true,
@@ -1576,6 +1579,7 @@ export const compactAssistantSchema = compactAssistantBaseSchema
 
 export const agentsBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   modelLabel: true,
   temperature: true,
@@ -1630,6 +1634,7 @@ export const agentsSchema = agentsBaseSchema
 
 export const openAIBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   modelLabel: true,
   chatGptLabel: true,
@@ -1689,6 +1694,7 @@ export const compactGoogleSchema = googleBaseSchema
 
 export const anthropicBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   model: true,
   modelLabel: true,
   promptPrefix: true,
@@ -1732,6 +1738,7 @@ export type TBanner = z.infer<typeof tBannerSchema>;
 
 export const compactAgentsBaseSchema = tConversationSchema.pick({
   chatProjectId: true,
+  knowledge_base_ids: true,
   spec: true,
   // model: true,
   iconURL: true,

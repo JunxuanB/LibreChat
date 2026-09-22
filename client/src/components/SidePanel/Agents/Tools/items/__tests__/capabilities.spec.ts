@@ -82,6 +82,12 @@ describe('resolveCapabilityTools', () => {
     expect(resolveCapabilityTools(data)).toEqual([Tools.file_search]);
   });
 
+  it('persists file_search when a knowledge base is attached', () => {
+    const data = formWith({ knowledge_base_ids: ['kb-1'], agent: agentWith() });
+
+    expect(resolveCapabilityTools(data)).toContain(Tools.file_search);
+  });
+
   it('persists execute_code for an agent holding code files with the flag cleared', () => {
     const data = formWith({
       [AgentCapabilities.execute_code]: false,

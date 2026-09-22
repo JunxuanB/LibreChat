@@ -63,6 +63,10 @@ jest.mock('~/server/middleware', () => ({
     req.user = { id: 'user-1', role: 'USER' };
     next();
   },
+  configMiddleware: (req, _res, next) => {
+    req.config = { paths: { uploads: '/tmp/uploads' } };
+    next();
+  },
   canAccessResource: mockCanAccessResource,
 }));
 
@@ -153,9 +157,7 @@ describe('knowledge base HTTP routes', () => {
     ['post', '/api/knowledge-bases/kb-1/sources/source-1/sync', PermissionBits.EDIT],
     ['delete', '/api/knowledge-bases/kb-1', PermissionBits.DELETE],
   ])('enforces ACL bit %s %s', async (method, path, permission) => {
-    const response = await authorized(method, path)
-      .set('x-deny-acl', String(permission))
-      .send({});
+    const response = await authorized(method, path).set('x-deny-acl', String(permission)).send({});
     expect(response.status).toBe(403);
   });
 

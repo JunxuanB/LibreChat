@@ -383,6 +383,7 @@ export const bedrockInputSchema = s.tConversationSchema
   .pick({
     /* LibreChat params; optionType: 'conversation' */
     chatProjectId: true,
+    knowledge_base_ids: true,
     modelLabel: true,
     promptPrefix: true,
     resendFiles: true,
@@ -445,6 +446,7 @@ export const bedrockInputParser = s.tConversationSchema
   .pick({
     /* LibreChat params; optionType: 'conversation' */
     chatProjectId: true,
+    knowledge_base_ids: true,
     modelLabel: true,
     promptPrefix: true,
     resendFiles: true,

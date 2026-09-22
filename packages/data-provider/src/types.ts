@@ -86,6 +86,7 @@ export type TEndpointOption = Pick<
   | 'artifacts'
   // Files
   | 'file_ids'
+  | 'knowledge_base_ids'
   // System field
   | 'system'
   | 'chatProjectId'

@@ -90,9 +90,13 @@ export function resolveCapabilityTools(data: AgentForm): string[] {
   const tools: string[] = [];
 
   for (const entry of FILE_BACKED_CAPABILITIES) {
+    const knowledgeBaseCount =
+      entry.capability === AgentCapabilities.file_search
+        ? (data.knowledge_base_ids?.length ?? 0)
+        : 0;
     const enabled = isFileBackedCapabilityEnabled(
       data[entry.capability],
-      countCapabilityFiles(data.agent, entry),
+      countCapabilityFiles(data.agent, entry) + knowledgeBaseCount,
     );
     if (enabled) {
       tools.push(entry.tool);

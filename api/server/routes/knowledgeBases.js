@@ -11,7 +11,7 @@ const {
   Permissions,
   ResourceType,
 } = require('librechat-data-provider');
-const { requireJwtAuth, canAccessResource } = require('~/server/middleware');
+const { requireJwtAuth, canAccessResource, configMiddleware } = require('~/server/middleware');
 const {
   findAccessibleResources,
   findPubliclyAccessibleResources,
@@ -74,6 +74,7 @@ const checkKnowledgeCreate = generateCheckAccess({
 });
 
 router.use(requireJwtAuth);
+router.use(configMiddleware);
 router.use(checkKnowledgeUse);
 router.get('/', handlers.list);
 router.post('/', checkKnowledgeCreate, handlers.create);
