@@ -34,6 +34,7 @@ const knowledgeDocumentSchema: Schema<IKnowledgeDocumentDocument> =
         index: true,
       },
       source_id: { type: String, maxlength: 512 },
+      knowledgeSourceId: { type: Schema.Types.ObjectId, ref: 'KnowledgeSource', index: true },
       canonical_url: { type: String, maxlength: 2048 },
       status: {
         type: String,
@@ -52,5 +53,15 @@ const knowledgeDocumentSchema: Schema<IKnowledgeDocumentDocument> =
 
 knowledgeDocumentSchema.index({ knowledgeBaseId: 1, createdAt: -1, _id: -1 });
 knowledgeDocumentSchema.index({ knowledgeBaseId: 1, source_type: 1, source_id: 1 });
+knowledgeDocumentSchema.index(
+  { knowledgeBaseId: 1, knowledgeSourceId: 1, source_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      knowledgeSourceId: { $exists: true },
+      source_id: { $type: 'string' },
+    },
+  },
+);
 
 export default knowledgeDocumentSchema;

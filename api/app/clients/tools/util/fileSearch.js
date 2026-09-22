@@ -119,13 +119,14 @@ const primeFiles = async (options) => {
     });
   }
 
-  const seenFileIds = new Set(files.map((file) => file.file_id));
+  const seenKnowledgeFiles = new Set();
   for (const file of knowledgeFiles) {
-    if (seenFileIds.has(file.file_id)) {
+    const key = `${file.knowledge_base_id}:${file.file_id}`;
+    if (seenKnowledgeFiles.has(key)) {
       continue;
     }
     files.push(file);
-    seenFileIds.add(file.file_id);
+    seenKnowledgeFiles.add(key);
   }
 
   let toolContext;

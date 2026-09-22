@@ -90,7 +90,13 @@ export type TKnowledgeDocumentListResponse = {
   nextCursor: string | null;
 };
 
-export const knowledgeSourceSyncStatusSchema = z.enum(['idle', 'syncing', 'ready', 'failed']);
+export const knowledgeSourceSyncStatusSchema = z.enum([
+  'idle',
+  'queued',
+  'syncing',
+  'ready',
+  'failed',
+]);
 export const knowledgeSourceAccessModeSchema = z.enum(['shared_snapshot']);
 export const createKnowledgeSourceSchema = z.object({
   name: z.string().trim().min(1).max(128),
@@ -120,6 +126,9 @@ export type TKnowledgeSource = {
   syncStatus: z.infer<typeof knowledgeSourceSyncStatusSchema>;
   syncError?: string | null;
   lastSyncedAt?: string | null;
+  syncRequestedAt?: string | null;
+  nextSyncAt?: string | null;
+  syncAttempts?: number;
   createdAt: string;
   updatedAt: string;
 };

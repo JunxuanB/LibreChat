@@ -80,12 +80,14 @@ describe('KnowledgeSourceSyncRunner', () => {
 
     expect(seenCursors).toEqual([undefined, 'cursor-1']);
     expect(documents.size).toBe(1);
-    expect(states).toContainEqual({
-      syncStatus: 'ready',
-      syncError: null,
-      cursor: 'cursor-1',
-      lastSyncedAt: new Date('2026-09-22T12:00:00.000Z'),
-    });
+    expect(states).toContainEqual(
+      expect.objectContaining({
+        syncStatus: 'ready',
+        syncError: null,
+        cursor: 'cursor-1',
+        lastSyncedAt: new Date('2026-09-22T12:00:00.000Z'),
+      }),
+    );
   });
 
   test('applies deletion changes through persistence', async () => {
@@ -183,7 +185,7 @@ describe('KnowledgeSourceSyncRunner', () => {
 
     await expect(runner.run('base-1', 'source-1')).rejects.toThrow('provider rejected [REDACTED]');
     expect(states).toEqual([
-      { syncStatus: 'syncing', syncError: null },
+      expect.objectContaining({ syncStatus: 'syncing', syncError: null, syncAttempts: 1 }),
       { syncStatus: 'failed', syncError: 'provider rejected [REDACTED]' },
     ]);
   });

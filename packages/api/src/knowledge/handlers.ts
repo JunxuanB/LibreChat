@@ -62,11 +62,12 @@ export interface KnowledgeHandlersDeps {
     id: string,
     input: Record<string, unknown>,
   ): Promise<KnowledgeBaseRecord | null>;
-  deleteKnowledgeBase(id: string): Promise<{ deleted: boolean }>;
+  deleteKnowledgeBase(id: string, req?: Request): Promise<{ deleted: boolean }>;
   createKnowledgeDocument(
     knowledgeBaseId: string,
     input: Record<string, unknown>,
     tenantId?: string,
+    req?: ServerRequest,
   ): Promise<KnowledgeDocumentRecord | null>;
   listKnowledgeDocuments(input: {
     knowledgeBaseId: string;
@@ -81,6 +82,7 @@ export interface KnowledgeHandlersDeps {
   deleteKnowledgeDocument(
     knowledgeBaseId: string,
     documentId: string,
+    req?: Request,
   ): Promise<{ deleted: boolean }>;
   findAccessibleResources(input: {
     userId: string;
@@ -236,7 +238,7 @@ export function createKnowledgeHandlers(deps: KnowledgeHandlersDeps): KnowledgeH
   }
 
   async function remove(req: Request, res: Response) {
-    const result = await deps.deleteKnowledgeBase(req.params.id);
+    const result = await deps.deleteKnowledgeBase(req.params.id, req);
     return result.deleted
       ? res.status(200).json(result)
       : res.status(404).json({ error: 'Knowledge base not found' });
@@ -259,7 +261,7 @@ export function createKnowledgeHandlers(deps: KnowledgeHandlersDeps): KnowledgeH
     if (!parsed.success)
       return res.status(400).json({ error: 'Validation failed', issues: parsed.error.issues });
     const { id } = req.params as { id: string };
-    const document = await deps.createKnowledgeDocument(id, parsed.data, req.user?.tenantId);
+    const document = await deps.createKnowledgeDocument(id, parsed.data, req.user?.tenantId, req);
     return document
       ? res.status(201).json(serializeDocument(document))
       : res.status(404).json({ error: 'Knowledge base not found' });
@@ -280,7 +282,7 @@ export function createKnowledgeHandlers(deps: KnowledgeHandlersDeps): KnowledgeH
   }
 
   async function removeDocument(req: Request, res: Response) {
-    const result = await deps.deleteKnowledgeDocument(req.params.id, req.params.documentId);
+    const result = await deps.deleteKnowledgeDocument(req.params.id, req.params.documentId, req);
     return result.deleted
       ? res.status(200).json(result)
       : res.status(404).json({ error: 'Knowledge document not found' });

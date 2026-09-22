@@ -72,6 +72,7 @@ const initializeOAuthReconnectManager = require('./services/initializeOAuthRecon
 const { capabilityContextMiddleware } = require('./middleware/roles/capabilities');
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
+const { initializeKnowledgeSyncWorker } = require('./services/Knowledge/jobs');
 const { initializeAgentTriggerService } = require('./services/Agents/triggers');
 const { resumeAgentEventDetachedAction } = require('./services/Agents/detachedActionResume');
 const { initializeScheduleEngine, recordExpiredScheduleApproval } = require('./services/Schedules');
@@ -494,6 +495,7 @@ const startServer = async () => {
         await initializeOAuthReconnectManager();
       });
       await checkMigrations();
+      initializeKnowledgeSyncWorker();
 
       const inspectFlags = process.execArgv.some((arg) => arg.startsWith('--inspect'));
       if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {

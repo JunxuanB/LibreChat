@@ -154,6 +154,6 @@ describe('knowledge source handlers', () => {
 
     expect(syncKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1');
     expect(updateKnowledgeSource).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.status).toHaveBeenCalledWith(200);
   });
 });

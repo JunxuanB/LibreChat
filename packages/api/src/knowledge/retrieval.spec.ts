@@ -80,32 +80,51 @@ describe('knowledge retrieval', () => {
         knowledge_base_id: 'kb-2',
         fromKnowledgeBase: true,
       },
+      {
+        file_id: 'file-1',
+        filename: 'duplicate.pdf',
+        knowledge_base_id: 'kb-2',
+        fromKnowledgeBase: true,
+      },
     ]);
   });
 
-  it('queries every resolved file in one RAG API request', async () => {
-    const post = jest.fn(async () => ({ data: [] }));
+  it('queries each knowledge-base namespace once and ranks results globally', async () => {
+    const post = jest
+      .fn()
+      .mockResolvedValueOnce({ data: [[{ page_content: 'second' }, 0.4]] })
+      .mockResolvedValueOnce({ data: [[{ page_content: 'first' }, 0.1]] });
 
     await queryKnowledgeFiles(
       {
         ragApiUrl: 'http://rag.internal/',
         jwtToken: 'token',
         query: 'retention policy',
-        files: [{ file_id: 'file-1' }, { file_id: 'file-2' }, { file_id: 'file-1' }],
+        files: [
+          { file_id: 'file-1', knowledge_base_id: 'kb-1' },
+          { file_id: 'file-2', knowledge_base_id: 'kb-2' },
+          { file_id: 'file-1', knowledge_base_id: 'kb-1' },
+        ],
       },
       { post } as RagQueryClient,
     );
 
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(2);
     expect(post).toHaveBeenCalledWith(
       'http://rag.internal/query_multiple',
-      { query: 'retention policy', file_ids: ['file-1', 'file-2'], k: 10 },
+      { query: 'retention policy', file_ids: ['file-1'], k: 10, entity_id: 'kb-1' },
       {
         headers: {
           Authorization: 'Bearer token',
           'Content-Type': 'application/json',
         },
       },
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      'http://rag.internal/query_multiple',
+      { query: 'retention policy', file_ids: ['file-2'], k: 10, entity_id: 'kb-2' },
+      expect.any(Object),
     );
   });
 

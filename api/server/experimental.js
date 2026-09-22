@@ -62,6 +62,7 @@ const { capabilityContextMiddleware } = require('./middleware/roles/capabilities
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
+const { initializeKnowledgeSyncWorker } = require('./services/Knowledge/jobs');
 const { initializeAgentTriggerService } = require('./services/Agents/triggers');
 const { resumeAgentEventDetachedAction } = require('./services/Agents/detachedActionResume');
 const {
@@ -706,6 +707,7 @@ if (cluster.isMaster) {
         await initializeMCPs();
         await initializeOAuthReconnectManager();
         await checkMigrations();
+        initializeKnowledgeSyncWorker();
         await initializeAgentTriggerService({
           address: server.address(),
           completionResultBatchSize:

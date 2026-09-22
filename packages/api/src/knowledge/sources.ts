@@ -17,6 +17,8 @@ type SourceRecord = Omit<
   createdAt?: Date;
   updatedAt?: Date;
   lastSyncedAt?: Date | null;
+  syncRequestedAt?: Date | null;
+  nextSyncAt?: Date | null;
   connection?: unknown;
   cursor?: string;
 };
@@ -39,7 +41,11 @@ export interface KnowledgeSourceHandlerDeps {
     sourceId: string,
     input: Record<string, unknown>,
   ): Promise<SourceRecord | null>;
-  deleteKnowledgeSource(baseId: string, sourceId: string): Promise<{ deleted: boolean }>;
+  deleteKnowledgeSource(
+    baseId: string,
+    sourceId: string,
+    req?: ServerRequest,
+  ): Promise<{ deleted: boolean }>;
   syncKnowledgeSource(baseId: string, sourceId: string): Promise<SourceRecord | null>;
 }
 export interface KnowledgeSourceHandlers {
@@ -60,6 +66,8 @@ const serialize = (source: SourceRecord): TKnowledgeSource => {
     createdAt: (source.createdAt ?? new Date()).toISOString(),
     updatedAt: (source.updatedAt ?? new Date()).toISOString(),
     lastSyncedAt: source.lastSyncedAt?.toISOString() ?? null,
+    syncRequestedAt: source.syncRequestedAt?.toISOString() ?? null,
+    nextSyncAt: source.nextSyncAt?.toISOString() ?? null,
   };
 };
 
@@ -94,7 +102,9 @@ const matchesFieldType = (type: string, value: unknown): boolean => {
     case 'boolean':
       return typeof value === 'boolean';
     case 'string_array':
-      return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0);
+      return (
+        Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0)
+      );
     default:
       return false;
   }
@@ -121,16 +131,22 @@ const validateSource = (
     const field = fields.get(key);
     if (!field) issues.push({ path: ['config', key], message: 'Unknown connector field' });
     else if (field.secret)
-      issues.push({ path: ['config', key], message: 'Secret fields must be supplied as credentials' });
+      issues.push({
+        path: ['config', key],
+        message: 'Secret fields must be supplied as credentials',
+      });
   }
   for (const key of Object.keys(input.credentials ?? {})) {
     const field = fields.get(key);
     if (!field) issues.push({ path: ['credentials', key], message: 'Unknown connector field' });
     else if (!field.secret)
-      issues.push({ path: ['credentials', key], message: 'Non-secret fields must be supplied in config' });
+      issues.push({
+        path: ['credentials', key],
+        message: 'Non-secret fields must be supplied in config',
+      });
   }
   for (const field of connector.manifest.fields) {
-    const container = field.secret ? input.credentials ?? {} : input.config;
+    const container = field.secret ? (input.credentials ?? {}) : input.config;
     const value = container[field.key];
     const path = [field.secret ? 'credentials' : 'config', field.key];
     if (field.required && !hasValue(value)) {
@@ -191,7 +207,7 @@ export function createKnowledgeSourceHandlers(
     },
     async remove(req, res) {
       const { id, sourceId } = req.params as { id: string; sourceId: string };
-      const result = await deps.deleteKnowledgeSource(id, sourceId);
+      const result = await deps.deleteKnowledgeSource(id, sourceId, req);
       return result.deleted
         ? res.status(200).json(result)
         : res.status(404).json({ error: 'Knowledge source not found' });

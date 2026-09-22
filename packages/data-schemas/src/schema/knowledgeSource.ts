@@ -20,13 +20,22 @@ const knowledgeSourceSchema: Schema<IKnowledgeSourceDocument> = new Schema(
       required: true,
     },
     config: { type: Schema.Types.Mixed, default: {} },
-    syncStatus: { type: String, enum: ['idle', 'syncing', 'ready', 'failed'], default: 'idle' },
+    syncStatus: {
+      type: String,
+      enum: ['idle', 'queued', 'syncing', 'ready', 'failed'],
+      default: 'idle',
+      index: true,
+    },
     syncError: { type: String, maxlength: 4000, default: null },
     lastSyncedAt: { type: Date, default: null },
+    syncRequestedAt: { type: Date, default: null },
+    nextSyncAt: { type: Date, default: null, index: true },
+    syncAttempts: { type: Number, default: 0, min: 0 },
     cursor: { type: String, maxlength: 8192 },
     tenantId: { type: String, index: true },
   },
   { timestamps: true },
 );
 knowledgeSourceSchema.index({ knowledgeBaseId: 1, createdAt: -1 });
+knowledgeSourceSchema.index({ syncStatus: 1, nextSyncAt: 1, syncRequestedAt: 1 });
 export default knowledgeSourceSchema;

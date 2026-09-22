@@ -12,6 +12,13 @@ const {
   grantPermission,
 } = require('~/server/services/PermissionService');
 const db = require('~/models');
+const { enqueueKnowledgeSourceSync } = require('~/server/services/Knowledge/jobs');
+const { ingestKnowledgeDocument } = require('~/server/services/Knowledge/documents');
+const {
+  deleteKnowledgeBase,
+  deleteKnowledgeDocument,
+  deleteKnowledgeSource,
+} = require('~/server/services/Knowledge/cleanup');
 
 const router = express.Router();
 const handlers = createKnowledgeHandlers({
@@ -19,11 +26,12 @@ const handlers = createKnowledgeHandlers({
   getKnowledgeBaseById: db.getKnowledgeBaseById,
   listKnowledgeBases: db.listKnowledgeBases,
   updateKnowledgeBase: db.updateKnowledgeBase,
-  deleteKnowledgeBase: db.deleteKnowledgeBase,
-  createKnowledgeDocument: db.createKnowledgeDocument,
+  deleteKnowledgeBase,
+  createKnowledgeDocument: (knowledgeBaseId, input, _tenantId, req) =>
+    ingestKnowledgeDocument(knowledgeBaseId, input, req),
   listKnowledgeDocuments: db.listKnowledgeDocuments,
   updateKnowledgeDocument: db.updateKnowledgeDocument,
-  deleteKnowledgeDocument: db.deleteKnowledgeDocument,
+  deleteKnowledgeDocument,
   findAccessibleResources,
   findPubliclyAccessibleResources,
   grantPermission,
@@ -33,7 +41,8 @@ const sourceHandlers = createKnowledgeSourceHandlers({
   listKnowledgeSources: db.listKnowledgeSources,
   createKnowledgeSource: db.createKnowledgeSource,
   updateKnowledgeSource: db.updateKnowledgeSource,
-  deleteKnowledgeSource: db.deleteKnowledgeSource,
+  deleteKnowledgeSource,
+  syncKnowledgeSource: enqueueKnowledgeSourceSync,
 });
 
 const canAccess = (requiredPermission) =>

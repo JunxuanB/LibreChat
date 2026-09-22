@@ -209,7 +209,7 @@ describe('fileSearch.js - tuple return validation', () => {
   });
 
   describe('success cases should return tuple with artifact object', () => {
-    it('queries all knowledge-base files in one collection request', async () => {
+    it('queries knowledge-base files in their vector namespace', async () => {
       generateShortLivedToken.mockReturnValue('mock-jwt-token');
       axios.post.mockResolvedValue({
         data: [
@@ -226,8 +226,18 @@ describe('fileSearch.js - tuple return validation', () => {
       const fileSearchTool = await createFileSearchTool({
         userId: 'user1',
         files: [
-          { file_id: 'file-1', filename: 'policy.pdf', fromKnowledgeBase: true },
-          { file_id: 'file-2', filename: 'handbook.pdf', fromKnowledgeBase: true },
+          {
+            file_id: 'file-1',
+            filename: 'policy.pdf',
+            knowledge_base_id: 'kb-1',
+            fromKnowledgeBase: true,
+          },
+          {
+            file_id: 'file-2',
+            filename: 'handbook.pdf',
+            knowledge_base_id: 'kb-1',
+            fromKnowledgeBase: true,
+          },
         ],
       });
       const [, artifact] = await fileSearchTool.func({ query: 'retention' });
@@ -235,7 +245,12 @@ describe('fileSearch.js - tuple return validation', () => {
       expect(axios.post).toHaveBeenCalledTimes(1);
       expect(axios.post).toHaveBeenCalledWith(
         'http://localhost:8000/query_multiple',
-        { query: 'retention', file_ids: ['file-1', 'file-2'], k: 10 },
+        {
+          query: 'retention',
+          file_ids: ['file-1', 'file-2'],
+          k: 10,
+          entity_id: 'kb-1',
+        },
         {
           headers: {
             Authorization: 'Bearer mock-jwt-token',

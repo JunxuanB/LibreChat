@@ -27,6 +27,7 @@ export interface IKnowledgeDocument {
   mime_type?: string;
   bytes?: number;
   source_type: KnowledgeSourceType;
+  knowledgeSourceId?: Types.ObjectId;
   source_id?: string;
   canonical_url?: string;
   status: KnowledgeDocumentStatus;
@@ -61,9 +62,12 @@ export interface IKnowledgeSource {
   type: KnowledgeSourceType;
   accessMode: KnowledgeSourceAccessMode;
   config: Record<string, unknown>;
-  syncStatus: 'idle' | 'syncing' | 'ready' | 'failed';
+  syncStatus: 'idle' | 'queued' | 'syncing' | 'ready' | 'failed';
   syncError?: string | null;
   lastSyncedAt?: Date | null;
+  syncRequestedAt?: Date | null;
+  nextSyncAt?: Date | null;
+  syncAttempts?: number;
   cursor?: string;
   tenantId?: string;
   createdAt?: Date;

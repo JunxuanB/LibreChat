@@ -11,13 +11,16 @@ export type KnowledgeSyncSource = {
   config: Record<string, unknown>;
   connectionId?: string;
   cursor?: string;
+  syncAttempts?: number;
 };
 
 export type KnowledgeSyncState = {
-  syncStatus: 'syncing' | 'ready' | 'failed';
+  syncStatus: 'queued' | 'syncing' | 'ready' | 'failed';
   syncError?: string | null;
   cursor?: string;
   lastSyncedAt?: Date;
+  nextSyncAt?: Date | null;
+  syncAttempts?: number;
 };
 
 export type KnowledgeSyncDocumentKey = {
@@ -90,7 +93,12 @@ export class KnowledgeSourceSyncRunner {
     const source = await this.deps.loadSource(knowledgeBaseId, sourceId);
     if (!source) throw new Error('Knowledge source not found');
 
-    await this.deps.updateSourceState(source.id, { syncStatus: 'syncing', syncError: null });
+    await this.deps.updateSourceState(source.id, {
+      syncStatus: 'syncing',
+      syncError: null,
+      syncAttempts: (source.syncAttempts ?? 0) + 1,
+      nextSyncAt: null,
+    });
     let credentials: Record<string, string> | undefined;
     try {
       const connector = this.deps.connectorRegistry.get(source.type);
@@ -149,6 +157,8 @@ export class KnowledgeSourceSyncRunner {
         syncError: null,
         cursor,
         lastSyncedAt: (this.deps.now ?? (() => new Date()))(),
+        syncAttempts: 0,
+        nextSyncAt: null,
       });
       return { sourceId: source.id, upserted, deleted, cursor };
     } catch (error) {

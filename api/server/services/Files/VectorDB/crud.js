@@ -17,7 +17,7 @@ const { logAxiosError, generateShortLivedToken } = require('@librechat/api');
  *          A promise that resolves when the file has been successfully deleted, or throws an error if the
  *          file path is invalid or if there is an error in deletion.
  */
-const deleteVectors = async (req, file) => {
+const deleteVectors = async (req, file, entity_id) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
@@ -31,6 +31,7 @@ const deleteVectors = async (req, file) => {
         accept: 'application/json',
       },
       data: [file.file_id],
+      ...(entity_id ? { params: { entity_id } } : {}),
     });
   } catch (error) {
     logAxiosError({

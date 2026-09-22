@@ -5,6 +5,7 @@ import type {
   TUpdateKnowledgeDocument,
   TCreateKnowledgeSource,
   TUpdateKnowledgeSource,
+  KnowledgeConnectorType,
 } from 'librechat-data-provider';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type {
@@ -69,6 +70,24 @@ export type KnowledgeSourceValue = IKnowledgeSource & {
   };
 };
 
+export type KnowledgeDocumentSourceKey = {
+  knowledgeBaseId: string;
+  sourceId: string;
+  externalId: string;
+};
+
+export type UpsertKnowledgeDocumentSourceInput = KnowledgeDocumentSourceKey & {
+  sourceType: KnowledgeConnectorType;
+  file_id: string;
+  name: string;
+  mime_type?: string;
+  bytes: number;
+  canonical_url?: string;
+  revision: string;
+  metadata?: Record<string, unknown>;
+  tenantId?: string;
+};
+
 export interface KnowledgeBaseMethods {
   createKnowledgeBase(input: CreateKnowledgeBaseInput): Promise<KnowledgeBaseValue>;
   getKnowledgeBaseById(id: string | Types.ObjectId): Promise<KnowledgeBaseValue | null>;
@@ -108,6 +127,45 @@ export interface KnowledgeBaseMethods {
   getKnowledgeConnectionSecrets(
     connectionId: string | Types.ObjectId,
   ): Promise<Record<string, string> | null>;
+  getKnowledgeSourceForSync(
+    knowledgeBaseId: string,
+    sourceId: string,
+  ): Promise<(IKnowledgeSource & { _id: Types.ObjectId }) | null>;
+  updateKnowledgeSourceSyncState(
+    sourceId: string,
+    state: {
+      syncStatus: 'queued' | 'syncing' | 'ready' | 'failed';
+      syncError?: string | null;
+      cursor?: string;
+      lastSyncedAt?: Date;
+      nextSyncAt?: Date | null;
+      syncAttempts?: number;
+    },
+  ): Promise<void>;
+  enqueueKnowledgeSourceSync(
+    knowledgeBaseId: string,
+    sourceId: string,
+    requestedAt?: Date,
+  ): Promise<KnowledgeSourceValue | null>;
+  listPendingKnowledgeSourceSyncs(now?: Date, limit?: number): Promise<KnowledgeSourceValue[]>;
+  findKnowledgeDocumentBySource(
+    key: KnowledgeDocumentSourceKey,
+  ): Promise<KnowledgeDocumentValue | null>;
+  upsertKnowledgeDocumentBySource(
+    input: UpsertKnowledgeDocumentSourceInput,
+  ): Promise<KnowledgeDocumentValue>;
+  deleteKnowledgeDocumentBySource(
+    key: KnowledgeDocumentSourceKey,
+  ): Promise<KnowledgeDocumentValue | null>;
+  getKnowledgeDocumentById(
+    knowledgeBaseId: string,
+    documentId: string,
+  ): Promise<KnowledgeDocumentValue | null>;
+  findKnowledgeDocumentsForCleanup(knowledgeBaseId: string): Promise<KnowledgeDocumentValue[]>;
+  findKnowledgeDocumentsBySourceId(
+    knowledgeBaseId: string,
+    sourceId: string,
+  ): Promise<KnowledgeDocumentValue[]>;
   findKnowledgeDocumentsByBaseIds(knowledgeBaseIds: string[]): Promise<KnowledgeDocumentValue[]>;
   getKnowledgeDocuments(input: {
     knowledgeBaseIds: string[];
@@ -398,14 +456,16 @@ export function createKnowledgeBaseMethods(
         source.connectionId = connection._id;
       }
     }
-    const { credentials: _credentials, lastSyncedAt, ...rest } = input;
-    Object.assign(
-      source,
-      rest,
-      lastSyncedAt === undefined
-        ? {}
-        : { lastSyncedAt: lastSyncedAt ? new Date(lastSyncedAt) : null },
-    );
+    const { credentials: _credentials, ...rest } = input;
+    Object.assign(source, rest);
+    if (input.config !== undefined || input.credentials !== undefined) {
+      source.cursor = undefined;
+      source.syncStatus = 'idle';
+      source.syncError = null;
+      source.lastSyncedAt = null;
+      source.nextSyncAt = null;
+      source.syncAttempts = 0;
+    }
     await source.save();
     return withConnection(source.toObject() as IKnowledgeSource & { _id: Types.ObjectId });
   }
@@ -429,6 +489,156 @@ export function createKnowledgeBaseMethods(
       .lean();
     if (!connection?.encryptedSecrets) return null;
     return JSON.parse(await decryptV2(connection.encryptedSecrets)) as Record<string, string>;
+  }
+
+  async function getKnowledgeSourceForSync(knowledgeBaseId: string, sourceId: string) {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(sourceId)) return null;
+    return KnowledgeSource.findOne({ _id: sourceId, knowledgeBaseId }).lean<
+      IKnowledgeSource & { _id: Types.ObjectId }
+    >();
+  }
+
+  async function enqueueKnowledgeSourceSync(
+    knowledgeBaseId: string,
+    sourceId: string,
+    requestedAt = new Date(),
+  ) {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(sourceId)) return null;
+    return KnowledgeSource.findOneAndUpdate(
+      { _id: sourceId, knowledgeBaseId },
+      {
+        $set: {
+          syncStatus: 'queued',
+          syncError: null,
+          syncRequestedAt: requestedAt,
+          nextSyncAt: requestedAt,
+        },
+        $setOnInsert: { syncAttempts: 0 },
+      },
+      { new: true, runValidators: true },
+    ).lean<KnowledgeSourceValue>();
+  }
+
+  async function listPendingKnowledgeSourceSyncs(now = new Date(), limit = 25) {
+    return KnowledgeSource.find({
+      syncStatus: 'queued',
+      nextSyncAt: { $lte: now },
+    })
+      .sort({ nextSyncAt: 1, syncRequestedAt: 1, _id: 1 })
+      .limit(Math.min(Math.max(Math.floor(limit), 1), 100))
+      .lean<KnowledgeSourceValue[]>();
+  }
+  async function updateKnowledgeSourceSyncState(
+    sourceId: string,
+    state: {
+      syncStatus: 'queued' | 'syncing' | 'ready' | 'failed';
+      syncError?: string | null;
+      cursor?: string;
+      lastSyncedAt?: Date;
+      nextSyncAt?: Date | null;
+      syncAttempts?: number;
+    },
+  ) {
+    if (!isValidObjectIdString(sourceId)) return;
+    const update: Record<string, unknown> = { syncStatus: state.syncStatus };
+    if (state.syncError !== undefined) update.syncError = state.syncError;
+    if (state.cursor !== undefined) update.cursor = state.cursor;
+    if (state.lastSyncedAt !== undefined) update.lastSyncedAt = state.lastSyncedAt;
+    if (state.nextSyncAt !== undefined) update.nextSyncAt = state.nextSyncAt;
+    if (state.syncAttempts !== undefined) update.syncAttempts = state.syncAttempts;
+    await KnowledgeSource.updateOne({ _id: sourceId }, { $set: update });
+  }
+
+  const sourceDocumentFilter = (key: KnowledgeDocumentSourceKey) => ({
+    knowledgeBaseId: new mongoose.Types.ObjectId(key.knowledgeBaseId),
+    knowledgeSourceId: new mongoose.Types.ObjectId(key.sourceId),
+    source_id: key.externalId,
+  });
+
+  async function findKnowledgeDocumentBySource(key: KnowledgeDocumentSourceKey) {
+    if (
+      !isValidObjectIdString(key.knowledgeBaseId) ||
+      !isValidObjectIdString(key.sourceId) ||
+      !key.externalId
+    )
+      return null;
+    return KnowledgeDocument.findOne(sourceDocumentFilter(key)).lean<KnowledgeDocumentValue>();
+  }
+
+  async function upsertKnowledgeDocumentBySource(input: UpsertKnowledgeDocumentSourceInput) {
+    if (
+      !isValidObjectIdString(input.knowledgeBaseId) ||
+      !isValidObjectIdString(input.sourceId) ||
+      !input.externalId
+    ) {
+      throw new Error('Invalid knowledge source document key');
+    }
+    const filter = sourceDocumentFilter(input);
+    const result = await KnowledgeDocument.updateOne(
+      filter,
+      {
+        $set: {
+          file_id: input.file_id,
+          name: input.name,
+          mime_type: input.mime_type,
+          bytes: input.bytes,
+          source_type: input.sourceType,
+          canonical_url: input.canonical_url,
+          revision: input.revision,
+          metadata: input.metadata,
+          tenantId: input.tenantId,
+          status: 'ready',
+          error: null,
+        },
+        $setOnInsert: filter,
+      },
+      { upsert: true, runValidators: true },
+    );
+    if (result.upsertedCount > 0) {
+      await KnowledgeBase.updateOne({ _id: input.knowledgeBaseId }, { $inc: { documentCount: 1 } });
+    }
+    const document = await KnowledgeDocument.findOne(filter).lean<KnowledgeDocumentValue>();
+    if (!document) throw new Error('Knowledge source document upsert failed');
+    return document;
+  }
+
+  async function deleteKnowledgeDocumentBySource(key: KnowledgeDocumentSourceKey) {
+    if (
+      !isValidObjectIdString(key.knowledgeBaseId) ||
+      !isValidObjectIdString(key.sourceId) ||
+      !key.externalId
+    )
+      return null;
+    const deleted = await KnowledgeDocument.findOneAndDelete(
+      sourceDocumentFilter(key),
+    ).lean<KnowledgeDocumentValue>();
+    if (deleted) {
+      await KnowledgeBase.updateOne(
+        { _id: key.knowledgeBaseId, documentCount: { $gt: 0 } },
+        { $inc: { documentCount: -1 } },
+      );
+    }
+    return deleted;
+  }
+
+  async function getKnowledgeDocumentById(knowledgeBaseId: string, documentId: string) {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(documentId)) return null;
+    return KnowledgeDocument.findOne({
+      _id: documentId,
+      knowledgeBaseId,
+    }).lean<KnowledgeDocumentValue>();
+  }
+
+  async function findKnowledgeDocumentsForCleanup(knowledgeBaseId: string) {
+    if (!isValidObjectIdString(knowledgeBaseId)) return [];
+    return KnowledgeDocument.find({ knowledgeBaseId }).lean<KnowledgeDocumentValue[]>();
+  }
+
+  async function findKnowledgeDocumentsBySourceId(knowledgeBaseId: string, sourceId: string) {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(sourceId)) return [];
+    return KnowledgeDocument.find({ knowledgeBaseId, knowledgeSourceId: sourceId }).lean<
+      KnowledgeDocumentValue[]
+    >();
   }
 
   async function findKnowledgeDocumentsByBaseIds(knowledgeBaseIds: string[]) {
@@ -488,6 +698,16 @@ export function createKnowledgeBaseMethods(
     updateKnowledgeSource,
     deleteKnowledgeSource,
     getKnowledgeConnectionSecrets,
+    getKnowledgeSourceForSync,
+    enqueueKnowledgeSourceSync,
+    listPendingKnowledgeSourceSyncs,
+    updateKnowledgeSourceSyncState,
+    findKnowledgeDocumentBySource,
+    upsertKnowledgeDocumentBySource,
+    deleteKnowledgeDocumentBySource,
+    getKnowledgeDocumentById,
+    findKnowledgeDocumentsForCleanup,
+    findKnowledgeDocumentsBySourceId,
     findKnowledgeDocumentsByBaseIds,
     getKnowledgeDocuments,
   };

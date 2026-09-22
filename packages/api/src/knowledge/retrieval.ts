@@ -89,7 +89,7 @@ export async function resolveAuthorizedKnowledgeFiles(
   }
 
   const documents = await dependencies.getKnowledgeDocuments({ knowledgeBaseIds: requestedIds });
-  const seenFileIds = new Set<string>();
+  const seenFiles = new Set<string>();
   const files: KnowledgeFile[] = [];
 
   for (const document of documents) {
@@ -100,11 +100,12 @@ export async function resolveAuthorizedKnowledgeFiles(
 
     const fileId = document.file_id?.trim();
     const filename = document.name?.trim();
-    if (!fileId || !filename || seenFileIds.has(fileId)) {
+    const key = `${knowledgeBaseId}\0${fileId}`;
+    if (!fileId || !filename || seenFiles.has(key)) {
       continue;
     }
 
-    seenFileIds.add(fileId);
+    seenFiles.add(key);
     files.push({
       file_id: fileId,
       filename,
@@ -131,7 +132,7 @@ export type RagQueryResult = [
 export interface RagQueryClient {
   post(
     url: string,
-    body: { query: string; file_ids: string[]; k: number },
+    body: { query: string; file_ids: string[]; k: number; entity_id: string },
     config: { headers: Record<string, string> },
   ): Promise<{ data: RagQueryResult[] }>;
 }
@@ -140,34 +141,89 @@ export interface QueryKnowledgeFilesInput {
   ragApiUrl: string;
   jwtToken: string;
   query: string;
-  files: readonly Pick<KnowledgeFile, 'file_id'>[];
+  files: readonly Pick<KnowledgeFile, 'file_id' | 'knowledge_base_id'>[];
   k?: number;
 }
 
-/** Make one collection query for all authorized knowledge-base documents. */
+const MAX_FILE_IDS_PER_QUERY = 500;
+
+/** Query each authorized vector namespace once, then rank all collection results together. */
 export async function queryKnowledgeFiles(
   input: QueryKnowledgeFilesInput,
   client: RagQueryClient,
 ): Promise<RagQueryResult[]> {
-  const fileIds = uniqueIds(input.files.map((file) => file.file_id));
-  if (fileIds.length === 0) {
+  const filesByKnowledgeBase = new Map<string, string[]>();
+  for (const file of input.files) {
+    const knowledgeBaseId = file.knowledge_base_id?.trim();
+    const fileId = file.file_id?.trim();
+    if (!knowledgeBaseId || !fileId) continue;
+    const fileIds = filesByKnowledgeBase.get(knowledgeBaseId) ?? [];
+    if (!fileIds.includes(fileId)) fileIds.push(fileId);
+    filesByKnowledgeBase.set(knowledgeBaseId, fileIds);
+  }
+  if (filesByKnowledgeBase.size === 0) {
     return [];
   }
 
-  const response = await client.post(
-    `${input.ragApiUrl.replace(/\/$/, '')}/query_multiple`,
-    {
-      query: input.query,
-      file_ids: fileIds,
-      k: input.k ?? 10,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${input.jwtToken}`,
-        'Content-Type': 'application/json',
-      },
-    },
+  const k = input.k ?? 10;
+  const queries = [...filesByKnowledgeBase].flatMap(([knowledgeBaseId, fileIds]) => {
+    const chunks = [];
+    for (let offset = 0; offset < fileIds.length; offset += MAX_FILE_IDS_PER_QUERY) {
+      chunks.push({
+        knowledgeBaseId,
+        fileIds: fileIds.slice(offset, offset + MAX_FILE_IDS_PER_QUERY),
+      });
+    }
+    return chunks;
+  });
+  const responses = await Promise.allSettled(
+    queries.map(async ({ knowledgeBaseId, fileIds }) => {
+      const response = await client.post(
+        `${input.ragApiUrl.replace(/\/$/, '')}/query_multiple`,
+        {
+          query: input.query,
+          file_ids: fileIds,
+          k,
+          entity_id: knowledgeBaseId,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${input.jwtToken}`,
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      return { knowledgeBaseId, data: response.data };
+    }),
   );
 
-  return Array.isArray(response.data) ? response.data : [];
+  const successfulResponses = responses.filter(
+    (
+      response,
+    ): response is PromiseFulfilledResult<{ knowledgeBaseId: string; data: RagQueryResult[] }> =>
+      response.status === 'fulfilled',
+  );
+  if (successfulResponses.length === 0) {
+    const firstFailure = responses.find(
+      (response): response is PromiseRejectedResult => response.status === 'rejected',
+    );
+    throw firstFailure?.reason ?? new Error('All knowledge-base queries failed');
+  }
+
+  return successfulResponses
+    .flatMap(({ value }) =>
+      Array.isArray(value.data)
+        ? value.data.map(
+            ([document, distance]): RagQueryResult => [
+              {
+                ...document,
+                metadata: { ...document.metadata, knowledge_base_id: value.knowledgeBaseId },
+              },
+              distance,
+            ],
+          )
+        : [],
+    )
+    .sort((left, right) => left[1] - right[1])
+    .slice(0, k);
 }
