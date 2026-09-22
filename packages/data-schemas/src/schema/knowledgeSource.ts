@@ -32,6 +32,16 @@ const knowledgeSourceSchema: Schema<IKnowledgeSourceDocument> = new Schema(
     nextSyncAt: { type: Date, default: null, index: true },
     syncAttempts: { type: Number, default: 0, min: 0 },
     cursor: { type: String, maxlength: 8192 },
+    syncLease: {
+      type: new Schema(
+        {
+          token: { type: String, required: true },
+          expiresAt: { type: Date, required: true },
+        },
+        { _id: false },
+      ),
+      select: false,
+    },
     tenantId: { type: String, index: true },
   },
   { timestamps: true },

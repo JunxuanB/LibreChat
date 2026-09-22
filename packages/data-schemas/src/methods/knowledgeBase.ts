@@ -105,6 +105,13 @@ export type UpsertKnowledgeDocumentSourceInput = KnowledgeDocumentSourceKey & {
   tenantId?: string;
 };
 
+export type KnowledgeSourceSyncLeaseInput = {
+  knowledgeBaseId: string;
+  sourceId: string;
+  tenantId?: string;
+  token: string;
+};
+
 export interface KnowledgeBaseMethods {
   createKnowledgeBase(input: CreateKnowledgeBaseInput): Promise<KnowledgeBaseValue>;
   getKnowledgeBaseById(id: string | Types.ObjectId): Promise<KnowledgeBaseValue | null>;
@@ -165,6 +172,18 @@ export interface KnowledgeBaseMethods {
     requestedAt?: Date,
   ): Promise<KnowledgeSourceValue | null>;
   listPendingKnowledgeSourceSyncs(now?: Date, limit?: number): Promise<KnowledgeSourceValue[]>;
+  acquireKnowledgeSourceSyncLease(
+    input: KnowledgeSourceSyncLeaseInput & { now: Date; expiresAt: Date },
+  ): Promise<boolean>;
+  renewKnowledgeSourceSyncLease(
+    input: KnowledgeSourceSyncLeaseInput & { now: Date; expiresAt: Date },
+  ): Promise<boolean>;
+  releaseKnowledgeSourceSyncLease(input: KnowledgeSourceSyncLeaseInput): Promise<boolean>;
+  updateKnowledgeSourceSyncStateIfLeaseOwner(
+    sourceId: string,
+    token: string,
+    state: Parameters<KnowledgeBaseMethods['updateKnowledgeSourceSyncState']>[1],
+  ): Promise<boolean>;
   findKnowledgeDocumentBySource(
     key: KnowledgeDocumentSourceKey,
   ): Promise<KnowledgeDocumentValue | null>;
@@ -546,6 +565,7 @@ export function createKnowledgeBaseMethods(
       .limit(Math.min(Math.max(Math.floor(limit), 1), 100))
       .lean<KnowledgeSourceValue[]>();
   }
+
   async function getKnowledgeSourcesForRetrieval(
     knowledgeBaseIds: string[],
   ): Promise<KnowledgeRetrievalSource[]> {
@@ -609,6 +629,89 @@ export function createKnowledgeBaseMethods(
     if (state.nextSyncAt !== undefined) update.nextSyncAt = state.nextSyncAt;
     if (state.syncAttempts !== undefined) update.syncAttempts = state.syncAttempts;
     await KnowledgeSource.updateOne({ _id: sourceId }, { $set: update });
+  }
+
+  const syncLeaseScope = (input: KnowledgeSourceSyncLeaseInput) => ({
+    _id: input.sourceId,
+    knowledgeBaseId: input.knowledgeBaseId,
+    ...(input.tenantId == null ? { tenantId: { $exists: false } } : { tenantId: input.tenantId }),
+  });
+
+  async function acquireKnowledgeSourceSyncLease(
+    input: KnowledgeSourceSyncLeaseInput & { now: Date; expiresAt: Date },
+  ) {
+    if (
+      !isValidObjectIdString(input.knowledgeBaseId) ||
+      !isValidObjectIdString(input.sourceId) ||
+      !input.token ||
+      input.expiresAt <= input.now
+    ) {
+      return false;
+    }
+    const result = await KnowledgeSource.updateOne(
+      {
+        ...syncLeaseScope(input),
+        $or: [
+          { syncLease: { $exists: false } },
+          { 'syncLease.expiresAt': { $lte: input.now } },
+          { 'syncLease.token': input.token },
+        ],
+      },
+      { $set: { syncLease: { token: input.token, expiresAt: input.expiresAt } } },
+      { timestamps: false },
+    );
+    return result.matchedCount === 1;
+  }
+
+  async function releaseKnowledgeSourceSyncLease(input: KnowledgeSourceSyncLeaseInput) {
+    if (
+      !isValidObjectIdString(input.knowledgeBaseId) ||
+      !isValidObjectIdString(input.sourceId) ||
+      !input.token
+    ) {
+      return false;
+    }
+    const result = await KnowledgeSource.updateOne(
+      { ...syncLeaseScope(input), 'syncLease.token': input.token },
+      { $unset: { syncLease: 1 } },
+      { timestamps: false },
+    );
+    return result.modifiedCount === 1;
+  }
+
+  async function renewKnowledgeSourceSyncLease(
+    input: KnowledgeSourceSyncLeaseInput & { now: Date; expiresAt: Date },
+  ) {
+    if (input.expiresAt <= input.now) return false;
+    const result = await KnowledgeSource.updateOne(
+      {
+        ...syncLeaseScope(input),
+        'syncLease.token': input.token,
+        'syncLease.expiresAt': { $gt: input.now },
+      },
+      { $set: { 'syncLease.expiresAt': input.expiresAt } },
+      { timestamps: false },
+    );
+    return result.matchedCount === 1;
+  }
+
+  async function updateKnowledgeSourceSyncStateIfLeaseOwner(
+    sourceId: string,
+    token: string,
+    state: Parameters<KnowledgeBaseMethods['updateKnowledgeSourceSyncState']>[1],
+  ) {
+    if (!isValidObjectIdString(sourceId) || !token) return false;
+    const update: Record<string, unknown> = { syncStatus: state.syncStatus };
+    if (state.syncError !== undefined) update.syncError = state.syncError;
+    if (state.cursor !== undefined) update.cursor = state.cursor;
+    if (state.lastSyncedAt !== undefined) update.lastSyncedAt = state.lastSyncedAt;
+    if (state.nextSyncAt !== undefined) update.nextSyncAt = state.nextSyncAt;
+    if (state.syncAttempts !== undefined) update.syncAttempts = state.syncAttempts;
+    const result = await KnowledgeSource.updateOne(
+      { _id: sourceId, 'syncLease.token': token },
+      { $set: update },
+    );
+    return result.matchedCount === 1;
   }
 
   const sourceDocumentFilter = (key: KnowledgeDocumentSourceKey) => ({
@@ -764,6 +867,10 @@ export function createKnowledgeBaseMethods(
     enqueueKnowledgeSourceSync,
     listPendingKnowledgeSourceSyncs,
     updateKnowledgeSourceSyncState,
+    acquireKnowledgeSourceSyncLease,
+    renewKnowledgeSourceSyncLease,
+    releaseKnowledgeSourceSyncLease,
+    updateKnowledgeSourceSyncStateIfLeaseOwner,
     findKnowledgeDocumentBySource,
     upsertKnowledgeDocumentBySource,
     deleteKnowledgeDocumentBySource,

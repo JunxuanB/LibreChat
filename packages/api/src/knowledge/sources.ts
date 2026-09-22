@@ -7,6 +7,7 @@ import type {
 } from 'librechat-data-provider';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types';
+import { KnowledgeSourceSyncInProgressError } from './sync';
 
 type SourceRecord = Omit<
   TKnowledgeSource,
@@ -21,6 +22,7 @@ type SourceRecord = Omit<
   nextSyncAt?: Date | null;
   connection?: unknown;
   cursor?: string;
+  syncLease?: unknown;
 };
 
 export interface KnowledgeConnectorCatalog {
@@ -58,7 +60,7 @@ export interface KnowledgeSourceHandlers {
 }
 
 const serialize = (source: SourceRecord): TKnowledgeSource => {
-  const { connection: _connection, cursor: _cursor, ...safe } = source;
+  const { connection: _connection, cursor: _cursor, syncLease: _syncLease, ...safe } = source;
   return {
     ...safe,
     _id: source._id.toString(),
@@ -233,10 +235,20 @@ export function createKnowledgeSourceHandlers(
     },
     async remove(req, res) {
       const { id, sourceId } = req.params as { id: string; sourceId: string };
-      const result = await deps.deleteKnowledgeSource(id, sourceId, req);
-      return result.deleted
-        ? res.status(200).json(result)
-        : res.status(404).json({ error: 'Knowledge source not found' });
+      try {
+        const result = await deps.deleteKnowledgeSource(id, sourceId, req);
+        return result.deleted
+          ? res.status(200).json(result)
+          : res.status(404).json({ error: 'Knowledge source not found' });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS') {
+          return res.status(409).json({
+            error: 'Knowledge source synchronization is in progress',
+            code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS',
+          });
+        }
+        throw error;
+      }
     },
     async sync(req, res) {
       const { id, sourceId } = req.params as { id: string; sourceId: string };
@@ -245,8 +257,17 @@ export function createKnowledgeSourceHandlers(
         return source
           ? res.status(202).json(serialize(source))
           : res.status(404).json({ error: 'Knowledge source not found' });
-      } catch {
-        logger.error('[knowledge-sources] Error syncing source');
+      } catch (error) {
+        if (
+          error instanceof KnowledgeSourceSyncInProgressError ||
+          (error as { code?: string })?.code === 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS'
+        ) {
+          return res.status(409).json({
+            error: 'Knowledge source sync is already in progress',
+            code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS',
+          });
+        }
+        logger.error('[knowledge-sources] Error syncing source', error);
         return res.status(500).json({ error: 'Error syncing knowledge source' });
       }
     },

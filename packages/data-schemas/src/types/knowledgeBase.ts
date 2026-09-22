@@ -69,6 +69,11 @@ export interface IKnowledgeSource {
   nextSyncAt?: Date | null;
   syncAttempts?: number;
   cursor?: string;
+  /** Internal distributed-sync coordination state. Never expose through API serializers. */
+  syncLease?: {
+    token: string;
+    expiresAt: Date;
+  };
   tenantId?: string;
   createdAt?: Date;
   updatedAt?: Date;

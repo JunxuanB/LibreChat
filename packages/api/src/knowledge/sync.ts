@@ -42,11 +42,20 @@ export interface KnowledgeSourceSyncDependencies {
     };
   };
   getConnectorContext(source: KnowledgeSyncSource): Promise<KnowledgeConnectorContext>;
-  upsertDocument(key: KnowledgeSyncDocumentKey, item: KnowledgeSourceItem): Promise<void>;
-  deleteDocument(key: KnowledgeSyncDocumentKey, externalId: string): Promise<void>;
+  upsertDocument(
+    key: KnowledgeSyncDocumentKey,
+    item: KnowledgeSourceItem,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  deleteDocument(
+    key: KnowledgeSyncDocumentKey,
+    externalId: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
   reconcileDocuments?(
     key: KnowledgeSyncDocumentKey,
     retainedExternalIds: readonly string[],
+    signal?: AbortSignal,
   ): Promise<number>;
   updateSourceState(sourceId: string, state: KnowledgeSyncState): Promise<void | boolean>;
   now?: () => Date;
@@ -58,6 +67,24 @@ export type KnowledgeSourceSyncResult = {
   deleted: number;
   cursor?: string;
 };
+
+export class KnowledgeSourceSyncInProgressError extends Error {
+  readonly code = 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS';
+
+  constructor() {
+    super('Knowledge source sync is already in progress');
+    this.name = 'KnowledgeSourceSyncInProgressError';
+  }
+}
+
+export class KnowledgeSourceSyncLeaseLostError extends Error {
+  readonly code = 'KNOWLEDGE_SOURCE_SYNC_LEASE_LOST';
+
+  constructor() {
+    super('Knowledge source sync lease was lost');
+    this.name = 'KnowledgeSourceSyncLeaseLostError';
+  }
+}
 
 function safeErrorMessage(error: unknown, credentials?: Record<string, string>): string {
   let message = error instanceof Error ? error.message : 'Knowledge source sync failed';
@@ -77,12 +104,16 @@ export class KnowledgeSourceSyncRunner {
 
   constructor(private readonly deps: KnowledgeSourceSyncDependencies) {}
 
-  run(knowledgeBaseId: string, sourceId: string): Promise<KnowledgeSourceSyncResult> {
+  run(
+    knowledgeBaseId: string,
+    sourceId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeSourceSyncResult> {
     const key = `${knowledgeBaseId}:${sourceId}`;
     const active = this.inFlight.get(key);
     if (active) return active;
 
-    const sync = this.execute(knowledgeBaseId, sourceId).finally(() => {
+    const sync = this.execute(knowledgeBaseId, sourceId, signal).finally(() => {
       this.inFlight.delete(key);
     });
     this.inFlight.set(key, sync);
@@ -92,11 +123,18 @@ export class KnowledgeSourceSyncRunner {
   private async execute(
     knowledgeBaseId: string,
     sourceId: string,
+    signal?: AbortSignal,
   ): Promise<KnowledgeSourceSyncResult> {
     const source = await this.deps.loadSource(knowledgeBaseId, sourceId);
     if (!source) throw new Error('Knowledge source not found');
 
-    await this.deps.updateSourceState(source.id, {
+    const updateState = async (state: KnowledgeSyncState) => {
+      if ((await this.deps.updateSourceState(source.id, state)) === false) {
+        throw new KnowledgeSourceSyncLeaseLostError();
+      }
+    };
+    signal?.throwIfAborted();
+    await updateState({
       syncStatus: 'syncing',
       syncError: null,
       syncAttempts: (source.syncAttempts ?? 0) + 1,
@@ -109,7 +147,7 @@ export class KnowledgeSourceSyncRunner {
       credentials = source.connectionId
         ? ((await this.deps.loadCredentials(source.connectionId)) ?? undefined)
         : undefined;
-      const request = { config: source.config, credentials, cursor: source.cursor };
+      const request = { config: source.config, credentials, cursor: source.cursor, signal };
 
       await connector.validate(request, connectorContext);
       const documentKey: KnowledgeSyncDocumentKey = {
@@ -127,14 +165,16 @@ export class KnowledgeSourceSyncRunner {
           { ...request, cursor, continuation: page > 0 },
           connectorContext,
         );
+        signal?.throwIfAborted();
         snapshot ||= result.snapshot === true;
         for (const change of result.changes) {
+          signal?.throwIfAborted();
           if (change.operation === 'upsert') {
-            await this.deps.upsertDocument(documentKey, change.item);
+            await this.deps.upsertDocument(documentKey, change.item, signal);
             retainedExternalIds.add(change.item.externalId);
             upserted += 1;
           } else {
-            await this.deps.deleteDocument(documentKey, change.externalId);
+            await this.deps.deleteDocument(documentKey, change.externalId, signal);
             deleted += 1;
           }
         }
@@ -153,10 +193,12 @@ export class KnowledgeSourceSyncRunner {
         deleted += await this.deps.reconcileDocuments(
           documentKey,
           [...retainedExternalIds],
+          signal,
         );
       }
 
-      await this.deps.updateSourceState(source.id, {
+      signal?.throwIfAborted();
+      await updateState({
         syncStatus: 'ready',
         syncError: null,
         cursor,
@@ -167,10 +209,11 @@ export class KnowledgeSourceSyncRunner {
       return { sourceId: source.id, upserted, deleted, cursor };
     } catch (error) {
       const message = safeErrorMessage(error, credentials);
-      await this.deps.updateSourceState(source.id, {
-        syncStatus: 'failed',
-        syncError: message,
-      });
+      try {
+        await updateState({ syncStatus: 'failed', syncError: message });
+      } catch (stateError) {
+        if (stateError instanceof KnowledgeSourceSyncLeaseLostError) throw stateError;
+      }
       throw new Error(message);
     }
   }

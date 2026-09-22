@@ -27,6 +27,7 @@ const build = ({
   current = null,
   sourceOverrides = {},
   registry,
+  databaseOverrides,
   serviceOverrides = {},
 } = {}) => {
   const record = source(sourceOverrides);
@@ -45,7 +46,15 @@ const build = ({
     deleteKnowledgeDocumentBySource: jest.fn(async () => current),
     createFile: jest.fn(async (input) => input),
     deleteFile: jest.fn(async () => current),
+    acquireKnowledgeSourceSyncLease: jest.fn(async () => true),
+    renewKnowledgeSourceSyncLease: jest.fn(async () => true),
+    releaseKnowledgeSourceSyncLease: jest.fn(async () => true),
+    ...databaseOverrides,
   };
+  database.updateKnowledgeSourceSyncStateIfLeaseOwner ??= jest.fn(async (_id, _token, state) => {
+    await database.updateKnowledgeSourceSyncState(_id, state);
+    return true;
+  });
   const uploadVectors = jest.fn(async () => ({
     bytes: 5,
     filepath: 'vectordb',
@@ -181,7 +190,7 @@ describe('knowledge source ingestion service', () => {
       'postgres://readonly:secret@example.com/db',
       'SELECT 1 AS connected',
       [],
-      undefined,
+      expect.any(AbortSignal),
     );
   });
 
@@ -202,11 +211,150 @@ describe('knowledge source ingestion service', () => {
       'docs',
       'resources/list',
       {},
-      undefined,
+      expect.any(AbortSignal),
     );
     expect(database.updateKnowledgeSourceSyncState).toHaveBeenLastCalledWith(
       'source-1',
       expect.objectContaining({ syncStatus: 'ready' }),
     );
+  });
+
+  it('coalesces local calls while rejecting a competing service instance', async () => {
+    let lease;
+    let finish;
+    const gate = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const connectorRegistry = {
+      get: () => ({
+        validate: jest.fn(async () => undefined),
+        sync: jest.fn(async () => {
+          await gate;
+          return { changes: [] };
+        }),
+      }),
+    };
+    const shared = {
+      acquireKnowledgeSourceSyncLease: jest.fn(async (next) => {
+        if (lease && lease.expiresAt > next.now) return false;
+        lease = next;
+        return true;
+      }),
+      releaseKnowledgeSourceSyncLease: jest.fn(async ({ token }) => {
+        if (lease?.token !== token) return false;
+        lease = undefined;
+        return true;
+      }),
+    };
+    const first = build({ registry: connectorRegistry, databaseOverrides: shared }).service;
+    const second = build({ registry: connectorRegistry, databaseOverrides: shared }).service;
+
+    const running = first.syncKnowledgeSource('kb-1', 'source-1');
+    const coalesced = first.syncKnowledgeSource('kb-1', 'source-1');
+    expect(coalesced).toBe(running);
+    await expect(second.syncKnowledgeSource('kb-1', 'source-1')).rejects.toMatchObject({
+      code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS',
+    });
+    finish();
+    await running;
+  });
+
+  it('releases its token when connector sync fails', async () => {
+    const { service, database } = build({
+      registry: {
+        get: () => ({
+          validate: jest.fn(async () => undefined),
+          sync: jest.fn(async () => {
+            throw new Error('connector failed');
+          }),
+        }),
+      },
+    });
+
+    await expect(service.syncKnowledgeSource('kb-1', 'source-1')).rejects.toThrow(
+      'connector failed',
+    );
+    expect(database.releaseKnowledgeSourceSyncLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        knowledgeBaseId: 'kb-1',
+        sourceId: 'source-1',
+        tenantId: 'tenant-1',
+        token: expect.any(String),
+      }),
+    );
+  });
+
+  it('renews the lease while a long connector sync is running', async () => {
+    jest.useFakeTimers();
+    let finish;
+    const pending = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const { service, database } = build({
+      registry: {
+        get: () => ({
+          validate: jest.fn(async () => undefined),
+          sync: jest.fn(async () => {
+            await pending;
+            return { changes: [] };
+          }),
+        }),
+      },
+      serviceOverrides: { leaseHeartbeatMs: 10, leaseDurationMs: 100 },
+    });
+    const running = service.syncKnowledgeSource('kb-1', 'source-1');
+    await Promise.resolve();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(10);
+    expect(database.renewKnowledgeSourceSyncLease).toHaveBeenCalledWith(
+      expect.objectContaining({ token: expect.any(String), expiresAt: expect.any(Date) }),
+    );
+    finish();
+    await running;
+    jest.useRealTimers();
+  });
+
+  it('aborts work and cannot commit stale status after lease loss', async () => {
+    jest.useFakeTimers();
+    let ownsLease = true;
+    const states = [];
+    const { service, database } = build({
+      registry: {
+        get: () => ({
+          validate: jest.fn(async () => undefined),
+          sync: jest.fn(
+            (request) =>
+              new Promise((_resolve, reject) => {
+                request.signal.addEventListener('abort', () => reject(request.signal.reason), {
+                  once: true,
+                });
+              }),
+          ),
+        }),
+      },
+      databaseOverrides: {
+        renewKnowledgeSourceSyncLease: jest.fn(async () => {
+          ownsLease = false;
+          return false;
+        }),
+        updateKnowledgeSourceSyncStateIfLeaseOwner: jest.fn(async (_id, _token, state) => {
+          if (!ownsLease) return false;
+          states.push(state);
+          return true;
+        }),
+      },
+      serviceOverrides: { leaseHeartbeatMs: 10, leaseDurationMs: 100 },
+    });
+    const running = service.syncKnowledgeSource('kb-1', 'source-1');
+    const rejected = expect(running).rejects.toMatchObject({
+      code: 'KNOWLEDGE_SOURCE_SYNC_LEASE_LOST',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(10);
+    await rejected;
+    expect(states).toEqual([{ syncStatus: 'syncing', syncError: null }]);
+    expect(database.releaseKnowledgeSourceSyncLease).toHaveBeenCalled();
+    jest.useRealTimers();
   });
 });

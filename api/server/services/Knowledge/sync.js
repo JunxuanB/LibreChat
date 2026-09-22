@@ -4,6 +4,8 @@ const os = require('os');
 const path = require('path');
 const {
   KnowledgeSourceSyncRunner,
+  KnowledgeSourceSyncInProgressError,
+  KnowledgeSourceSyncLeaseLostError,
   createDefaultKnowledgeConnectorRegistry,
   validateEndpointURL,
 } = require('@librechat/api');
@@ -15,6 +17,7 @@ const { createReadOnlyPostgresExecutor } = require('./postgres');
 const { callKnowledgeMcp } = require('./mcp');
 
 const MAX_CONNECTOR_FILE_BYTES = 20 * 1024 * 1024;
+const DEFAULT_SYNC_LEASE_MS = 15 * 60 * 1000;
 
 const asString = (value) => value?.toString?.() ?? String(value);
 
@@ -57,13 +60,19 @@ function createKnowledgeSourceSyncService(overrides = {}) {
   const executeReadOnlyQuery =
     overrides.executeReadOnlyQuery ??
     (async (...args) => {
-      postgresExecutorPromise ??= Promise.resolve(loadAppConfig({ baseOnly: true })).then((config) =>
-        createPostgresExecutor(config?.knowledgeBaseConnectors?.postgresql),
+      postgresExecutorPromise ??= Promise.resolve(loadAppConfig({ baseOnly: true })).then(
+        (config) => createPostgresExecutor(config?.knowledgeBaseConnectors?.postgresql),
       );
       return (await postgresExecutorPromise)(...args);
     });
   const callMcp = overrides.callMcp ?? callKnowledgeMcp;
   const activeSources = new Map();
+  const activeLeases = new Map();
+  const inFlight = new Map();
+  const leaseDurationMs = overrides.leaseDurationMs ?? DEFAULT_SYNC_LEASE_MS;
+  const now = overrides.now ?? (() => new Date());
+  const createRunToken = overrides.createRunToken ?? (() => crypto.randomUUID());
+  const leaseHeartbeatMs = overrides.leaseHeartbeatMs ?? Math.max(1000, leaseDurationMs / 3);
 
   const loadSource = async (knowledgeBaseId, sourceId) => {
     const source = await database.getKnowledgeSourceForSync(knowledgeBaseId, sourceId);
@@ -93,7 +102,8 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     await database.deleteFile(fileId);
   };
 
-  const upsertDocument = async (key, item) => {
+  const upsertDocument = async (key, item, signal) => {
+    signal?.throwIfAborted();
     const source = activeSources.get(key.sourceId);
     if (!source) throw new Error('Knowledge source sync context is unavailable');
     if (!item.externalId || item.externalId.length > 512) {
@@ -103,6 +113,7 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     const revision = item.revision ?? crypto.createHash('sha256').update(content).digest('hex');
     const documentKey = { ...key, externalId: item.externalId };
     const current = await database.findKnowledgeDocumentBySource(documentKey);
+    signal?.throwIfAborted();
     if (current?.revision === revision && current.file_id) return;
 
     const fileId = crypto.randomUUID();
@@ -125,6 +136,7 @@ function createKnowledgeSourceSyncService(overrides = {}) {
         file_id: fileId,
         entity_id: key.knowledgeBaseId,
       });
+      signal?.throwIfAborted();
       const file = await database.createFile(
         {
           ...embedded,
@@ -154,6 +166,7 @@ function createKnowledgeSourceSyncService(overrides = {}) {
         metadata: item.metadata,
         tenantId: source.tenantId,
       });
+      signal?.throwIfAborted();
     } catch (error) {
       await Promise.allSettled([
         removeVectors(requestFor(source), { file_id: fileId, embedded: true }, key.knowledgeBaseId),
@@ -173,11 +186,13 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     }
   };
 
-  const deleteDocument = async (key, externalId) => {
+  const deleteDocument = async (key, externalId, signal) => {
+    signal?.throwIfAborted();
     const source = activeSources.get(key.sourceId);
     if (!source) throw new Error('Knowledge source sync context is unavailable');
     const documentKey = { ...key, externalId };
     const current = await database.findKnowledgeDocumentBySource(documentKey);
+    signal?.throwIfAborted();
     if (!current) return;
     if (current.file_id) await cleanupFile(source, current.file_id, key.knowledgeBaseId);
     await database.deleteKnowledgeDocumentBySource(documentKey);
@@ -213,19 +228,77 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     upsertDocument,
     deleteDocument,
     reconcileDocuments,
-    updateSourceState: (sourceId, state) =>
-      database.updateKnowledgeSourceSyncState(sourceId, state),
+    updateSourceState: (sourceId, state) => {
+      const token = activeLeases.get(sourceId);
+      if (!token) return false;
+      return database.updateKnowledgeSourceSyncStateIfLeaseOwner(sourceId, token, state);
+    },
   });
 
   return {
     runner,
-    async syncKnowledgeSource(knowledgeBaseId, sourceId) {
-      try {
-        await runner.run(knowledgeBaseId, sourceId);
-        return database.getKnowledgeSourceForSync(knowledgeBaseId, sourceId);
-      } finally {
-        activeSources.delete(sourceId);
-      }
+    syncKnowledgeSource(knowledgeBaseId, sourceId) {
+      const key = `${knowledgeBaseId}:${sourceId}`;
+      const active = inFlight.get(key);
+      if (active) return active;
+
+      const sync = (async () => {
+        const source = await database.getKnowledgeSourceForSync(knowledgeBaseId, sourceId);
+        if (!source) return null;
+        const token = createRunToken();
+        const startedAt = now();
+        const lease = {
+          knowledgeBaseId,
+          sourceId,
+          tenantId: source.tenantId,
+          token,
+        };
+        const acquired = await database.acquireKnowledgeSourceSyncLease({
+          ...lease,
+          now: startedAt,
+          expiresAt: new Date(startedAt.getTime() + leaseDurationMs),
+        });
+        if (!acquired) throw new KnowledgeSourceSyncInProgressError();
+
+        activeLeases.set(sourceId, token);
+        const controller = new AbortController();
+        let renewing = false;
+        const heartbeat = setInterval(async () => {
+          if (renewing || controller.signal.aborted) return;
+          renewing = true;
+          try {
+            const heartbeatAt = now();
+            const renewed = await database.renewKnowledgeSourceSyncLease({
+              ...lease,
+              now: heartbeatAt,
+              expiresAt: new Date(heartbeatAt.getTime() + leaseDurationMs),
+            });
+            if (!renewed) controller.abort(new KnowledgeSourceSyncLeaseLostError());
+          } catch {
+            controller.abort(new KnowledgeSourceSyncLeaseLostError());
+          } finally {
+            renewing = false;
+          }
+        }, leaseHeartbeatMs);
+        heartbeat.unref?.();
+        try {
+          await runner.run(knowledgeBaseId, sourceId, controller.signal);
+          return database.getKnowledgeSourceForSync(knowledgeBaseId, sourceId);
+        } finally {
+          clearInterval(heartbeat);
+          activeSources.delete(sourceId);
+          if (activeLeases.get(sourceId) === token) activeLeases.delete(sourceId);
+          try {
+            await database.releaseKnowledgeSourceSyncLease(lease);
+          } catch (error) {
+            logger.error('[knowledge-sync] Failed to release source sync lease', error);
+          }
+        }
+      })().finally(() => {
+        inFlight.delete(key);
+      });
+      inFlight.set(key, sync);
+      return sync;
     },
   };
 }
@@ -234,6 +307,7 @@ const knowledgeSourceSyncService = createKnowledgeSourceSyncService();
 
 module.exports = {
   MAX_CONNECTOR_FILE_BYTES,
+  DEFAULT_SYNC_LEASE_MS,
   createKnowledgeSourceSyncService,
   syncKnowledgeSource: knowledgeSourceSyncService.syncKnowledgeSource,
 };

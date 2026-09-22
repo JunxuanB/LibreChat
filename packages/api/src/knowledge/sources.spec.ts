@@ -1,4 +1,5 @@
 import { createKnowledgeSourceHandlers } from './sources';
+import { KnowledgeSourceSyncInProgressError } from './sync';
 import { createDefaultKnowledgeConnectorRegistry } from './connectors';
 
 const response = () => {
@@ -185,7 +186,52 @@ describe('knowledge source handlers', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  test('invokes the injected sync runner instead of patching status directly', async () => {
+  test('returns not found when patching a missing source', async () => {
+    const deps = createDeps();
+    deps.listKnowledgeSources.mockResolvedValue([]);
+    const res = response();
+    await createKnowledgeSourceHandlers(deps).patch(
+      {
+        params: { id: 'base-1', sourceId: 'missing' },
+        body: { name: 'Renamed' },
+      } as never,
+      res as never,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(deps.updateKnowledgeSource).not.toHaveBeenCalled();
+  });
+
+  test.each([true, false])('maps source deletion deleted=%s', async (deleted) => {
+    const deps = createDeps();
+    deps.deleteKnowledgeSource.mockResolvedValue({ deleted });
+    const res = response();
+    const req = { params: { id: 'base-1', sourceId: 'source-1' }, user: { id: 'user-1' } };
+    await createKnowledgeSourceHandlers(deps).remove(req as never, res as never);
+    expect(deps.deleteKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1', req);
+    expect(res.status).toHaveBeenCalledWith(deleted ? 200 : 404);
+  });
+
+  test('returns conflict when source deletion races synchronization', async () => {
+    const deps = createDeps();
+    const error = Object.assign(new Error('syncing'), {
+      code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS',
+    });
+    deps.deleteKnowledgeSource.mockRejectedValue(error);
+    const res = response();
+
+    await createKnowledgeSourceHandlers(deps).remove(
+      { params: { id: 'base-1', sourceId: 'source-1' } } as never,
+      res as never,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Knowledge source synchronization is in progress',
+      code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS',
+    });
+  });
+
+  test('enqueues sync work instead of patching status directly', async () => {
     const synced = {
       _id: { toString: () => 'source-1' },
       knowledgeBaseId: { toString: () => 'base-1' },
@@ -212,5 +258,40 @@ describe('knowledge source handlers', () => {
     expect(syncKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1');
     expect(updateKnowledgeSource).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  test('returns a conflict without exposing internal lease state', async () => {
+    const handlers = createKnowledgeSourceHandlers({
+      listKnowledgeSources: jest.fn(async () => [
+        {
+          _id: { toString: () => 'source-1' },
+          knowledgeBaseId: { toString: () => 'base-1' },
+          name: 'Docs',
+          type: 'github',
+          config: {},
+          syncStatus: 'syncing',
+          syncLease: { token: 'secret-token', expiresAt: new Date() },
+        } as never,
+      ]),
+      createKnowledgeSource: jest.fn(),
+      updateKnowledgeSource: jest.fn(),
+      deleteKnowledgeSource: jest.fn(),
+      syncKnowledgeSource: jest.fn(async () => {
+        throw new KnowledgeSourceSyncInProgressError();
+      }),
+    });
+    const listResponse = response();
+    await handlers.list({ params: { id: 'base-1' } } as never, listResponse as never);
+    expect(JSON.stringify(listResponse.json.mock.calls[0][0])).not.toContain('secret-token');
+
+    const syncResponse = response();
+    await handlers.sync(
+      { params: { id: 'base-1', sourceId: 'source-1' } } as never,
+      syncResponse as never,
+    );
+    expect(syncResponse.status).toHaveBeenCalledWith(409);
+    expect(syncResponse.json).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS' }),
+    );
   });
 });
