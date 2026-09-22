@@ -149,6 +149,12 @@ interface:
   # Note: This setting does not disable the Agents File Search Capability.
   # To disable the Agents Capability, see the Agents Endpoint configuration instead.
   fileSearch: true
+  # Enable the Knowledge Base library and its role-backed actions.
+  # knowledgeBases:
+  #   use: true
+  #   create: true
+  #   share: true
+  #   public: false
   # Privacy policy settings
   privacyPolicy:
     externalUrl: 'https://librechat.ai/privacy-policy'
