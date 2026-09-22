@@ -9,6 +9,7 @@ import {
   CalendarClock,
   ArrowRightToLine,
   SlidersHorizontal,
+  Database,
 } from 'lucide-react';
 import {
   Permissions,
@@ -36,6 +37,7 @@ import { MemoryPanel } from '~/components/SidePanel/Memories';
 import FilesPanel from '~/components/SidePanel/Files/Panel';
 import { PromptsAccordion } from '~/components/Prompts';
 import { SkillsAccordion } from '~/components/Skills';
+import { KnowledgeBasesAccordion, isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
 
 export default function useSideNavLinks({
   hidePanel,
@@ -146,6 +148,16 @@ export default function useSideNavLinks({
       });
     }
 
+    if (isKnowledgeBasesEnabled(interfaceConfig.knowledgeBases)) {
+      links.push({
+        title: 'com_ui_knowledge',
+        label: '',
+        icon: Database,
+        id: 'knowledge-bases',
+        Component: KnowledgeBasesAccordion,
+      });
+    }
+
     // Scheduled chats are EXPERIMENTAL and default-OFF: the server enables them only
     // when an admin opts in explicitly, so ABSENT config means disabled here too.
     // Mirrors getLimits exactly — absent/null/`false` are all off, `true` is on, and the
@@ -252,6 +264,7 @@ export default function useSideNavLinks({
     hasAccessToPrompts,
     hasAccessToSkills,
     skillsEnabled,
+    interfaceConfig,
     hasAccessToMemories,
     hasAccessToReadMemories,
     hasAccessToSchedules,

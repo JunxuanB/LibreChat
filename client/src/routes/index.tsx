@@ -51,6 +51,11 @@ const loadProjectsView = () =>
     Component: m.ProjectsView,
   }));
 
+const loadKnowledgeBasesView = () =>
+  import('~/components/KnowledgeBases').then((m) => ({
+    Component: m.KnowledgeBasesView,
+  }));
+
 const loadProjectWorkspace = () =>
   import('~/components/Projects').then((m) => ({
     Component: m.ProjectWorkspace,
@@ -171,6 +176,22 @@ export const router = createBrowserRouter(
             {
               path: 'skills/:skillId/edit',
               lazy: loadSkillsView,
+            },
+            {
+              path: 'knowledge',
+              lazy: loadKnowledgeBasesView,
+            },
+            {
+              path: 'knowledge/new',
+              lazy: loadKnowledgeBasesView,
+            },
+            {
+              path: 'knowledge/:knowledgeBaseId',
+              lazy: loadKnowledgeBasesView,
+            },
+            {
+              path: 'knowledge/:knowledgeBaseId/edit',
+              lazy: loadKnowledgeBasesView,
             },
             {
               path: 'projects',

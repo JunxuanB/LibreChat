@@ -67,4 +67,17 @@ describe('skills routes', () => {
 
     expect(paths).toContain('skills/new');
   });
+
+  it('registers knowledge library routes', () => {
+    const paths = flattenPaths((router as unknown as { routes: RouteNode[] }).routes);
+
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'knowledge',
+        'knowledge/new',
+        'knowledge/:knowledgeBaseId',
+        'knowledge/:knowledgeBaseId/edit',
+      ]),
+    );
+  });
 });
