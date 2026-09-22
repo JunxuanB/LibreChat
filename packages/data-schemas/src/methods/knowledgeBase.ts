@@ -3,6 +3,8 @@ import type {
   TCreateKnowledgeDocument,
   TUpdateKnowledgeBase,
   TUpdateKnowledgeDocument,
+  TCreateKnowledgeSource,
+  TUpdateKnowledgeSource,
 } from 'librechat-data-provider';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type {
@@ -10,7 +12,11 @@ import type {
   IKnowledgeBaseDocument,
   IKnowledgeDocument,
   IKnowledgeDocumentDocument,
+  IKnowledgeConnectionDocument,
+  IKnowledgeSource,
+  IKnowledgeSourceDocument,
 } from '~/types';
+import { encryptV2, decryptV2 } from '~/crypto';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { escapeRegExp } from '~/utils/string';
 
@@ -49,6 +55,19 @@ export interface KnowledgeBaseDeps {
 
 type KnowledgeBaseValue = IKnowledgeBase & { _id: Types.ObjectId };
 type KnowledgeDocumentValue = IKnowledgeDocument & { _id: Types.ObjectId };
+type KnowledgeRetrievalDocument = KnowledgeDocumentValue & {
+  knowledgeBaseName?: string;
+  knowledgeSourceName?: string;
+};
+export type KnowledgeSourceValue = IKnowledgeSource & {
+  _id: Types.ObjectId;
+  connection?: {
+    _id: string;
+    name: string;
+    provider: IKnowledgeSource['type'];
+    hasSecrets: boolean;
+  };
+};
 
 export interface KnowledgeBaseMethods {
   createKnowledgeBase(input: CreateKnowledgeBaseInput): Promise<KnowledgeBaseValue>;
@@ -73,6 +92,26 @@ export interface KnowledgeBaseMethods {
     knowledgeBaseId: string,
     documentId: string,
   ): Promise<{ deleted: boolean }>;
+  listKnowledgeSources(knowledgeBaseId: string): Promise<KnowledgeSourceValue[]>;
+  createKnowledgeSource(input: {
+    knowledgeBaseId: string;
+    owner: Types.ObjectId;
+    tenantId?: string;
+    source: TCreateKnowledgeSource;
+  }): Promise<KnowledgeSourceValue | null>;
+  updateKnowledgeSource(
+    knowledgeBaseId: string,
+    sourceId: string,
+    input: TUpdateKnowledgeSource,
+  ): Promise<KnowledgeSourceValue | null>;
+  deleteKnowledgeSource(knowledgeBaseId: string, sourceId: string): Promise<{ deleted: boolean }>;
+  getKnowledgeConnectionSecrets(
+    connectionId: string | Types.ObjectId,
+  ): Promise<Record<string, string> | null>;
+  findKnowledgeDocumentsByBaseIds(knowledgeBaseIds: string[]): Promise<KnowledgeDocumentValue[]>;
+  getKnowledgeDocuments(input: {
+    knowledgeBaseIds: string[];
+  }): Promise<KnowledgeRetrievalDocument[]>;
 }
 
 const normalizeLimit = (limit?: number) =>
@@ -112,6 +151,27 @@ export function createKnowledgeBaseMethods(
 ): KnowledgeBaseMethods {
   const KnowledgeBase = mongoose.models.KnowledgeBase as Model<IKnowledgeBaseDocument>;
   const KnowledgeDocument = mongoose.models.KnowledgeDocument as Model<IKnowledgeDocumentDocument>;
+  const KnowledgeConnection = mongoose.models
+    .KnowledgeConnection as Model<IKnowledgeConnectionDocument>;
+  const KnowledgeSource = mongoose.models.KnowledgeSource as Model<IKnowledgeSourceDocument>;
+
+  async function withConnection(
+    source: IKnowledgeSource & { _id: Types.ObjectId },
+  ): Promise<KnowledgeSourceValue> {
+    if (!source.connectionId) return source;
+    const connection = await KnowledgeConnection.findById(source.connectionId).lean();
+    return {
+      ...source,
+      connection: connection
+        ? {
+            _id: String(connection._id),
+            name: connection.name,
+            provider: connection.provider,
+            hasSecrets: true,
+          }
+        : undefined,
+    };
+  }
 
   async function createKnowledgeBase(input: CreateKnowledgeBaseInput) {
     const created = await KnowledgeBase.create({
@@ -175,8 +235,13 @@ export function createKnowledgeBaseMethods(
     const resourceId = new mongoose.Types.ObjectId(id);
     const deleted = await KnowledgeBase.findByIdAndDelete(resourceId).lean();
     if (!deleted) return { deleted: false };
+    const connections = await KnowledgeSource.find({ knowledgeBaseId: resourceId }).distinct(
+      'connectionId',
+    );
     await Promise.all([
       KnowledgeDocument.deleteMany({ knowledgeBaseId: resourceId }),
+      KnowledgeSource.deleteMany({ knowledgeBaseId: resourceId }),
+      KnowledgeConnection.deleteMany({ _id: { $in: connections } }),
       deps.removeAllPermissions({ resourceType: 'knowledgeBase', resourceId }),
     ]);
     return { deleted: true };
@@ -258,6 +323,156 @@ export function createKnowledgeBaseMethods(
     return { deleted: true };
   }
 
+  async function listKnowledgeSources(knowledgeBaseId: string): Promise<KnowledgeSourceValue[]> {
+    if (!isValidObjectIdString(knowledgeBaseId)) return [];
+    const sources = await KnowledgeSource.find({ knowledgeBaseId })
+      .sort({ createdAt: -1 })
+      .lean<Array<IKnowledgeSource & { _id: Types.ObjectId }>>();
+    return Promise.all(sources.map(withConnection));
+  }
+
+  async function createKnowledgeSource(input: {
+    knowledgeBaseId: string;
+    owner: Types.ObjectId;
+    tenantId?: string;
+    source: TCreateKnowledgeSource;
+  }): Promise<KnowledgeSourceValue | null> {
+    if (
+      !isValidObjectIdString(input.knowledgeBaseId) ||
+      !(await KnowledgeBase.exists({ _id: input.knowledgeBaseId }))
+    )
+      return null;
+    let connectionId: Types.ObjectId | undefined;
+    if (input.source.credentials) {
+      const encryptedSecrets = await encryptV2(JSON.stringify(input.source.credentials));
+      const connection = await KnowledgeConnection.create({
+        name: input.source.name,
+        provider: input.source.type,
+        owner: input.owner,
+        encryptedSecrets,
+        tenantId: input.tenantId,
+      });
+      connectionId = connection._id;
+    }
+    try {
+      const source = await KnowledgeSource.create({
+        knowledgeBaseId: input.knowledgeBaseId,
+        connectionId,
+        owner: input.owner,
+        name: input.source.name,
+        type: input.source.type,
+        accessMode: input.source.accessMode,
+        config: input.source.config,
+        tenantId: input.tenantId,
+      });
+      return withConnection(source.toObject() as IKnowledgeSource & { _id: Types.ObjectId });
+    } catch (error) {
+      if (connectionId) await KnowledgeConnection.deleteOne({ _id: connectionId });
+      throw error;
+    }
+  }
+
+  async function updateKnowledgeSource(
+    knowledgeBaseId: string,
+    sourceId: string,
+    input: TUpdateKnowledgeSource,
+  ): Promise<KnowledgeSourceValue | null> {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(sourceId)) return null;
+    const source = await KnowledgeSource.findOne({ _id: sourceId, knowledgeBaseId });
+    if (!source) return null;
+    if (input.credentials) {
+      const encryptedSecrets = await encryptV2(JSON.stringify(input.credentials));
+      if (source.connectionId) {
+        await KnowledgeConnection.updateOne(
+          { _id: source.connectionId },
+          { $set: { name: input.name ?? source.name, encryptedSecrets } },
+        );
+      } else {
+        const connection = await KnowledgeConnection.create({
+          name: input.name ?? source.name,
+          provider: source.type,
+          owner: source.owner,
+          encryptedSecrets,
+          tenantId: source.tenantId,
+        });
+        source.connectionId = connection._id;
+      }
+    }
+    const { credentials: _credentials, lastSyncedAt, ...rest } = input;
+    Object.assign(
+      source,
+      rest,
+      lastSyncedAt === undefined
+        ? {}
+        : { lastSyncedAt: lastSyncedAt ? new Date(lastSyncedAt) : null },
+    );
+    await source.save();
+    return withConnection(source.toObject() as IKnowledgeSource & { _id: Types.ObjectId });
+  }
+
+  async function deleteKnowledgeSource(knowledgeBaseId: string, sourceId: string) {
+    if (!isValidObjectIdString(knowledgeBaseId) || !isValidObjectIdString(sourceId))
+      return { deleted: false };
+    const source = await KnowledgeSource.findOneAndDelete({
+      _id: sourceId,
+      knowledgeBaseId,
+    }).lean();
+    if (!source) return { deleted: false };
+    if (source.connectionId) await KnowledgeConnection.deleteOne({ _id: source.connectionId });
+    return { deleted: true };
+  }
+
+  async function getKnowledgeConnectionSecrets(connectionId: string | Types.ObjectId) {
+    if (!isValidObjectIdString(String(connectionId))) return null;
+    const connection = await KnowledgeConnection.findById(connectionId)
+      .select('+encryptedSecrets')
+      .lean();
+    if (!connection?.encryptedSecrets) return null;
+    return JSON.parse(await decryptV2(connection.encryptedSecrets)) as Record<string, string>;
+  }
+
+  async function findKnowledgeDocumentsByBaseIds(knowledgeBaseIds: string[]) {
+    const ids = knowledgeBaseIds
+      .filter(isValidObjectIdString)
+      .map((id) => new mongoose.Types.ObjectId(id));
+    if (ids.length === 0) return [];
+    return KnowledgeDocument.find({ knowledgeBaseId: { $in: ids }, status: 'ready' })
+      .select('knowledgeBaseId knowledgeSourceId file_id name status source_type canonical_url')
+      .lean<KnowledgeDocumentValue[]>();
+  }
+
+  const getKnowledgeDocuments = async (input: { knowledgeBaseIds: string[] }) => {
+    const documents = await findKnowledgeDocumentsByBaseIds(input.knowledgeBaseIds);
+    if (documents.length === 0) return [];
+    const baseIds = [...new Set(documents.map((document) => String(document.knowledgeBaseId)))];
+    const sourceIds = [
+      ...new Set(
+        documents
+          .map((document) => document.knowledgeSourceId && String(document.knowledgeSourceId))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const [bases, sources] = await Promise.all([
+      KnowledgeBase.find({ _id: { $in: baseIds } })
+        .select('_id name')
+        .lean<KnowledgeBaseValue[]>(),
+      sourceIds.length > 0
+        ? KnowledgeSource.find({ _id: { $in: sourceIds } })
+            .select('_id name')
+            .lean<KnowledgeSourceValue[]>()
+        : [],
+    ]);
+    const baseNames = new Map(bases.map((base) => [String(base._id), base.name]));
+    const sourceNames = new Map(sources.map((source) => [String(source._id), source.name]));
+    return documents.map((document) => ({
+      ...document,
+      knowledgeBaseName: baseNames.get(String(document.knowledgeBaseId)),
+      knowledgeSourceName: document.knowledgeSourceId
+        ? sourceNames.get(String(document.knowledgeSourceId))
+        : undefined,
+    }));
+  };
+
   return {
     createKnowledgeBase,
     getKnowledgeBaseById,
@@ -268,5 +483,12 @@ export function createKnowledgeBaseMethods(
     listKnowledgeDocuments,
     updateKnowledgeDocument,
     deleteKnowledgeDocument,
+    listKnowledgeSources,
+    createKnowledgeSource,
+    updateKnowledgeSource,
+    deleteKnowledgeSource,
+    getKnowledgeConnectionSecrets,
+    findKnowledgeDocumentsByBaseIds,
+    getKnowledgeDocuments,
   };
 }

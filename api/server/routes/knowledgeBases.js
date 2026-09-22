@@ -1,5 +1,5 @@
 const express = require('express');
-const { createKnowledgeHandlers } = require('@librechat/api');
+const { createKnowledgeHandlers, createKnowledgeSourceHandlers } = require('@librechat/api');
 const { PermissionBits, ResourceType } = require('librechat-data-provider');
 const { requireJwtAuth, canAccessResource } = require('~/server/middleware');
 const {
@@ -24,6 +24,13 @@ const handlers = createKnowledgeHandlers({
   findPubliclyAccessibleResources,
   grantPermission,
 });
+const sourceHandlers = createKnowledgeSourceHandlers({
+  listKnowledgeSources: db.listKnowledgeSources,
+  createKnowledgeSource: db.createKnowledgeSource,
+  updateKnowledgeSource: db.updateKnowledgeSource,
+  deleteKnowledgeSource: db.deleteKnowledgeSource,
+  // Follow-up connector registry wiring: connectorRegistry: createDefaultKnowledgeConnectorRegistry()
+});
 
 const canAccess = (requiredPermission) =>
   canAccessResource({
@@ -36,6 +43,7 @@ const canAccess = (requiredPermission) =>
 router.use(requireJwtAuth);
 router.get('/', handlers.list);
 router.post('/', handlers.create);
+router.get('/connectors', sourceHandlers.connectors);
 router.get('/:id', canAccess(PermissionBits.VIEW), handlers.get);
 router.patch('/:id', canAccess(PermissionBits.EDIT), handlers.patch);
 router.delete('/:id', canAccess(PermissionBits.DELETE), handlers.remove);
@@ -47,5 +55,10 @@ router.delete(
   canAccess(PermissionBits.EDIT),
   handlers.removeDocument,
 );
+router.get('/:id/sources', canAccess(PermissionBits.VIEW), sourceHandlers.list);
+router.post('/:id/sources', canAccess(PermissionBits.EDIT), sourceHandlers.create);
+router.patch('/:id/sources/:sourceId', canAccess(PermissionBits.EDIT), sourceHandlers.patch);
+router.delete('/:id/sources/:sourceId', canAccess(PermissionBits.EDIT), sourceHandlers.remove);
+router.post('/:id/sources/:sourceId/sync', canAccess(PermissionBits.EDIT), sourceHandlers.sync);
 
 module.exports = router;

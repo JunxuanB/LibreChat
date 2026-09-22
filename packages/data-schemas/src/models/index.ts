@@ -14,6 +14,8 @@ import { createAgentCategoryModel } from './agentCategory';
 import { createChatProjectModel } from './chatProject';
 import { createKnowledgeBaseModel } from './knowledgeBase';
 import { createKnowledgeDocumentModel } from './knowledgeDocument';
+import { createKnowledgeConnectionModel } from './knowledgeConnection';
+import { createKnowledgeSourceModel } from './knowledgeSource';
 import { createAgentApiKeyModel } from './agentApiKey';
 import { createTransactionModel } from './transaction';
 import { createPromptGroupModel } from './promptGroup';
@@ -60,6 +62,8 @@ export function createModels(mongoose: typeof import('mongoose')): {
   ChatProject: ReturnType<typeof createChatProjectModel>;
   KnowledgeBase: ReturnType<typeof createKnowledgeBaseModel>;
   KnowledgeDocument: ReturnType<typeof createKnowledgeDocumentModel>;
+  KnowledgeConnection: ReturnType<typeof createKnowledgeConnectionModel>;
+  KnowledgeSource: ReturnType<typeof createKnowledgeSourceModel>;
   CodeEnvironment: ReturnType<typeof createCodeEnvironmentModel>;
   Message: ReturnType<typeof createMessageModel>;
   Agent: ReturnType<typeof createAgentModel>;
@@ -111,6 +115,8 @@ export function createModels(mongoose: typeof import('mongoose')): {
     ChatProject: createChatProjectModel(mongoose),
     KnowledgeBase: createKnowledgeBaseModel(mongoose),
     KnowledgeDocument: createKnowledgeDocumentModel(mongoose),
+    KnowledgeConnection: createKnowledgeConnectionModel(mongoose),
+    KnowledgeSource: createKnowledgeSourceModel(mongoose),
     CodeEnvironment: createCodeEnvironmentModel(mongoose),
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),

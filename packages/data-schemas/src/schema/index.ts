@@ -10,6 +10,8 @@ export { default as categoriesSchema } from './categories';
 export { default as chatProjectSchema } from './chatProject';
 export { default as knowledgeBaseSchema } from './knowledgeBase';
 export { default as knowledgeDocumentSchema } from './knowledgeDocument';
+export { default as knowledgeConnectionSchema } from './knowledgeConnection';
+export { default as knowledgeSourceSchema } from './knowledgeSource';
 export { default as codeEnvironmentSchema } from './codeEnvironment';
 export { default as conversationTagSchema } from './conversationTag';
 export { default as convoSchema } from './convo';

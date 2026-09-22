@@ -86,3 +86,55 @@ export type TKnowledgeDocumentListResponse = {
   documents: TKnowledgeDocument[];
   nextCursor: string | null;
 };
+
+export const knowledgeSourceSyncStatusSchema = z.enum(['idle', 'syncing', 'ready', 'failed']);
+export const knowledgeSourceAccessModeSchema = z.enum(['shared_snapshot']);
+export const createKnowledgeSourceSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  type: knowledgeSourceTypeSchema,
+  config: z.record(z.unknown()).optional().default({}),
+  credentials: z.record(z.string()).optional(),
+  accessMode: knowledgeSourceAccessModeSchema.optional().default('shared_snapshot'),
+});
+export const updateKnowledgeSourceSchema = createKnowledgeSourceSchema
+  .omit({ type: true })
+  .partial()
+  .extend({
+    syncStatus: knowledgeSourceSyncStatusSchema.optional(),
+    syncError: z.string().max(4000).nullable().optional(),
+    lastSyncedAt: z.string().datetime().nullable().optional(),
+  });
+export type TCreateKnowledgeSource = z.infer<typeof createKnowledgeSourceSchema>;
+export type KnowledgeSourceAccessMode = z.infer<typeof knowledgeSourceAccessModeSchema>;
+export type TUpdateKnowledgeSource = z.infer<typeof updateKnowledgeSourceSchema>;
+export type TKnowledgeSource = {
+  _id: string;
+  knowledgeBaseId: string;
+  name: string;
+  type: KnowledgeSourceType;
+  accessMode: KnowledgeSourceAccessMode;
+  config: Record<string, unknown>;
+  syncStatus: z.infer<typeof knowledgeSourceSyncStatusSchema>;
+  syncError?: string | null;
+  lastSyncedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TKnowledgeConnector = {
+  type: KnowledgeSourceType;
+  name: string;
+  description: string;
+  category: string;
+  setup?: 'manual_credentials';
+  capabilities: string[];
+  fields: Array<{
+    key: string;
+    label: string;
+    type: string;
+    required?: boolean;
+    secret?: boolean;
+    placeholder?: string;
+    help?: string;
+  }>;
+};

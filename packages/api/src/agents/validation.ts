@@ -58,10 +58,12 @@ export const agentFileResourceSchema: z.ZodObject<
   {
     file_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
     vector_store_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
+    knowledge_base_ids: z.ZodOptional<z.ZodArray<z.ZodString, 'many'>>;
   },
   'strip'
 > = agentBaseResourceSchema.extend({
   vector_store_ids: z.array(z.string()).optional(),
+  knowledge_base_ids: z.array(z.string()).optional(),
 });
 
 /** Persisted tool resources accepted by Agent create and update APIs. */

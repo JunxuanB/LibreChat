@@ -1,4 +1,8 @@
-import type { KnowledgeDocumentStatus, KnowledgeSourceType } from 'librechat-data-provider';
+import type {
+  KnowledgeDocumentStatus,
+  KnowledgeSourceAccessMode,
+  KnowledgeSourceType,
+} from 'librechat-data-provider';
 import type { Document, Types } from 'mongoose';
 
 export interface IKnowledgeBase {
@@ -35,3 +39,33 @@ export interface IKnowledgeDocument {
 }
 
 export interface IKnowledgeDocumentDocument extends Omit<IKnowledgeDocument, '_id'>, Document {}
+
+export interface IKnowledgeConnection {
+  _id?: Types.ObjectId;
+  name: string;
+  provider: KnowledgeSourceType;
+  owner: Types.ObjectId;
+  encryptedSecrets: string;
+  tenantId?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+export interface IKnowledgeConnectionDocument extends Omit<IKnowledgeConnection, '_id'>, Document {}
+
+export interface IKnowledgeSource {
+  _id?: Types.ObjectId;
+  knowledgeBaseId: Types.ObjectId;
+  connectionId?: Types.ObjectId;
+  owner: Types.ObjectId;
+  name: string;
+  type: KnowledgeSourceType;
+  accessMode: KnowledgeSourceAccessMode;
+  config: Record<string, unknown>;
+  syncStatus: 'idle' | 'syncing' | 'ready' | 'failed';
+  syncError?: string | null;
+  lastSyncedAt?: Date | null;
+  tenantId?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+export interface IKnowledgeSourceDocument extends Omit<IKnowledgeSource, '_id'>, Document {}

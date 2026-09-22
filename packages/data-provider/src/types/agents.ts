@@ -895,6 +895,8 @@ export interface AgentToolResources {
 export type ExecuteCodeResource = AgentBaseResource;
 
 export interface AgentFileResource extends AgentBaseResource {
+  /** Knowledge bases queried alongside directly attached files. */
+  knowledge_base_ids?: Array<string>;
   /**
    * The ID of the vector store attached to this agent. There
    * can be a maximum of 1 vector store attached to the agent.
