@@ -3,6 +3,7 @@ import type { KnowledgeConnector, KnowledgeSourceChange } from './types';
 
 interface GitTree {
   sha: string;
+  truncated?: boolean;
   tree: Array<{ path: string; type: string; sha: string; size?: number }>;
 }
 
@@ -32,13 +33,19 @@ export const githubConnector: KnowledgeConnector = {
     name: 'GitHub',
     description: 'Index text and source files from a repository.',
     category: 'app',
-    capabilities: ['incremental_sync', 'deletions'],
+    setup: 'manual_credentials',
+    capabilities: [],
     fields: [
       { key: 'owner', label: 'Owner', type: 'text', required: true },
       { key: 'repository', label: 'Repository', type: 'text', required: true },
       { key: 'ref', label: 'Branch or tag', type: 'text', placeholder: 'HEAD' },
       { key: 'path', label: 'Path prefix', type: 'text' },
-      { key: 'accessToken', label: 'Access token', type: 'password', secret: true },
+      {
+        key: 'accessToken',
+        label: 'Access token',
+        type: 'password',
+        secret: true,
+      },
     ],
   },
 
@@ -46,10 +53,16 @@ export const githubConnector: KnowledgeConnector = {
     const owner = requiredString(request.config, 'owner');
     const repository = requiredString(request.config, 'repository');
     await expectOk(
-      await context.fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`, {
-        headers: { ...bearerHeaders(request), Accept: 'application/vnd.github+json' },
-        signal: request.signal,
-      }),
+      await context.fetch(
+        `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`,
+        {
+          headers: {
+            ...bearerHeaders(request),
+            Accept: 'application/vnd.github+json',
+          },
+          signal: request.signal,
+        },
+      ),
       'GitHub',
     );
   },
@@ -59,14 +72,17 @@ export const githubConnector: KnowledgeConnector = {
     const repository = requiredString(request.config, 'repository');
     const ref = optionalString(request.config, 'ref') ?? 'HEAD';
     const prefix = optionalString(request.config, 'path')?.replace(/^\/+|\/+$/g, '');
-    const headers = { ...bearerHeaders(request), Accept: 'application/vnd.github+json' };
+    const headers = {
+      ...bearerHeaders(request),
+      Accept: 'application/vnd.github+json',
+    };
     const treeUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
     const tree = (await (
-      await expectOk(
-        await context.fetch(treeUrl, { headers, signal: request.signal }),
-        'GitHub',
-      )
+      await expectOk(await context.fetch(treeUrl, { headers, signal: request.signal }), 'GitHub')
     ).json()) as GitTree;
+    if (tree.truncated) {
+      throw new Error('GitHub tree is truncated; narrow the configured path before syncing');
+    }
     const maxFiles = Math.max(1, Math.min(1000, Number(request.config.maxFiles ?? 250)));
     const candidates = tree.tree
       .filter(({ path, type, size }) => {
@@ -86,10 +102,7 @@ export const githubConnector: KnowledgeConnector = {
         .map(encodeURIComponent)
         .join('/')}`;
       const content = await (
-        await expectOk(
-          await context.fetch(rawUrl, { headers, signal: request.signal }),
-          'GitHub',
-        )
+        await expectOk(await context.fetch(rawUrl, { headers, signal: request.signal }), 'GitHub')
       ).text();
       changes.push({
         operation: 'upsert',
@@ -104,6 +117,6 @@ export const githubConnector: KnowledgeConnector = {
         },
       });
     }
-    return { changes, cursor: tree.sha };
+    return { changes, cursor: tree.sha, snapshot: true };
   },
 };

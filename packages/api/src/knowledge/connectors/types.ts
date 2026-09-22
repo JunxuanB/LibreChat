@@ -20,7 +20,7 @@ export type KnowledgeConnectorCapability =
 export interface KnowledgeConnectorField {
   key: string;
   label: string;
-  type: 'text' | 'url' | 'password' | 'number' | 'boolean';
+  type: 'text' | 'url' | 'password' | 'number' | 'boolean' | 'string_array';
   required?: boolean;
   secret?: boolean;
   placeholder?: string;
@@ -32,6 +32,7 @@ export interface KnowledgeConnectorManifest {
   name: string;
   description: string;
   category: 'web' | 'app' | 'database' | 'advanced';
+  setup?: 'manual_credentials';
   capabilities: KnowledgeConnectorCapability[];
   fields: KnowledgeConnectorField[];
 }
@@ -39,7 +40,10 @@ export interface KnowledgeConnectorManifest {
 export interface KnowledgeSourceItem {
   externalId: string;
   title: string;
-  content: string;
+  /** UTF-8 text ready for chunking. Exactly one content representation is expected. */
+  content?: string;
+  /** Original bytes for formats such as PDF and Office documents. */
+  binaryContent?: Uint8Array;
   mimeType?: string;
   canonicalUrl?: string;
   revision?: string;
@@ -55,12 +59,18 @@ export interface KnowledgeSyncRequest {
   config: Record<string, unknown>;
   credentials?: Record<string, string>;
   cursor?: string;
+  /** True for a subsequent page in the same sync run. */
+  continuation?: boolean;
   signal?: AbortSignal;
 }
 
 export interface KnowledgeSyncResult {
   changes: KnowledgeSourceChange[];
   cursor?: string;
+  /** False when another connector page must be consumed before this sync is complete. */
+  complete?: boolean;
+  /** True when the completed run enumerates the source's entire current document set. */
+  snapshot?: boolean;
 }
 
 export interface KnowledgeQueryRequest {
@@ -72,7 +82,21 @@ export interface KnowledgeQueryRequest {
 }
 
 export interface KnowledgeConnectorContext {
+  /**
+   * Fetch implementation supplied by the host. Redirects are handled by the
+   * connector helpers, so this function must honor `redirect: 'manual'`.
+   */
   fetch: typeof fetch;
+  /**
+   * Resolve and reject loopback, link-local, private, and otherwise disallowed
+   * destinations immediately before each request. This is mandatory because a
+   * hostname can pass syntax checks and later resolve to a private address.
+   */
+  assertSafeUrl: (url: URL, signal?: AbortSignal) => Promise<void>;
+  /**
+   * The host implementation must enforce a read-only transaction, statement
+   * timeout, row/byte limits, and its deployment's TLS policy.
+   */
   executeReadOnlyQuery?: (
     connectionString: string,
     query: string,

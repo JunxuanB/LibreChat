@@ -1,4 +1,4 @@
-import { assertHttpUrl, expectOk, optionalString, requiredString } from './helpers';
+import { assertHttpUrl, expectOk, optionalString, requiredString, safeFetch } from './helpers';
 import type { KnowledgeConnector, KnowledgeSourceItem } from './types';
 
 export const externalIndexConnector: KnowledgeConnector = {
@@ -10,7 +10,12 @@ export const externalIndexConnector: KnowledgeConnector = {
     capabilities: ['external_retrieval'],
     fields: [
       { key: 'url', label: 'Search endpoint', type: 'url', required: true },
-      { key: 'accessToken', label: 'Bearer token', type: 'password', secret: true },
+      {
+        key: 'accessToken',
+        label: 'Bearer token',
+        type: 'password',
+        secret: true,
+      },
     ],
   },
 
@@ -18,7 +23,7 @@ export const externalIndexConnector: KnowledgeConnector = {
     const url = assertHttpUrl(requiredString(request.config, 'url'));
     const token = optionalString(request.credentials, 'accessToken');
     await expectOk(
-      await context.fetch(url, {
+      await safeFetch(context, url, {
         method: 'HEAD',
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: request.signal,
@@ -35,18 +40,23 @@ export const externalIndexConnector: KnowledgeConnector = {
     const url = assertHttpUrl(requiredString(request.config, 'url'));
     const token = optionalString(request.credentials, 'accessToken');
     const response = await expectOk(
-      await context.fetch(url, {
+      await safeFetch(context, url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ query: request.query, limit: request.limit ?? 10 }),
+        body: JSON.stringify({
+          query: request.query,
+          limit: request.limit ?? 10,
+        }),
         signal: request.signal,
       }),
       'External index',
     );
-    const payload = (await response.json()) as { results?: Array<Record<string, unknown>> };
+    const payload = (await response.json()) as {
+      results?: Array<Record<string, unknown>>;
+    };
     return (payload.results ?? []).map<KnowledgeSourceItem>((result) => {
       if (
         typeof result.id !== 'string' ||

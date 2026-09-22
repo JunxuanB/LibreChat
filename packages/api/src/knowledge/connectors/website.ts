@@ -1,4 +1,11 @@
-import { assertHttpUrl, expectOk, requiredString, textFromHtml, titleFromHtml } from './helpers';
+import {
+  assertHttpUrl,
+  expectOk,
+  requiredString,
+  safeFetch,
+  textFromHtml,
+  titleFromHtml,
+} from './helpers';
 import type { KnowledgeConnector } from './types';
 
 const MAX_PAGES = 100;
@@ -13,7 +20,7 @@ export const websiteConnector: KnowledgeConnector = {
     name: 'Website',
     description: 'Index one page or the URLs in a sitemap.',
     category: 'web',
-    capabilities: ['incremental_sync', 'deletions'],
+    capabilities: [],
     fields: [
       { key: 'url', label: 'Page or sitemap URL', type: 'url', required: true },
       {
@@ -28,7 +35,7 @@ export const websiteConnector: KnowledgeConnector = {
   async validate(request, context) {
     const url = assertHttpUrl(requiredString(request.config, 'url'));
     await expectOk(
-      await context.fetch(url, { method: 'HEAD', redirect: 'follow', signal: request.signal }),
+      await safeFetch(context, url, { method: 'HEAD', signal: request.signal }),
       'Website',
     );
   },
@@ -36,7 +43,7 @@ export const websiteConnector: KnowledgeConnector = {
   async sync(request, context) {
     const root = assertHttpUrl(requiredString(request.config, 'url'));
     const rootResponse = await expectOk(
-      await context.fetch(root, { redirect: 'follow', signal: request.signal }),
+      await safeFetch(context, root, { signal: request.signal }),
       'Website',
     );
     const rootBody = await rootResponse.text();
@@ -54,11 +61,12 @@ export const websiteConnector: KnowledgeConnector = {
         url.toString() === root.toString()
           ? rootResponse
           : await expectOk(
-              await context.fetch(url, { redirect: 'follow', signal: request.signal }),
+              await safeFetch(context, url, { signal: request.signal }, 'sitemap URL'),
               'Website',
             );
       const html = url.toString() === root.toString() ? rootBody : await response.text();
-      const revision = response.headers.get('etag') ?? response.headers.get('last-modified') ?? undefined;
+      const revision =
+        response.headers.get('etag') ?? response.headers.get('last-modified') ?? undefined;
       changes.push({
         operation: 'upsert' as const,
         item: {
@@ -72,6 +80,6 @@ export const websiteConnector: KnowledgeConnector = {
       });
     }
 
-    return { changes, cursor: new Date().toISOString() };
+    return { changes, cursor: new Date().toISOString(), snapshot: true };
   },
 };

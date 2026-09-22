@@ -1,4 +1,11 @@
-import { assertHttpUrl, expectOk, requiredString, textFromHtml } from './helpers';
+import {
+  assertHttpUrl,
+  expectOk,
+  requiredString,
+  safeFetch,
+  sameOriginUrl,
+  textFromHtml,
+} from './helpers';
 import type { KnowledgeConnector, KnowledgeSourceChange } from './types';
 
 export const confluenceConnector: KnowledgeConnector = {
@@ -7,11 +14,19 @@ export const confluenceConnector: KnowledgeConnector = {
     name: 'Confluence',
     description: 'Index pages from a Confluence Cloud space.',
     category: 'app',
-    capabilities: ['incremental_sync', 'deletions'],
+    setup: 'manual_credentials',
+    capabilities: [],
     fields: [
       { key: 'baseUrl', label: 'Confluence URL', type: 'url', required: true },
       { key: 'spaceId', label: 'Space ID', type: 'text', required: true },
-      { key: 'accessToken', label: 'OAuth or API token', type: 'password', secret: true, required: true },
+      {
+        key: 'accessToken',
+        label: 'OAuth access token',
+        type: 'password',
+        secret: true,
+        required: true,
+        help: 'Paste a valid Confluence token. Use Edit source to rotate it before it expires.',
+      },
     ],
   },
 
@@ -19,10 +34,16 @@ export const confluenceConnector: KnowledgeConnector = {
     const base = assertHttpUrl(requiredString(request.config, 'baseUrl'));
     const spaceId = requiredString(request.config, 'spaceId');
     await expectOk(
-      await context.fetch(new URL(`/wiki/api/v2/spaces/${encodeURIComponent(spaceId)}`, base), {
-        headers: { Authorization: `Bearer ${requiredString(request.credentials, 'accessToken')}` },
-        signal: request.signal,
-      }),
+      await safeFetch(
+        context,
+        new URL(`/wiki/api/v2/spaces/${encodeURIComponent(spaceId)}`, base),
+        {
+          headers: {
+            Authorization: `Bearer ${requiredString(request.credentials, 'accessToken')}`,
+          },
+          signal: request.signal,
+        },
+      ),
       'Confluence',
     );
   },
@@ -30,16 +51,29 @@ export const confluenceConnector: KnowledgeConnector = {
   async sync(request, context) {
     const base = assertHttpUrl(requiredString(request.config, 'baseUrl'));
     const spaceId = requiredString(request.config, 'spaceId');
-    const headers = { Authorization: `Bearer ${requiredString(request.credentials, 'accessToken')}` };
+    const headers = {
+      Authorization: `Bearer ${requiredString(request.credentials, 'accessToken')}`,
+    };
     const changes: KnowledgeSourceChange[] = [];
     let nextUrl: URL | undefined = new URL(
       `/wiki/api/v2/pages?space-id=${encodeURIComponent(spaceId)}&body-format=storage&limit=100`,
       base,
     );
+    const seenPages = new Set<string>();
+    let pageCount = 0;
     while (nextUrl) {
+      pageCount += 1;
+      if (pageCount > 1000) throw new Error('Confluence pagination exceeds 1000 pages');
+      if (seenPages.has(nextUrl.toString())) {
+        throw new Error('Confluence pagination repeated a page');
+      }
+      seenPages.add(nextUrl.toString());
       const payload = (await (
         await expectOk(
-          await context.fetch(nextUrl, { headers, signal: request.signal }),
+          await safeFetch(context, nextUrl, {
+            headers,
+            signal: request.signal,
+          }),
           'Confluence',
         )
       ).json()) as {
@@ -69,8 +103,10 @@ export const confluenceConnector: KnowledgeConnector = {
           },
         });
       }
-      nextUrl = payload._links?.next ? new URL(payload._links.next, base) : undefined;
+      nextUrl = payload._links?.next
+        ? sameOriginUrl(payload._links.next, base, 'Confluence pagination URL')
+        : undefined;
     }
-    return { changes, cursor: new Date().toISOString() };
+    return { changes, cursor: new Date().toISOString(), snapshot: true };
   },
 };

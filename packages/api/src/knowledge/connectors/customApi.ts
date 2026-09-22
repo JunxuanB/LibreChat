@@ -1,4 +1,4 @@
-import { assertHttpUrl, expectOk, optionalString, requiredString } from './helpers';
+import { assertHttpUrl, expectOk, optionalString, requiredString, safeFetch } from './helpers';
 import type { KnowledgeConnector, KnowledgeSourceChange, KnowledgeSourceItem } from './types';
 
 interface CustomApiPayload {
@@ -8,7 +8,11 @@ interface CustomApiPayload {
 }
 
 function parseItem(value: Record<string, unknown>): KnowledgeSourceItem {
-  if (typeof value.id !== 'string' || typeof value.title !== 'string' || typeof value.content !== 'string') {
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.title !== 'string' ||
+    typeof value.content !== 'string'
+  ) {
     throw new Error('Custom API items require string id, title, and content fields');
   }
   return {
@@ -35,14 +39,19 @@ export const customApiConnector: KnowledgeConnector = {
     capabilities: ['incremental_sync', 'deletions'],
     fields: [
       { key: 'url', label: 'Feed URL', type: 'url', required: true },
-      { key: 'accessToken', label: 'Bearer token', type: 'password', secret: true },
+      {
+        key: 'accessToken',
+        label: 'Bearer token',
+        type: 'password',
+        secret: true,
+      },
     ],
   },
 
   async validate(request, context) {
     const url = assertHttpUrl(requiredString(request.config, 'url'));
     await expectOk(
-      await context.fetch(url, {
+      await safeFetch(context, url, {
         method: 'HEAD',
         headers: optionalString(request.credentials, 'accessToken')
           ? { Authorization: `Bearer ${request.credentials?.accessToken}` }
@@ -60,7 +69,7 @@ export const customApiConnector: KnowledgeConnector = {
     }
     const token = optionalString(request.credentials, 'accessToken');
     const response = await expectOk(
-      await context.fetch(url, {
+      await safeFetch(context, url, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: request.signal,
       }),
