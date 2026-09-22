@@ -24,6 +24,7 @@ const accessRoleSchema: Schema<IAccessRole> = new Schema<IAccessRole>(
         'mcpServer',
         'remoteAgent',
         'skill',
+        'knowledgeBase',
         'sharedLink',
       ],
       required: true,

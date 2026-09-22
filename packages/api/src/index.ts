@@ -76,6 +76,8 @@ export * from './actions';
 export * from './prompts';
 /* Projects */
 export * from './projects';
+/* Knowledge bases */
+export * from './knowledge';
 /* Conversations */
 export * from './conversations';
 /* Skills */

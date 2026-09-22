@@ -2166,6 +2166,17 @@ export const interfaceSchema = z
         }),
       ])
       .optional(),
+    knowledgeBases: z
+      .union([
+        z.boolean(),
+        z.object({
+          use: z.boolean().optional(),
+          create: z.boolean().optional(),
+          share: z.boolean().optional(),
+          public: z.boolean().optional(),
+        }),
+      ])
+      .optional(),
     sharedLinks: z
       .union([
         z.boolean(),

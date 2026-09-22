@@ -65,6 +65,17 @@ export type ProjectListResponse = {
 
 export type ProjectData = InfiniteData<ProjectListResponse>;
 
+export type KnowledgeBaseListParams = {
+  cursor?: string;
+  limit?: number;
+  search?: string;
+};
+
+export type KnowledgeDocumentListParams = {
+  cursor?: string;
+  limit?: number;
+};
+
 /* Messages */
 export type MessagesListParams = {
   cursor?: string | null;

@@ -72,6 +72,12 @@ export interface IRole extends Document {
       [Permissions.SHARE]?: boolean;
       [Permissions.SHARE_PUBLIC]?: boolean;
     };
+    [PermissionTypes.KNOWLEDGE_BASES]?: {
+      [Permissions.USE]?: boolean;
+      [Permissions.CREATE]?: boolean;
+      [Permissions.SHARE]?: boolean;
+      [Permissions.SHARE_PUBLIC]?: boolean;
+    };
     [PermissionTypes.SHARED_LINKS]?: {
       [Permissions.CREATE]?: boolean;
       [Permissions.SHARE]?: boolean;

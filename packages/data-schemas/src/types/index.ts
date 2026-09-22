@@ -10,6 +10,7 @@ export * from './refreshTokenBridge';
 export * from './openidRefreshFlight';
 export * from './convo';
 export * from './chatProject';
+export * from './knowledgeBase';
 export * from './session';
 export * from './balance';
 export * from './banner';

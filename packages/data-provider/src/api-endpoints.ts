@@ -171,6 +171,17 @@ export const projectById = (id: string) => `${projectsRoot}/${encodeURIComponent
 export const projectConversation = (conversationId: string) =>
   `${projectsRoot}/conversations/${encodeURIComponent(conversationId)}`;
 
+export const knowledgeBasesRoot = `${BASE_URL}/api/knowledge-bases`;
+export const knowledgeBases = (params: q.KnowledgeBaseListParams = {}) =>
+  `${knowledgeBasesRoot}${buildQuery(params)}`;
+export const knowledgeBaseById = (id: string) => `${knowledgeBasesRoot}/${encodeURIComponent(id)}`;
+export const knowledgeDocuments = (
+  knowledgeBaseId: string,
+  params: q.KnowledgeDocumentListParams = {},
+) => `${knowledgeBaseById(knowledgeBaseId)}/documents${buildQuery(params)}`;
+export const knowledgeDocumentById = (knowledgeBaseId: string, documentId: string) =>
+  `${knowledgeDocuments(knowledgeBaseId)}/${encodeURIComponent(documentId)}`;
+
 export const search = (q: string, cursor?: string | null) =>
   `${BASE_URL}/api/search?q=${q}${cursor ? `&cursor=${cursor}` : ''}`;
 

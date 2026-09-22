@@ -49,6 +49,7 @@ export enum ResourceType {
   MCPSERVER = 'mcpServer',
   REMOTE_AGENT = 'remoteAgent',
   SKILL = 'skill',
+  KNOWLEDGE_BASE = 'knowledgeBase',
   SHARED_LINK = 'sharedLink',
 }
 
@@ -90,6 +91,9 @@ export enum AccessRoleIds {
   SKILL_VIEWER = 'skill_viewer',
   SKILL_EDITOR = 'skill_editor',
   SKILL_OWNER = 'skill_owner',
+  KNOWLEDGE_BASE_VIEWER = 'knowledgeBase_viewer',
+  KNOWLEDGE_BASE_EDITOR = 'knowledgeBase_editor',
+  KNOWLEDGE_BASE_OWNER = 'knowledgeBase_owner',
   SHARED_LINK_VIEWER = 'sharedLink_viewer',
   SHARED_LINK_OWNER = 'sharedLink_owner',
 }
@@ -335,6 +339,7 @@ export function accessRoleToPermBits(accessRoleId: string): number {
     case AccessRoleIds.MCPSERVER_VIEWER:
     case AccessRoleIds.REMOTE_AGENT_VIEWER:
     case AccessRoleIds.SKILL_VIEWER:
+    case AccessRoleIds.KNOWLEDGE_BASE_VIEWER:
     case AccessRoleIds.SHARED_LINK_VIEWER:
       return PermissionBits.VIEW;
     case AccessRoleIds.AGENT_EDITOR:
@@ -343,6 +348,7 @@ export function accessRoleToPermBits(accessRoleId: string): number {
     case AccessRoleIds.MCPSERVER_EDITOR:
     case AccessRoleIds.REMOTE_AGENT_EDITOR:
     case AccessRoleIds.SKILL_EDITOR:
+    case AccessRoleIds.KNOWLEDGE_BASE_EDITOR:
       return PermissionBits.VIEW | PermissionBits.EDIT;
     case AccessRoleIds.AGENT_OWNER:
     case AccessRoleIds.CODE_ENVIRONMENT_OWNER:
@@ -350,6 +356,7 @@ export function accessRoleToPermBits(accessRoleId: string): number {
     case AccessRoleIds.MCPSERVER_OWNER:
     case AccessRoleIds.REMOTE_AGENT_OWNER:
     case AccessRoleIds.SKILL_OWNER:
+    case AccessRoleIds.KNOWLEDGE_BASE_OWNER:
     case AccessRoleIds.SHARED_LINK_OWNER:
       return (
         PermissionBits.VIEW | PermissionBits.EDIT | PermissionBits.DELETE | PermissionBits.SHARE

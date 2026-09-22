@@ -64,6 +64,7 @@ export enum PermissionTypes {
    * Type for Skill Permissions
    */
   SKILLS = 'SKILLS',
+  KNOWLEDGE_BASES = 'KNOWLEDGE_BASES',
   /**
    * Type for Shared Link Permissions
    */
@@ -95,6 +96,7 @@ export const PERMISSION_TYPE_INTERFACE_FIELDS: Record<PermissionTypes, string> =
   [PermissionTypes.MCP_SERVERS]: 'mcpServers',
   [PermissionTypes.REMOTE_AGENTS]: 'remoteAgents',
   [PermissionTypes.SKILLS]: 'skills',
+  [PermissionTypes.KNOWLEDGE_BASES]: 'knowledgeBases',
   [PermissionTypes.SHARED_LINKS]: 'sharedLinks',
   [PermissionTypes.SCHEDULES]: 'schedules',
 };
@@ -258,6 +260,8 @@ export const skillPermissionsSchema = z.object({
   [Permissions.SHARE_PUBLIC]: z.boolean().default(false),
 });
 export type TSkillPermissions = z.infer<typeof skillPermissionsSchema>;
+export const knowledgeBasePermissionsSchema = skillPermissionsSchema;
+export type TKnowledgeBasePermissions = z.infer<typeof knowledgeBasePermissionsSchema>;
 
 export const schedulesPermissionsSchema = z.object({
   [Permissions.USE]: z.boolean().default(true),
@@ -289,6 +293,7 @@ export const permissionsSchema = z.object({
   [PermissionTypes.MCP_SERVERS]: mcpServersPermissionsSchema,
   [PermissionTypes.REMOTE_AGENTS]: remoteAgentsPermissionsSchema,
   [PermissionTypes.SKILLS]: skillPermissionsSchema,
+  [PermissionTypes.KNOWLEDGE_BASES]: knowledgeBasePermissionsSchema,
   [PermissionTypes.SHARED_LINKS]: sharedLinksPermissionsSchema,
   [PermissionTypes.SCHEDULES]: schedulesPermissionsSchema,
 });

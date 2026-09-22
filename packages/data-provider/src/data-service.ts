@@ -1044,6 +1044,60 @@ export function assignConversationToProject(
   });
 }
 
+export function listKnowledgeBases(
+  params?: q.KnowledgeBaseListParams,
+): Promise<t.TKnowledgeBaseListResponse> {
+  return request.get(endpoints.knowledgeBases(params ?? {}));
+}
+
+export function createKnowledgeBase(payload: t.TCreateKnowledgeBase): Promise<t.TKnowledgeBase> {
+  return request.post(endpoints.knowledgeBases(), payload);
+}
+
+export function getKnowledgeBase(id: string): Promise<t.TKnowledgeBase> {
+  return request.get(endpoints.knowledgeBaseById(id));
+}
+
+export function updateKnowledgeBase(
+  id: string,
+  payload: t.TUpdateKnowledgeBase,
+): Promise<t.TKnowledgeBase> {
+  return request.patch(endpoints.knowledgeBaseById(id), payload);
+}
+
+export function deleteKnowledgeBase(id: string): Promise<{ deleted: boolean }> {
+  return request.delete(endpoints.knowledgeBaseById(id));
+}
+
+export function listKnowledgeDocuments(
+  knowledgeBaseId: string,
+  params?: q.KnowledgeDocumentListParams,
+): Promise<t.TKnowledgeDocumentListResponse> {
+  return request.get(endpoints.knowledgeDocuments(knowledgeBaseId, params ?? {}));
+}
+
+export function createKnowledgeDocument(
+  knowledgeBaseId: string,
+  payload: t.TCreateKnowledgeDocument,
+): Promise<t.TKnowledgeDocument> {
+  return request.post(endpoints.knowledgeDocuments(knowledgeBaseId), payload);
+}
+
+export function updateKnowledgeDocument(
+  knowledgeBaseId: string,
+  documentId: string,
+  payload: t.TUpdateKnowledgeDocument,
+): Promise<t.TKnowledgeDocument> {
+  return request.patch(endpoints.knowledgeDocumentById(knowledgeBaseId, documentId), payload);
+}
+
+export function deleteKnowledgeDocument(
+  knowledgeBaseId: string,
+  documentId: string,
+): Promise<{ deleted: boolean }> {
+  return request.delete(endpoints.knowledgeDocumentById(knowledgeBaseId, documentId));
+}
+
 export function pinConversation(
   payload: t.TPinConversationRequest,
 ): Promise<t.TPinConversationResponse> {

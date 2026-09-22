@@ -88,6 +88,11 @@ import {
   type ParentSubagentThreadRecord,
 } from './conversation';
 import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
+import {
+  createKnowledgeBaseMethods,
+  type KnowledgeBaseMethods,
+  type KnowledgeBaseDeps,
+} from './knowledgeBase';
 export type {
   AssignConversationToProjectResult,
   ChatProjectSortBy,
@@ -257,6 +262,7 @@ export type AllMethods = UserMethods &
   MessageMethods &
   ConversationMethods &
   ChatProjectMethods &
+  KnowledgeBaseMethods &
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
@@ -440,6 +446,7 @@ export function createMethods(
     getSoleOwnedResourceIds: aclEntryMethods.getSoleOwnedResourceIds,
   };
   const skillMethods = createSkillMethods(mongoose, skillDeps);
+  const knowledgeBaseDeps: KnowledgeBaseDeps = { removeAllPermissions };
 
   // Tier 1: action methods (created as variable for agent dependency)
   const actionMethods = createActionMethods(mongoose);
@@ -489,6 +496,7 @@ export function createMethods(
     ...messageMethods,
     ...conversationMethods,
     ...createChatProjectMethods(mongoose),
+    ...createKnowledgeBaseMethods(mongoose, knowledgeBaseDeps),
     /* Tier 3 */
     ...txMethods,
     ...transactionMethods,
@@ -553,6 +561,7 @@ export type {
   ConversationMethods,
   AgentEventActorReconciliationStorageMetrics,
   ChatProjectMethods,
+  KnowledgeBaseMethods,
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,

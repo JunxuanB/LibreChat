@@ -91,6 +91,9 @@ export enum QueryKeys {
   toolFavorites = 'toolFavorites',
   /* Per-user skill active/inactive overrides */
   skillStates = 'skillStates',
+  knowledgeBases = 'knowledgeBases',
+  knowledgeBase = 'knowledgeBase',
+  knowledgeDocuments = 'knowledgeDocuments',
   /* General user favorites */
   favorites = 'favorites',
   /* Scheduled chats */
