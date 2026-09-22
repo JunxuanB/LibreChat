@@ -11,7 +11,9 @@ export const knowledgeSourceTypeSchema = z.enum([
   'github',
   'website',
   'postgresql',
-  'custom',
+  'custom_api',
+  'mcp',
+  'external_index',
 ]);
 
 export const createKnowledgeBaseSchema = z.object({
@@ -42,6 +44,7 @@ export const updateKnowledgeDocumentSchema = z.object({
 
 export type KnowledgeDocumentStatus = z.infer<typeof knowledgeDocumentStatusSchema>;
 export type KnowledgeSourceType = z.infer<typeof knowledgeSourceTypeSchema>;
+export type KnowledgeConnectorType = Exclude<KnowledgeSourceType, 'upload'>;
 export type TCreateKnowledgeBase = z.infer<typeof createKnowledgeBaseSchema>;
 export type TUpdateKnowledgeBase = z.infer<typeof updateKnowledgeBaseSchema>;
 export type TCreateKnowledgeDocument = z.infer<typeof createKnowledgeDocumentSchema>;
@@ -122,7 +125,7 @@ export type TKnowledgeSource = {
 };
 
 export type TKnowledgeConnector = {
-  type: KnowledgeSourceType;
+  type: KnowledgeConnectorType;
   name: string;
   description: string;
   category: string;

@@ -26,4 +26,8 @@ export class KnowledgeConnectorRegistry {
   manifests(): KnowledgeConnectorManifest[] {
     return [...this.connectors.values()].map(({ manifest }) => manifest);
   }
+
+  list(): KnowledgeConnectorManifest[] {
+    return this.manifests();
+  }
 }

@@ -40,6 +40,7 @@ export const githubConnector: KnowledgeConnector = {
       { key: 'repository', label: 'Repository', type: 'text', required: true },
       { key: 'ref', label: 'Branch or tag', type: 'text', placeholder: 'HEAD' },
       { key: 'path', label: 'Path prefix', type: 'text' },
+      { key: 'maxFiles', label: 'Maximum files', type: 'number', placeholder: '250' },
       {
         key: 'accessToken',
         label: 'Access token',

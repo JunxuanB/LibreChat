@@ -1,5 +1,9 @@
 const express = require('express');
-const { createKnowledgeHandlers, createKnowledgeSourceHandlers } = require('@librechat/api');
+const {
+  createDefaultKnowledgeConnectorRegistry,
+  createKnowledgeHandlers,
+  createKnowledgeSourceHandlers,
+} = require('@librechat/api');
 const { PermissionBits, ResourceType } = require('librechat-data-provider');
 const { requireJwtAuth, canAccessResource } = require('~/server/middleware');
 const {
@@ -25,11 +29,11 @@ const handlers = createKnowledgeHandlers({
   grantPermission,
 });
 const sourceHandlers = createKnowledgeSourceHandlers({
+  connectorRegistry: createDefaultKnowledgeConnectorRegistry(),
   listKnowledgeSources: db.listKnowledgeSources,
   createKnowledgeSource: db.createKnowledgeSource,
   updateKnowledgeSource: db.updateKnowledgeSource,
   deleteKnowledgeSource: db.deleteKnowledgeSource,
-  // Follow-up connector registry wiring: connectorRegistry: createDefaultKnowledgeConnectorRegistry()
 });
 
 const canAccess = (requiredPermission) =>
