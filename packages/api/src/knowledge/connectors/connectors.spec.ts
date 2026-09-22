@@ -1,6 +1,7 @@
 import {
   customApiConnector,
   createDefaultKnowledgeConnectorRegistry,
+  externalIndexConnector,
   googleDriveConnector,
   postgresqlConnector,
   websiteConnector,
@@ -122,6 +123,64 @@ describe('knowledge connectors', () => {
       ),
     ).rejects.toThrow('Authenticated connector requests must not redirect to another origin');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('external index validation falls back when HEAD is unsupported', async () => {
+    const fetch = jest
+      .fn()
+      .mockResolvedValueOnce(response('', { status: 405 }))
+      .mockResolvedValueOnce(response(JSON.stringify({ results: [] })));
+
+    await externalIndexConnector.validate(
+      { config: { url: 'https://search.example/query' } },
+      { fetch: fetch as typeof globalThis.fetch, assertSafeUrl },
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((fetch.mock.calls as unknown[][])[1]?.[1]).toMatchObject({ method: 'POST' });
+  });
+
+  test('external index rejects private redirect destinations', async () => {
+    const fetch = jest.fn(async () =>
+      response('', { status: 307, headers: { location: 'http://127.0.0.1/search' } }),
+    );
+
+    await expect(
+      externalIndexConnector.query?.(
+        { query: 'test', config: { url: 'https://search.example/query' } },
+        { fetch: fetch as typeof globalThis.fetch, assertSafeUrl },
+      ),
+    ).rejects.toThrow('redirect URL must not target a local or private address');
+  });
+
+  test('external index bounds response bytes and result count', async () => {
+    const oversized = jest.fn(async () =>
+      response('{}', { headers: { 'content-length': String(2 * 1024 * 1024 + 1) } }),
+    );
+    await expect(
+      externalIndexConnector.query?.(
+        { query: 'test', config: { url: 'https://search.example/query' } },
+        { fetch: oversized as typeof globalThis.fetch, assertSafeUrl },
+      ),
+    ).rejects.toThrow('byte limit');
+
+    const tooMany = jest.fn(async () =>
+      response(
+        JSON.stringify({
+          results: Array.from({ length: 51 }, (_, id) => ({
+            id: String(id),
+            title: `Result ${id}`,
+            content: 'content',
+          })),
+        }),
+      ),
+    );
+    await expect(
+      externalIndexConnector.query?.(
+        { query: 'test', config: { url: 'https://search.example/query' } },
+        { fetch: tooMany as typeof globalThis.fetch, assertSafeUrl },
+      ),
+    ).rejects.toThrow('more than 50 results');
   });
 
   test('preserves binary Drive files instead of decoding them as text', async () => {

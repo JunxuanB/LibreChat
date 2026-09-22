@@ -9,6 +9,17 @@ interface FileSource {
   relevance?: number;
   pageRelevance?: Record<string, number>;
   metadata?: any;
+  canonicalUrl?: string;
+}
+
+function safeExternalUrl(value?: string): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -52,25 +63,25 @@ export function useSearchResultsByTurn(attachments?: TAttachment[]) {
           organic: [], // Agent file search doesn't have organic web results
           topStories: [], // No top stories for file search
           images: [], // No images for file search
-          references: sources.map(
-            (source) =>
-              ({
-                title: source.fileName || localize('com_file_unknown'),
-                link: `#file-${source.fileId}`, // Create a pseudo-link for file references
-                attribution: source.fileName || localize('com_file_unknown'), // Show filename in inline display
-                snippet:
-                  source.pages && source.pages.length > 0
-                    ? localize('com_file_pages', { pages: source.pages.join(', ') })
-                    : '', // Only page numbers for hover
-                type: 'file' as const,
-                // Store additional agent-specific data as properties on the reference
-                fileId: source.fileId,
-                fileName: source.fileName,
-                pages: source.pages || [],
-                pageRelevance: source.pageRelevance || {},
-                metadata: source.metadata,
-              }) as any,
-          ),
+          references: sources.map((source) => {
+            const externalUrl = safeExternalUrl(source.canonicalUrl);
+            return {
+              title: source.fileName || localize('com_file_unknown'),
+              link: externalUrl ?? `#file-${source.fileId}`,
+              attribution: source.fileName || localize('com_file_unknown'), // Show filename in inline display
+              snippet:
+                source.pages && source.pages.length > 0
+                  ? localize('com_file_pages', { pages: source.pages.join(', ') })
+                  : '', // Only page numbers for hover
+              type: externalUrl ? ('link' as const) : ('file' as const),
+              // Store additional agent-specific data as properties on the reference
+              fileId: source.fileId,
+              fileName: source.fileName,
+              pages: source.pages || [],
+              pageRelevance: source.pageRelevance || {},
+              metadata: source.metadata,
+            } as any;
+          }),
         };
 
         turnMap[agentFileSearchTurn.toString()] = agentSearchData;

@@ -417,7 +417,7 @@ const loadTools = async ({
       continue;
     } else if (tool === Tools.file_search) {
       requestedTools[tool] = async () => {
-        const { files, toolContext } = await primeSearchFiles({
+        const { files, toolContext, knowledgeBaseIds } = await primeSearchFiles({
           ...options,
           agentId: agent?.id,
           knowledgeRetrieval,
@@ -450,6 +450,10 @@ const loadTools = async ({
           files,
           entity_id: agent?.id,
           fileCitations,
+          knowledgeBaseIds,
+          knowledgeRetrieval,
+          userRole: options.req?.user?.role,
+          tenantId: options.req?.user?.tenantId,
         });
       };
       continue;

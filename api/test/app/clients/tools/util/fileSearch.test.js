@@ -209,6 +209,79 @@ describe('fileSearch.js - tuple return validation', () => {
   });
 
   describe('success cases should return tuple with artifact object', () => {
+    it('supports an external-only knowledge base without a RAG token or files', async () => {
+      generateShortLivedToken.mockReturnValue(null);
+      const knowledgeRetrieval = {
+        queryExternalKnowledge: jest.fn(async () => [
+          [
+            {
+              page_content: 'External answer',
+              metadata: { file_id: 'external:source-1:doc-1', source: 'Search result' },
+            },
+            0.05,
+          ],
+        ]),
+      };
+      const fileSearchTool = await createFileSearchTool({
+        userId: 'user-1',
+        userRole: 'USER',
+        tenantId: 'tenant-1',
+        files: [],
+        knowledgeBaseIds: ['kb-1'],
+        knowledgeRetrieval,
+      });
+
+      const [content, artifact] = await fileSearchTool.func({ query: 'answer' });
+
+      expect(content).toContain('External answer');
+      expect(artifact.file_search.sources[0]).toMatchObject({
+        fileId: 'external:source-1:doc-1',
+        fileName: 'Search result',
+      });
+      expect(generateShortLivedToken).not.toHaveBeenCalled();
+      expect(knowledgeRetrieval.queryExternalKnowledge).toHaveBeenCalledWith(
+        expect.objectContaining({ knowledgeBaseIds: ['kb-1'], tenantId: 'tenant-1' }),
+      );
+    });
+
+    it('ranks mixed vector and live-index results together', async () => {
+      generateShortLivedToken.mockReturnValue('mock-jwt-token');
+      axios.post.mockResolvedValue({
+        data: [[{ page_content: 'Vector answer', metadata: { file_id: 'file-1' } }, 0.3]],
+      });
+      const knowledgeRetrieval = {
+        queryExternalKnowledge: jest.fn(async () => [
+          [
+            {
+              page_content: 'Live answer',
+              metadata: { file_id: 'external:source-1:doc-1', source: 'Live result' },
+            },
+            0.1,
+          ],
+        ]),
+      };
+      const fileSearchTool = await createFileSearchTool({
+        userId: 'user-1',
+        files: [
+          {
+            file_id: 'file-1',
+            filename: 'vector.txt',
+            knowledge_base_id: 'kb-1',
+            fromKnowledgeBase: true,
+          },
+        ],
+        knowledgeBaseIds: ['kb-1'],
+        knowledgeRetrieval,
+      });
+
+      const [, artifact] = await fileSearchTool.func({ query: 'answer' });
+
+      expect(artifact.file_search.sources.map((item) => item.fileName)).toEqual([
+        'Live result',
+        'vector.txt',
+      ]);
+    });
+
     it('queries knowledge-base files in their vector namespace', async () => {
       generateShortLivedToken.mockReturnValue('mock-jwt-token');
       axios.post.mockResolvedValue({

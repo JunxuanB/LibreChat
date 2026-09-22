@@ -1,6 +1,7 @@
 const { PermissionBits, ResourceType } = require('librechat-data-provider');
 const db = require('~/models');
 const { findAccessibleResources } = require('~/server/services/PermissionService');
+const { queryExternalKnowledge } = require('./externalRetrieval');
 
 const knowledgeRetrieval = {
   async authorizeKnowledgeBases({ knowledgeBaseIds, userId, role }) {
@@ -14,6 +15,7 @@ const knowledgeRetrieval = {
     return accessible.map(String).filter((id) => requested.has(id));
   },
   getKnowledgeDocuments: db.getKnowledgeDocuments,
+  queryExternalKnowledge,
 };
 
 module.exports = { knowledgeRetrieval };

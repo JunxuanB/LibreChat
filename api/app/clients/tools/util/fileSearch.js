@@ -37,7 +37,8 @@ const fileSearchJsonSchema = {
  * @param {import('@librechat/api').KnowledgeRetrievalDependencies} [options.knowledgeRetrieval]
  * @returns {Promise<{
  *   files: Array<{ file_id: string; filename: string; fromAgent: boolean }>,
- *   toolContext: string
+ *   toolContext: string,
+ *   knowledgeBaseIds: string[]
  * }>}
  */
 const primeFiles = async (options) => {
@@ -172,14 +173,21 @@ const createFileSearchTool = async ({
   entity_id,
   fileCitations = false,
   appConfig,
+  knowledgeBaseIds = [],
+  knowledgeRetrieval,
+  userRole,
+  tenantId,
 }) => {
   return tool(
     async ({ query }) => {
-      if (files.length === 0) {
+      const hasExternalKnowledge =
+        knowledgeBaseIds.length > 0 &&
+        typeof knowledgeRetrieval?.queryExternalKnowledge === 'function';
+      if (files.length === 0 && !hasExternalKnowledge) {
         return ['No files to search. Instruct the user to add files for the search.', undefined];
       }
-      const jwtToken = generateShortLivedToken(userId);
-      if (!jwtToken) {
+      const jwtToken = files.length > 0 ? generateShortLivedToken(userId) : undefined;
+      if (files.length > 0 && !jwtToken) {
         return ['There was an error authenticating the file search request.', undefined];
       }
 
@@ -245,6 +253,27 @@ const createFileSearchTool = async ({
               logAxiosError({
                 message: 'Error encountered in `file_search` while querying knowledge bases',
                 error,
+              });
+              return null;
+            }),
+        );
+      }
+
+      if (hasExternalKnowledge) {
+        queryPromises.push(
+          knowledgeRetrieval
+            .queryExternalKnowledge({
+              knowledgeBaseIds,
+              userId,
+              role: userRole,
+              tenantId,
+              query,
+              limit: 10,
+            })
+            .then((data) => ({ data }))
+            .catch((error) => {
+              logger.warn('[file_search] External knowledge query failed', {
+                error: error instanceof Error ? error.message : 'External query failed',
               });
               return null;
             }),

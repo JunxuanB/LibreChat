@@ -69,6 +69,23 @@ export type KnowledgeSourceValue = IKnowledgeSource & {
     hasSecrets: boolean;
   };
 };
+export type KnowledgeRetrievalSource = IKnowledgeSource & {
+  _id: Types.ObjectId;
+  credentials?: Record<string, string>;
+};
+
+const scopeValue = (value: unknown) => (value == null ? null : String(value));
+
+export function isKnowledgeConnectionInSourceScope(
+  source: Pick<IKnowledgeSource, 'owner' | 'tenantId'>,
+  connection: Pick<IKnowledgeConnectionDocument, 'owner' | 'tenantId'> | undefined,
+): boolean {
+  return (
+    connection != null &&
+    scopeValue(connection.owner) === scopeValue(source.owner) &&
+    scopeValue(connection.tenantId) === scopeValue(source.tenantId)
+  );
+}
 
 export type KnowledgeDocumentSourceKey = {
   knowledgeBaseId: string;
@@ -170,6 +187,7 @@ export interface KnowledgeBaseMethods {
   getKnowledgeDocuments(input: {
     knowledgeBaseIds: string[];
   }): Promise<KnowledgeRetrievalDocument[]>;
+  getKnowledgeSourcesForRetrieval(knowledgeBaseIds: string[]): Promise<KnowledgeRetrievalSource[]>;
 }
 
 const normalizeLimit = (limit?: number) =>
@@ -528,6 +546,50 @@ export function createKnowledgeBaseMethods(
       .limit(Math.min(Math.max(Math.floor(limit), 1), 100))
       .lean<KnowledgeSourceValue[]>();
   }
+  async function getKnowledgeSourcesForRetrieval(
+    knowledgeBaseIds: string[],
+  ): Promise<KnowledgeRetrievalSource[]> {
+    const ids = knowledgeBaseIds
+      .filter(isValidObjectIdString)
+      .map((id) => new mongoose.Types.ObjectId(id));
+    if (ids.length === 0) return [];
+    const sources = await KnowledgeSource.find({
+      knowledgeBaseId: { $in: ids },
+      type: 'external_index',
+      syncStatus: 'ready',
+    })
+      .limit(20)
+      .lean<Array<IKnowledgeSource & { _id: Types.ObjectId }>>();
+    const connectionIds = sources.flatMap((source) =>
+      source.connectionId ? [source.connectionId] : [],
+    );
+    const connections = await KnowledgeConnection.find({ _id: { $in: connectionIds } })
+      .select('+encryptedSecrets')
+      .lean<Array<IKnowledgeConnectionDocument & { _id: Types.ObjectId }>>();
+    const connectionsById = new Map(
+      connections.map((connection) => [String(connection._id), connection]),
+    );
+
+    return Promise.all(
+      sources.map(async (source) => {
+        const connection = source.connectionId
+          ? connectionsById.get(String(source.connectionId))
+          : undefined;
+        return {
+          ...source,
+          ...(isKnowledgeConnectionInSourceScope(source, connection) && connection?.encryptedSecrets
+            ? {
+                credentials: JSON.parse(await decryptV2(connection.encryptedSecrets)) as Record<
+                  string,
+                  string
+                >,
+              }
+            : {}),
+        };
+      }),
+    );
+  }
+
   async function updateKnowledgeSourceSyncState(
     sourceId: string,
     state: {
@@ -710,5 +772,6 @@ export function createKnowledgeBaseMethods(
     findKnowledgeDocumentsBySourceId,
     findKnowledgeDocumentsByBaseIds,
     getKnowledgeDocuments,
+    getKnowledgeSourcesForRetrieval,
   };
 }

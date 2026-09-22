@@ -1,5 +1,20 @@
-import { assertHttpUrl, expectOk, optionalString, requiredString, safeFetch } from './helpers';
+import {
+  assertHttpUrl,
+  expectOk,
+  optionalString,
+  readResponseContent,
+  requiredString,
+  safeFetch,
+} from './helpers';
 import type { KnowledgeConnector, KnowledgeSourceItem } from './types';
+
+export const MAX_EXTERNAL_INDEX_RESPONSE_BYTES: number = 2 * 1024 * 1024;
+export const MAX_EXTERNAL_INDEX_RESULTS: number = 50;
+
+const requestHeaders = (token?: string) => ({
+  'Content-Type': 'application/json',
+  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+});
 
 export const externalIndexConnector: KnowledgeConnector = {
   manifest: {
@@ -22,14 +37,20 @@ export const externalIndexConnector: KnowledgeConnector = {
   async validate(request, context) {
     const url = assertHttpUrl(requiredString(request.config, 'url'));
     const token = optionalString(request.credentials, 'accessToken');
-    await expectOk(
-      await safeFetch(context, url, {
-        method: 'HEAD',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    let response = await safeFetch(context, url, {
+      method: 'HEAD',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      signal: request.signal,
+    });
+    if (response.status === 405 || response.status === 501) {
+      response = await safeFetch(context, url, {
+        method: 'POST',
+        headers: requestHeaders(token),
+        body: JSON.stringify({ query: '', limit: 1 }),
         signal: request.signal,
-      }),
-      'External index',
-    );
+      });
+    }
+    await expectOk(response, 'External index');
   },
 
   async sync() {
@@ -42,10 +63,7 @@ export const externalIndexConnector: KnowledgeConnector = {
     const response = await expectOk(
       await safeFetch(context, url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: requestHeaders(token),
         body: JSON.stringify({
           query: request.query,
           limit: request.limit ?? 10,
@@ -54,10 +72,20 @@ export const externalIndexConnector: KnowledgeConnector = {
       }),
       'External index',
     );
-    const payload = (await response.json()) as {
+    const { content = '' } = await readResponseContent(
+      response,
+      'application/json',
+      MAX_EXTERNAL_INDEX_RESPONSE_BYTES,
+    );
+    const payload = JSON.parse(content) as {
       results?: Array<Record<string, unknown>>;
     };
-    return (payload.results ?? []).map<KnowledgeSourceItem>((result) => {
+    if (!Array.isArray(payload.results)) return [];
+    if (payload.results.length > MAX_EXTERNAL_INDEX_RESULTS) {
+      throw new Error(`External index returned more than ${MAX_EXTERNAL_INDEX_RESULTS} results`);
+    }
+    const limit = Math.min(Math.max(request.limit ?? 10, 1), MAX_EXTERNAL_INDEX_RESULTS);
+    return payload.results.slice(0, limit).map<KnowledgeSourceItem>((result) => {
       if (
         typeof result.id !== 'string' ||
         typeof result.title !== 'string' ||
@@ -66,8 +94,8 @@ export const externalIndexConnector: KnowledgeConnector = {
         throw new Error('External index results require string id, title, and content fields');
       }
       return {
-        externalId: result.id,
-        title: result.title,
+        externalId: result.id.slice(0, 512),
+        title: result.title.slice(0, 500),
         content: result.content,
         canonicalUrl: typeof result.url === 'string' ? result.url : undefined,
         metadata: result,
