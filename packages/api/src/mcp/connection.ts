@@ -1000,6 +1000,8 @@ interface MCPConnectionParams {
 
 /** Result of an MCP `tools/list` request: one page of tools plus an optional pagination cursor. */
 type MCPListToolsResult = Awaited<ReturnType<Client['listTools']>>;
+type MCPListResourcesResult = Awaited<ReturnType<Client['listResources']>>;
+type MCPReadResourceResult = Awaited<ReturnType<Client['readResource']>>;
 
 export interface MCPToolsSnapshot {
   tools: MCPListToolsResult['tools'];
@@ -2457,12 +2459,25 @@ export class MCPConnection extends EventEmitter {
 
   async fetchResources(): Promise<t.MCPResource[]> {
     try {
-      const { resources } = await this.client.listResources();
+      const { resources } = await this.listResources();
       return resources;
     } catch (error) {
       this.emitError(error, 'Failed to fetch resources');
       return [];
     }
+  }
+
+  /** Lists one resource page and preserves protocol/authentication errors for callers. */
+  async listResources(cursor?: string, signal?: AbortSignal): Promise<MCPListResourcesResult> {
+    return this.client.listResources(
+      cursor ? { cursor } : undefined,
+      signal ? { signal } : undefined,
+    );
+  }
+
+  /** Reads a resource and preserves protocol/authentication errors for callers. */
+  async readResource(uri: string, signal?: AbortSignal): Promise<MCPReadResourceResult> {
+    return this.client.readResource({ uri }, signal ? { signal } : undefined);
   }
 
   /**

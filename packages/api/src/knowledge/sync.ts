@@ -7,6 +7,9 @@ import type {
 export type KnowledgeSyncSource = {
   id: string;
   knowledgeBaseId: string;
+  /** Persisted owner used to rebuild connector credentials for unattended syncs. */
+  ownerId: string;
+  tenantId?: string;
   type: KnowledgeConnectorType;
   config: Record<string, unknown>;
   connectionId?: string;
@@ -38,7 +41,7 @@ export interface KnowledgeSourceSyncDependencies {
       sync: import('./connectors/types').KnowledgeConnector['sync'];
     };
   };
-  connectorContext: KnowledgeConnectorContext;
+  getConnectorContext(source: KnowledgeSyncSource): Promise<KnowledgeConnectorContext>;
   upsertDocument(key: KnowledgeSyncDocumentKey, item: KnowledgeSourceItem): Promise<void>;
   deleteDocument(key: KnowledgeSyncDocumentKey, externalId: string): Promise<void>;
   reconcileDocuments?(
@@ -102,12 +105,13 @@ export class KnowledgeSourceSyncRunner {
     let credentials: Record<string, string> | undefined;
     try {
       const connector = this.deps.connectorRegistry.get(source.type);
+      const connectorContext = await this.deps.getConnectorContext(source);
       credentials = source.connectionId
         ? ((await this.deps.loadCredentials(source.connectionId)) ?? undefined)
         : undefined;
       const request = { config: source.config, credentials, cursor: source.cursor };
 
-      await connector.validate(request, this.deps.connectorContext);
+      await connector.validate(request, connectorContext);
       const documentKey: KnowledgeSyncDocumentKey = {
         knowledgeBaseId: source.knowledgeBaseId,
         sourceId: source.id,
@@ -121,7 +125,7 @@ export class KnowledgeSourceSyncRunner {
       for (let page = 0; page < 1000; page += 1) {
         const result = await connector.sync(
           { ...request, cursor, continuation: page > 0 },
-          this.deps.connectorContext,
+          connectorContext,
         );
         snapshot ||= result.snapshot === true;
         for (const change of result.changes) {

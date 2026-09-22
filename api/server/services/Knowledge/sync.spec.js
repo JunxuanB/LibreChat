@@ -52,6 +52,7 @@ const build = ({
     embedded: true,
   }));
   const deleteVectors = jest.fn(async () => undefined);
+  const callMcp = jest.fn(async () => ({ resources: [] }));
   const service = createKnowledgeSourceSyncService({
     db: database,
     connectorRegistry,
@@ -59,9 +60,10 @@ const build = ({
     deleteVectors,
     fetch: jest.fn(),
     assertSafeUrl: jest.fn(async () => undefined),
+    callMcp,
     ...serviceOverrides,
   });
-  return { service, database, uploadVectors, deleteVectors };
+  return { service, database, uploadVectors, deleteVectors, callMcp };
 };
 
 describe('knowledge source ingestion service', () => {
@@ -183,8 +185,8 @@ describe('knowledge source ingestion service', () => {
     );
   });
 
-  it('fails MCP explicitly when no user-scoped resource client is configured', async () => {
-    const { service, database } = build({
+  it('binds MCP resource access to the persisted source owner and tenant', async () => {
+    const { service, database, callMcp } = build({
       registry: createDefaultKnowledgeConnectorRegistry(),
       sourceOverrides: {
         type: 'mcp',
@@ -193,15 +195,18 @@ describe('knowledge source ingestion service', () => {
       },
     });
 
-    await expect(service.syncKnowledgeSource('kb-1', 'source-1')).rejects.toThrow(
-      'MCP resource access is not configured',
+    await service.syncKnowledgeSource('kb-1', 'source-1');
+
+    expect(callMcp).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'user-1', tenantId: 'tenant-1' }),
+      'docs',
+      'resources/list',
+      {},
+      undefined,
     );
     expect(database.updateKnowledgeSourceSyncState).toHaveBeenLastCalledWith(
       'source-1',
-      expect.objectContaining({
-        syncStatus: 'failed',
-        syncError: 'MCP resource access is not configured',
-      }),
+      expect.objectContaining({ syncStatus: 'ready' }),
     );
   });
 });

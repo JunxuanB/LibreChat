@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
@@ -13,6 +12,7 @@ const db = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
 const { deleteVectors, uploadVectors } = require('~/server/services/Files/VectorDB/crud');
 const { createReadOnlyPostgresExecutor } = require('./postgres');
+const { callKnowledgeMcp } = require('./mcp');
 
 const MAX_CONNECTOR_FILE_BYTES = 20 * 1024 * 1024;
 
@@ -62,6 +62,7 @@ function createKnowledgeSourceSyncService(overrides = {}) {
       );
       return (await postgresExecutorPromise)(...args);
     });
+  const callMcp = overrides.callMcp ?? callKnowledgeMcp;
   const activeSources = new Map();
 
   const loadSource = async (knowledgeBaseId, sourceId) => {
@@ -71,6 +72,8 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     return {
       id: asString(source._id),
       knowledgeBaseId: asString(source.knowledgeBaseId),
+      ownerId: asString(source.owner),
+      tenantId: source.tenantId,
       type: source.type,
       config: source.config ?? {},
       connectionId: source.connectionId ? asString(source.connectionId) : undefined,
@@ -200,7 +203,13 @@ function createKnowledgeSourceSyncService(overrides = {}) {
     loadSource,
     loadCredentials: (connectionId) => database.getKnowledgeConnectionSecrets(connectionId),
     connectorRegistry: registry,
-    connectorContext: { fetch: fetchImpl, assertSafeUrl, executeReadOnlyQuery },
+    getConnectorContext: async (source) => ({
+      fetch: fetchImpl,
+      assertSafeUrl,
+      executeReadOnlyQuery,
+      callMcp: (serverName, method, params, signal) =>
+        callMcp(source, serverName, method, params, signal),
+    }),
     upsertDocument,
     deleteDocument,
     reconcileDocuments,

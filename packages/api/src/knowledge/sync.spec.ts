@@ -9,6 +9,8 @@ import {
 const source: KnowledgeSyncSource = {
   id: 'source-1',
   knowledgeBaseId: 'base-1',
+  ownerId: 'owner-1',
+  tenantId: 'tenant-1',
   connectionId: 'connection-1',
   type: 'github',
   config: { repository: 'owner/repo' },
@@ -22,10 +24,10 @@ function createHarness(connector: Pick<KnowledgeConnector, 'validate' | 'sync'>)
     loadSource: jest.fn(async () => ({ ...currentSource })),
     loadCredentials: jest.fn(async () => ({ token: 'secret' })),
     connectorRegistry: { get: jest.fn(() => connector) },
-    connectorContext: {
+    getConnectorContext: jest.fn(async () => ({
       fetch: jest.fn() as unknown as typeof fetch,
       assertSafeUrl: jest.fn(async () => undefined),
-    },
+    })),
     upsertDocument: jest.fn(async (key, item) => {
       documents.set(`${key.sourceId}:${item.externalId}`, item);
     }),
@@ -208,5 +210,19 @@ describe('KnowledgeSourceSyncRunner', () => {
     await Promise.all([first, second]);
 
     expect(connector.sync).toHaveBeenCalledTimes(1);
+  });
+
+  test('builds connector context from the persisted source identity', async () => {
+    const connector = {
+      validate: jest.fn(async () => undefined),
+      sync: jest.fn(async () => ({ changes: [] })),
+    } as Pick<KnowledgeConnector, 'validate' | 'sync'>;
+    const { runner, deps } = createHarness(connector);
+
+    await runner.run('base-1', 'source-1');
+
+    expect(deps.getConnectorContext).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'owner-1', tenantId: 'tenant-1' }),
+    );
   });
 });
