@@ -2968,4 +2968,31 @@ describe('updateInterfacePermissions - permissions', () => {
       expect(call[1][PermissionTypes.SCHEDULES]).toBeUndefined();
     }
   });
+
+  it('derives knowledge-base role permissions from explicit interface config', async () => {
+    const config = {
+      interface: {
+        knowledgeBases: { use: true, create: false, share: true, public: false },
+      },
+    };
+    const interfaceConfig = await loadDefaultInterface({
+      config,
+      configDefaults: { interface: {} } as TConfigDefaults,
+    });
+
+    await updateInterfacePermissions({
+      appConfig: { config, interfaceConfig } as unknown as AppConfig,
+      getRoleByName: mockGetRoleByName,
+      updateAccessPermissions: mockUpdateAccessPermissions,
+    });
+
+    for (const call of mockUpdateAccessPermissions.mock.calls) {
+      expect(call[1][PermissionTypes.KNOWLEDGE_BASES]).toEqual({
+        [Permissions.USE]: true,
+        [Permissions.CREATE]: false,
+        [Permissions.SHARE]: true,
+        [Permissions.SHARE_PUBLIC]: false,
+      });
+    }
+  });
 });

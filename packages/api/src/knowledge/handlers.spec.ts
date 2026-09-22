@@ -22,6 +22,7 @@ const base = {
 };
 
 const makeDeps = () => ({
+  canAccessFile: jest.fn().mockResolvedValue(true),
   createKnowledgeBase: jest.fn().mockResolvedValue(base),
   getKnowledgeBaseById: jest.fn().mockResolvedValue(base),
   listKnowledgeBases: jest.fn().mockResolvedValue({ knowledgeBases: [base], nextCursor: null }),
@@ -88,5 +89,25 @@ describe('knowledge base handlers', () => {
 
     expect(deps.deleteKnowledgeBase).toHaveBeenCalledWith('base-1');
     expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  test('rejects linking a file the caller does not own', async () => {
+    const deps = makeDeps();
+    deps.canAccessFile.mockResolvedValue(false);
+    const handlers = createKnowledgeHandlers(deps);
+    const res = makeResponse();
+
+    await handlers.createDocument(
+      {
+        params: { id: 'base-1' },
+        user: { id: 'user-1' },
+        body: { file_id: 'file-2', name: 'private.txt', source_type: 'upload' },
+      } as never,
+      res as never,
+    );
+
+    expect(deps.canAccessFile).toHaveBeenCalledWith({ fileId: 'file-2', userId: 'user-1' });
+    expect(deps.createKnowledgeDocument).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });

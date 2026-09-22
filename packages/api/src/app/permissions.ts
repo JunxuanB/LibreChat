@@ -47,6 +47,8 @@ function hasExplicitConfig(
       return interfaceConfig?.remoteAgents !== undefined;
     case PermissionTypes.SKILLS:
       return interfaceConfig?.skills !== undefined;
+    case PermissionTypes.KNOWLEDGE_BASES:
+      return interfaceConfig?.knowledgeBases !== undefined;
     case PermissionTypes.SHARED_LINKS:
       return interfaceConfig?.sharedLinks !== undefined;
     case PermissionTypes.SCHEDULES: {
@@ -194,24 +196,34 @@ export async function updateInterfacePermissions({
       typeof defaults.agents === 'boolean' ? defaults.agents : defaults.agents?.use;
     const skillsDefaultUse =
       typeof defaults.skills === 'boolean' ? defaults.skills : defaults.skills?.use;
+    const knowledgeBasesDefaultUse =
+      typeof defaults.knowledgeBases === 'boolean'
+        ? defaults.knowledgeBases
+        : defaults.knowledgeBases?.use;
     const promptsDefaultCreate =
       typeof defaults.prompts === 'object' ? defaults.prompts?.create : undefined;
     const agentsDefaultCreate =
       typeof defaults.agents === 'object' ? defaults.agents?.create : undefined;
     const skillsDefaultCreate =
       typeof defaults.skills === 'object' ? defaults.skills?.create : undefined;
+    const knowledgeBasesDefaultCreate =
+      typeof defaults.knowledgeBases === 'object' ? defaults.knowledgeBases?.create : undefined;
     const promptsDefaultShare =
       typeof defaults.prompts === 'object' ? defaults.prompts?.share : undefined;
     const agentsDefaultShare =
       typeof defaults.agents === 'object' ? defaults.agents?.share : undefined;
     const skillsDefaultShare =
       typeof defaults.skills === 'object' ? defaults.skills?.share : undefined;
+    const knowledgeBasesDefaultShare =
+      typeof defaults.knowledgeBases === 'object' ? defaults.knowledgeBases?.share : undefined;
     const promptsDefaultPublic =
       typeof defaults.prompts === 'object' ? defaults.prompts?.public : undefined;
     const agentsDefaultPublic =
       typeof defaults.agents === 'object' ? defaults.agents?.public : undefined;
     const skillsDefaultPublic =
       typeof defaults.skills === 'object' ? defaults.skills?.public : undefined;
+    const knowledgeBasesDefaultPublic =
+      typeof defaults.knowledgeBases === 'object' ? defaults.knowledgeBases?.public : undefined;
     // `schedules` is intentionally absent from the interface DEFAULTS (it is
     // experimental/default-off at runtime), so the PERMISSION defaults are stated here.
     // Runtime availability and the role permission are separate concerns: a user may hold
@@ -510,6 +522,44 @@ export async function updateInterfacePermissions({
             }
           : {}),
       },
+      ...(interfaceConfig?.knowledgeBases !== undefined
+        ? {
+            [PermissionTypes.KNOWLEDGE_BASES]: {
+        [Permissions.USE]: getPermissionValue(
+          getConfigUse(interfaceConfig.knowledgeBases),
+          defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.USE],
+          knowledgeBasesDefaultUse,
+        ),
+        ...((typeof interfaceConfig?.knowledgeBases === 'object' &&
+          'create' in interfaceConfig.knowledgeBases) ||
+        !existingPermissions?.[PermissionTypes.KNOWLEDGE_BASES]
+          ? {
+              [Permissions.CREATE]: getPermissionValue(
+                getConfigCreate(interfaceConfig.knowledgeBases),
+                defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.CREATE],
+                knowledgeBasesDefaultCreate ?? true,
+              ),
+            }
+          : {}),
+        ...((typeof interfaceConfig?.knowledgeBases === 'object' &&
+          ('share' in interfaceConfig.knowledgeBases || 'public' in interfaceConfig.knowledgeBases)) ||
+        !existingPermissions?.[PermissionTypes.KNOWLEDGE_BASES]
+          ? {
+              [Permissions.SHARE]: getPermissionValue(
+                getConfigShare(interfaceConfig.knowledgeBases),
+                defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.SHARE],
+                knowledgeBasesDefaultShare,
+              ),
+              [Permissions.SHARE_PUBLIC]: getPermissionValue(
+                getConfigPublic(interfaceConfig.knowledgeBases),
+                defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.SHARE_PUBLIC],
+                knowledgeBasesDefaultPublic,
+              ),
+            }
+          : {}),
+            },
+          }
+        : {}),
       [PermissionTypes.SHARED_LINKS]: {
         ...(typeof interfaceConfig?.sharedLinks === 'boolean' ||
         (typeof interfaceConfig?.sharedLinks === 'object' &&
@@ -661,6 +711,21 @@ export async function updateInterfacePermissions({
             getConfigPublic(loadedInterface.skills),
             defaultPerms[PermissionTypes.SKILLS]?.[Permissions.SHARE_PUBLIC],
             skillsDefaultPublic,
+          ),
+        },
+      ],
+      [
+        PermissionTypes.KNOWLEDGE_BASES,
+        {
+          [Permissions.SHARE]: getPermissionValue(
+            getConfigShare(interfaceConfig?.knowledgeBases),
+            defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.SHARE],
+            knowledgeBasesDefaultShare,
+          ),
+          [Permissions.SHARE_PUBLIC]: getPermissionValue(
+            getConfigPublic(interfaceConfig?.knowledgeBases),
+            defaultPerms[PermissionTypes.KNOWLEDGE_BASES]?.[Permissions.SHARE_PUBLIC],
+            knowledgeBasesDefaultPublic,
           ),
         },
       ],

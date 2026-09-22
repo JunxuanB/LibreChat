@@ -128,6 +128,63 @@ describe('knowledge source handlers', () => {
     expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain('encryptedSecrets');
   });
 
+  test('validates patched connector fields and rejects internal sync state', async () => {
+    const deps = createDeps();
+    deps.listKnowledgeSources.mockResolvedValue([
+      {
+        _id: { toString: () => 'source-1' },
+        knowledgeBaseId: { toString: () => 'base-1' },
+        name: 'Drive',
+        type: 'google_drive',
+        config: { folderId: 'folder-1' },
+        connection: { hasSecrets: true },
+      },
+    ]);
+    const handlers = createKnowledgeSourceHandlers(deps);
+    const res = response();
+
+    await handlers.patch(
+      {
+        params: { id: 'base-1', sourceId: 'source-1' },
+        body: { syncStatus: 'ready', config: { unknown: 'value' } },
+      } as never,
+      res as never,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(deps.updateKnowledgeSource).not.toHaveBeenCalled();
+  });
+
+  test('allows config patches to retain stored credentials', async () => {
+    const deps = createDeps();
+    const source = {
+      _id: { toString: () => 'source-1' },
+      knowledgeBaseId: { toString: () => 'base-1' },
+      name: 'Drive',
+      type: 'google_drive' as const,
+      config: { folderId: 'folder-1' },
+      connection: { hasSecrets: true },
+      syncStatus: 'idle' as const,
+    };
+    deps.listKnowledgeSources.mockResolvedValue([source]);
+    deps.updateKnowledgeSource.mockResolvedValue(source);
+    const handlers = createKnowledgeSourceHandlers(deps);
+    const res = response();
+
+    await handlers.patch(
+      {
+        params: { id: 'base-1', sourceId: 'source-1' },
+        body: { config: { folderId: 'folder-2' } },
+      } as never,
+      res as never,
+    );
+
+    expect(deps.updateKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1', {
+      config: { folderId: 'folder-2' },
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
   test('invokes the injected sync runner instead of patching status directly', async () => {
     const synced = {
       _id: { toString: () => 'source-1' },

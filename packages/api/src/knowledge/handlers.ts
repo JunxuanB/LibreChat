@@ -44,6 +44,7 @@ type KnowledgeDocumentRecord = {
 };
 
 export interface KnowledgeHandlersDeps {
+  canAccessFile(input: { fileId: string; userId: string }): Promise<boolean>;
   createKnowledgeBase(input: {
     name: string;
     description?: string;
@@ -261,6 +262,13 @@ export function createKnowledgeHandlers(deps: KnowledgeHandlersDeps): KnowledgeH
     if (!parsed.success)
       return res.status(400).json({ error: 'Validation failed', issues: parsed.error.issues });
     const { id } = req.params as { id: string };
+    const userId = req.user?.id ?? req.user?._id?.toString();
+    if (parsed.data.file_id) {
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
+      if (!(await deps.canAccessFile({ fileId: parsed.data.file_id, userId }))) {
+        return res.status(403).json({ error: 'File is unavailable' });
+      }
+    }
     const document = await deps.createKnowledgeDocument(id, parsed.data, req.user?.tenantId, req);
     return document
       ? res.status(201).json(serializeDocument(document))

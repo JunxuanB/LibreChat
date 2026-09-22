@@ -12,6 +12,7 @@ const {
   peoplePickerPermissionsSchema,
   remoteAgentsPermissionsSchema,
   skillPermissionsSchema,
+  knowledgeBasePermissionsSchema,
 } = require('librechat-data-provider');
 const { hasCapability, requireCapability } = require('~/server/middleware/roles/capabilities');
 const { updateRoleByName, getRoleByName } = require('~/models');
@@ -65,6 +66,11 @@ const permissionConfigs = {
     schema: skillPermissionsSchema,
     permissionType: PermissionTypes.SKILLS,
     errorMessage: 'Invalid skill permissions.',
+  },
+  'knowledge-bases': {
+    schema: knowledgeBasePermissionsSchema,
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    errorMessage: 'Invalid knowledge base permissions.',
   },
 };
 
@@ -200,5 +206,10 @@ router.put('/:roleName/remote-agents', manageRoles, createPermissionUpdateHandle
  * Update skill permissions for a specific role
  */
 router.put('/:roleName/skills', manageRoles, createPermissionUpdateHandler('skills'));
+router.put(
+  '/:roleName/knowledge-bases',
+  manageRoles,
+  createPermissionUpdateHandler('knowledge-bases'),
+);
 
 module.exports = router;

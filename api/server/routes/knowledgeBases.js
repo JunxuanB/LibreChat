@@ -3,8 +3,14 @@ const {
   createDefaultKnowledgeConnectorRegistry,
   createKnowledgeHandlers,
   createKnowledgeSourceHandlers,
+  generateCheckAccess,
 } = require('@librechat/api');
-const { PermissionBits, ResourceType } = require('librechat-data-provider');
+const {
+  PermissionBits,
+  PermissionTypes,
+  Permissions,
+  ResourceType,
+} = require('librechat-data-provider');
 const { requireJwtAuth, canAccessResource } = require('~/server/middleware');
 const {
   findAccessibleResources,
@@ -22,6 +28,10 @@ const {
 
 const router = express.Router();
 const handlers = createKnowledgeHandlers({
+  canAccessFile: async ({ fileId, userId }) => {
+    const files = await db.getFiles({ file_id: fileId, user: userId }, null, { _id: 1 });
+    return files.length > 0;
+  },
   createKnowledgeBase: db.createKnowledgeBase,
   getKnowledgeBaseById: db.getKnowledgeBaseById,
   listKnowledgeBases: db.listKnowledgeBases,
@@ -52,10 +62,21 @@ const canAccess = (requiredPermission) =>
     resourceIdParam: 'id',
     idResolver: db.getKnowledgeBaseById,
   });
+const checkKnowledgeUse = generateCheckAccess({
+  permissionType: PermissionTypes.KNOWLEDGE_BASES,
+  permissions: [Permissions.USE],
+  getRoleByName: db.getRoleByName,
+});
+const checkKnowledgeCreate = generateCheckAccess({
+  permissionType: PermissionTypes.KNOWLEDGE_BASES,
+  permissions: [Permissions.USE, Permissions.CREATE],
+  getRoleByName: db.getRoleByName,
+});
 
 router.use(requireJwtAuth);
+router.use(checkKnowledgeUse);
 router.get('/', handlers.list);
-router.post('/', handlers.create);
+router.post('/', checkKnowledgeCreate, handlers.create);
 router.get('/connectors', sourceHandlers.connectors);
 router.get('/:id', canAccess(PermissionBits.VIEW), handlers.get);
 router.patch('/:id', canAccess(PermissionBits.EDIT), handlers.patch);

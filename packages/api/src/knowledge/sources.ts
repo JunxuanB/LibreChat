@@ -113,6 +113,7 @@ const matchesFieldType = (type: string, value: unknown): boolean => {
 const validateSource = (
   input: SourceInput,
   registry: KnowledgeConnectorCatalog,
+  options: { hasStoredCredentials?: boolean } = {},
 ): ValidationIssue[] => {
   if (input.type === 'upload') {
     return [{ path: ['type'], message: 'Upload sources must be added through the documents API' }];
@@ -149,7 +150,11 @@ const validateSource = (
     const container = field.secret ? (input.credentials ?? {}) : input.config;
     const value = container[field.key];
     const path = [field.secret ? 'credentials' : 'config', field.key];
-    if (field.required && !hasValue(value)) {
+    if (
+      field.required &&
+      !hasValue(value) &&
+      !(field.secret && options.hasStoredCredentials && input.credentials == null)
+    ) {
       issues.push({ path, message: `${field.label} is required` });
     } else if (value != null && !matchesFieldType(field.type, value)) {
       issues.push({ path, message: `${field.label} must be a valid ${field.type}` });
@@ -200,7 +205,28 @@ export function createKnowledgeSourceHandlers(
       if (!parsed.success)
         return res.status(400).json({ error: 'Validation failed', issues: parsed.error.issues });
       const { id, sourceId } = req.params as { id: string; sourceId: string };
-      const source = await deps.updateKnowledgeSource(id, sourceId, parsed.data);
+      if (!deps.connectorRegistry) {
+        return res.status(503).json({ error: 'Knowledge connector catalog unavailable' });
+      }
+      const existing = (await deps.listKnowledgeSources(id)).find(
+        (source) => source._id.toString() === sourceId,
+      );
+      if (!existing) return res.status(404).json({ error: 'Knowledge source not found' });
+      const mergedConfig = { ...existing.config, ...parsed.data.config };
+      const issues = validateSource(
+        {
+          type: existing.type,
+          config: mergedConfig,
+          credentials: parsed.data.credentials,
+        },
+        deps.connectorRegistry,
+        { hasStoredCredentials: existing.connection != null },
+      );
+      if (issues.length > 0) return res.status(400).json({ error: 'Validation failed', issues });
+      const source = await deps.updateKnowledgeSource(id, sourceId, {
+        ...parsed.data,
+        ...(parsed.data.config === undefined ? {} : { config: mergedConfig }),
+      });
       return source
         ? res.status(200).json(serialize(source))
         : res.status(404).json({ error: 'Knowledge source not found' });

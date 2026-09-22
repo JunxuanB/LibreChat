@@ -93,6 +93,13 @@ const checkResourcePermissionAccess = (requiredPermission) =>
           resourceIdParam: 'resourceId',
           idResolver: getSkillById,
         });
+      } else if (resourceType === ResourceType.KNOWLEDGE_BASE) {
+        middleware = canAccessResource({
+          resourceType: ResourceType.KNOWLEDGE_BASE,
+          requiredPermission,
+          resourceIdParam: 'resourceId',
+          idResolver: db.getKnowledgeBaseById,
+        });
       } else if (resourceType === ResourceType.CODE_ENVIRONMENT) {
         middleware = canAccessResource({
           resourceType: ResourceType.CODE_ENVIRONMENT,

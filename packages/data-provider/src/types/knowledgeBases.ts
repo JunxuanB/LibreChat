@@ -108,10 +108,9 @@ export const createKnowledgeSourceSchema = z.object({
 export const updateKnowledgeSourceSchema = createKnowledgeSourceSchema
   .omit({ type: true })
   .partial()
-  .extend({
-    syncStatus: knowledgeSourceSyncStatusSchema.optional(),
-    syncError: z.string().max(4000).nullable().optional(),
-    lastSyncedAt: z.string().datetime().nullable().optional(),
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one mutable field is required',
   });
 export type TCreateKnowledgeSource = z.infer<typeof createKnowledgeSourceSchema>;
 export type KnowledgeSourceAccessMode = z.infer<typeof knowledgeSourceAccessModeSchema>;
