@@ -64,6 +64,7 @@ export interface IKnowledgeSource {
   syncStatus: 'idle' | 'syncing' | 'ready' | 'failed';
   syncError?: string | null;
   lastSyncedAt?: Date | null;
+  cursor?: string;
   tenantId?: string;
   createdAt?: Date;
   updatedAt?: Date;

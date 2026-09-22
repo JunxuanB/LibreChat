@@ -23,6 +23,7 @@ const knowledgeSourceSchema: Schema<IKnowledgeSourceDocument> = new Schema(
     syncStatus: { type: String, enum: ['idle', 'syncing', 'ready', 'failed'], default: 'idle' },
     syncError: { type: String, maxlength: 4000, default: null },
     lastSyncedAt: { type: Date, default: null },
+    cursor: { type: String, maxlength: 8192 },
     tenantId: { type: String, index: true },
   },
   { timestamps: true },

@@ -18,6 +18,7 @@ type SourceRecord = Omit<
   updatedAt?: Date;
   lastSyncedAt?: Date | null;
   connection?: unknown;
+  cursor?: string;
 };
 
 export interface KnowledgeConnectorCatalog {
@@ -39,6 +40,7 @@ export interface KnowledgeSourceHandlerDeps {
     input: Record<string, unknown>,
   ): Promise<SourceRecord | null>;
   deleteKnowledgeSource(baseId: string, sourceId: string): Promise<{ deleted: boolean }>;
+  syncKnowledgeSource(baseId: string, sourceId: string): Promise<SourceRecord | null>;
 }
 export interface KnowledgeSourceHandlers {
   connectors(req: ServerRequest, res: Response): Promise<Response>;
@@ -50,7 +52,7 @@ export interface KnowledgeSourceHandlers {
 }
 
 const serialize = (source: SourceRecord): TKnowledgeSource => {
-  const { connection: _connection, ...safe } = source;
+  const { connection: _connection, cursor: _cursor, ...safe } = source;
   return {
     ...safe,
     _id: source._id.toString(),
@@ -196,13 +198,15 @@ export function createKnowledgeSourceHandlers(
     },
     async sync(req, res) {
       const { id, sourceId } = req.params as { id: string; sourceId: string };
-      const source = await deps.updateKnowledgeSource(id, sourceId, {
-        syncStatus: 'syncing',
-        syncError: null,
-      });
-      return source
-        ? res.status(202).json(serialize(source))
-        : res.status(404).json({ error: 'Knowledge source not found' });
+      try {
+        const source = await deps.syncKnowledgeSource(id, sourceId);
+        return source
+          ? res.status(202).json(serialize(source))
+          : res.status(404).json({ error: 'Knowledge source not found' });
+      } catch {
+        logger.error('[knowledge-sources] Error syncing source');
+        return res.status(500).json({ error: 'Error syncing knowledge source' });
+      }
     },
   };
 }

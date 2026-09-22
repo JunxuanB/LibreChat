@@ -15,13 +15,12 @@ describe('knowledge source handlers', () => {
     createKnowledgeSource: jest.fn(),
     updateKnowledgeSource: jest.fn(),
     deleteKnowledgeSource: jest.fn(),
+    syncKnowledgeSource: jest.fn(),
   });
 
   test('returns all registered connector manifests', async () => {
     const deps = createDeps();
-    const handlers = createKnowledgeSourceHandlers({
-      ...deps,
-    });
+    const handlers = createKnowledgeSourceHandlers(deps);
     const res = response();
     await handlers.connectors({} as never, res as never);
     const body = res.json.mock.calls[0][0];
@@ -127,5 +126,34 @@ describe('knowledge source handlers', () => {
     );
     expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain('private-secret');
     expect(JSON.stringify(res.json.mock.calls[0][0])).not.toContain('encryptedSecrets');
+  });
+
+  test('invokes the injected sync runner instead of patching status directly', async () => {
+    const synced = {
+      _id: { toString: () => 'source-1' },
+      knowledgeBaseId: { toString: () => 'base-1' },
+      name: 'Docs',
+      type: 'github' as const,
+      config: {},
+      syncStatus: 'ready' as const,
+      createdAt: new Date('2026-09-22T12:00:00.000Z'),
+      updatedAt: new Date('2026-09-22T12:00:00.000Z'),
+    };
+    const syncKnowledgeSource = jest.fn(async () => synced);
+    const updateKnowledgeSource = jest.fn();
+    const handlers = createKnowledgeSourceHandlers({
+      listKnowledgeSources: jest.fn(),
+      createKnowledgeSource: jest.fn(),
+      updateKnowledgeSource,
+      deleteKnowledgeSource: jest.fn(),
+      syncKnowledgeSource,
+    });
+    const res = response();
+
+    await handlers.sync({ params: { id: 'base-1', sourceId: 'source-1' } } as never, res as never);
+
+    expect(syncKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1');
+    expect(updateKnowledgeSource).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
   });
 });
