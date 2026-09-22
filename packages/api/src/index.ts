@@ -84,6 +84,7 @@ export * from './conversations';
 export * from './schedules';
 export * from './schedules/service';
 export * from './skills';
+export * from './knowledge/connectors';
 export * from './favorites';
 /* User */
 export * from './user';
