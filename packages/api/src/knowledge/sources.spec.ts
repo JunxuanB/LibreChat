@@ -39,6 +39,46 @@ describe('knowledge source handlers', () => {
     ]);
   });
 
+  test('lists serialized sources without connection secrets or cursor state', async () => {
+    const deps = createDeps();
+    deps.listKnowledgeSources.mockResolvedValue([
+      {
+        _id: { toString: () => 'source-1' },
+        knowledgeBaseId: { toString: () => 'base-1' },
+        name: 'Docs',
+        type: 'github',
+        config: { repository: 'org/repo' },
+        syncStatus: 'ready',
+        cursor: 'private-cursor',
+        connection: { encryptedSecrets: 'ciphertext' },
+      },
+    ]);
+    const res = response();
+    await createKnowledgeSourceHandlers(deps).list(
+      { params: { id: 'base-1' } } as never,
+      res as never,
+    );
+    expect(deps.listKnowledgeSources).toHaveBeenCalledWith('base-1');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(JSON.stringify(res.json.mock.calls[0][0])).not.toMatch(/private-cursor|ciphertext/);
+  });
+
+  test('returns service unavailable when the connector catalog is absent', async () => {
+    const handlers = createKnowledgeSourceHandlers({
+      listKnowledgeSources: jest.fn(),
+      createKnowledgeSource: jest.fn(),
+      updateKnowledgeSource: jest.fn(),
+      deleteKnowledgeSource: jest.fn(),
+      syncKnowledgeSource: jest.fn(),
+    });
+    const res = response();
+    await handlers.create(
+      { params: { id: 'base-1' }, body: { name: 'Site', type: 'website', config: {} } } as never,
+      res as never,
+    );
+    expect(res.status).toHaveBeenCalledWith(503);
+  });
+
   test('rejects missing required credentials before persistence', async () => {
     const deps = createDeps();
     const handlers = createKnowledgeSourceHandlers(deps);
@@ -257,7 +297,7 @@ describe('knowledge source handlers', () => {
 
     expect(syncKnowledgeSource).toHaveBeenCalledWith('base-1', 'source-1');
     expect(updateKnowledgeSource).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.status).toHaveBeenCalledWith(202);
   });
 
   test('returns a conflict without exposing internal lease state', async () => {
@@ -293,5 +333,20 @@ describe('knowledge source handlers', () => {
     expect(syncResponse.json).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'KNOWLEDGE_SOURCE_SYNC_IN_PROGRESS' }),
     );
+  });
+
+  test.each([
+    ['missing source', null, 404],
+    ['unexpected failure', new Error('connector unavailable'), 500],
+  ])('maps sync %s', async (_label, outcome, status) => {
+    const deps = createDeps();
+    if (outcome instanceof Error) deps.syncKnowledgeSource.mockRejectedValue(outcome);
+    else deps.syncKnowledgeSource.mockResolvedValue(outcome);
+    const res = response();
+    await createKnowledgeSourceHandlers(deps).sync(
+      { params: { id: 'base-1', sourceId: 'source-1' } } as never,
+      res as never,
+    );
+    expect(res.status).toHaveBeenCalledWith(status);
   });
 });

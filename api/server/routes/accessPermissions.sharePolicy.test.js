@@ -2,6 +2,7 @@ jest.mock('~/models', () => ({
   getRoleByName: jest.fn(),
   findMCPServerByObjectId: jest.fn(),
   getSkillById: jest.fn(),
+  getKnowledgeBaseById: jest.fn(),
 }));
 
 jest.mock('~/server/middleware', () => ({
@@ -111,6 +112,18 @@ describe('Access permissions share policy', () => {
         idResolver: expect.any(Function),
       },
     },
+    {
+      label: 'knowledge base',
+      resourceType: ResourceType.KNOWLEDGE_BASE,
+      permissionType: PermissionTypes.KNOWLEDGE_BASES,
+      accessRoleId: AccessRoleIds.KNOWLEDGE_BASE_VIEWER,
+      middlewareOptions: {
+        resourceType: ResourceType.KNOWLEDGE_BASE,
+        requiredPermission: PermissionBits.SHARE,
+        resourceIdParam: 'resourceId',
+        idResolver: expect.any(Function),
+      },
+    },
   ];
 
   const createUpdatedPrincipal = (accessRoleId) => ({
@@ -205,6 +218,50 @@ describe('Access permissions share policy', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true });
     expect(updateResourcePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows sharing a knowledge base with another user when role SHARE passes', async () => {
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.KNOWLEDGE_BASES]: {
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+      },
+    });
+    const grant = createUpdatedPrincipal(AccessRoleIds.KNOWLEDGE_BASE_VIEWER);
+    const response = await request(app)
+      .put(`/api/permissions/${ResourceType.KNOWLEDGE_BASE}/${resourceId}`)
+      .send({ updated: [grant], public: false });
+
+    expect(response.status).toBe(200);
+    expect(updateResourcePermissions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ resourceType: ResourceType.KNOWLEDGE_BASE }),
+        body: expect.objectContaining({ updated: [grant] }),
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('requires SHARE_PUBLIC before publishing a knowledge base', async () => {
+    getRoleByName.mockResolvedValue({
+      permissions: {
+        [PermissionTypes.KNOWLEDGE_BASES]: {
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+      },
+    });
+    const response = await request(app)
+      .put(`/api/permissions/${ResourceType.KNOWLEDGE_BASE}/${resourceId}`)
+      .send({
+        public: true,
+        publicAccessRoleId: AccessRoleIds.KNOWLEDGE_BASE_VIEWER,
+      });
+    expect(response.status).toBe(403);
+    expect(updateResourcePermissions).not.toHaveBeenCalled();
   });
 
   it('preserves resource management capability bypass for non-public skill sharing', async () => {
