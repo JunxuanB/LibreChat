@@ -21,7 +21,7 @@ export interface KnowledgeConnector {
 export interface KnowledgeConnectorField {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'url' | 'number' | 'select' | 'boolean' | 'textarea';
+  type: 'text' | 'password' | 'url' | 'number' | 'select' | 'boolean' | 'textarea' | 'string_array';
   required?: boolean;
   secret?: boolean;
   placeholder?: string;
@@ -47,7 +47,7 @@ export interface KnowledgeSourceInput {
   type: string;
   name: string;
   config: Record<string, unknown>;
-  credentials: Record<string, string>;
+  credentials?: Record<string, string>;
 }
 
 export type KnowledgeSourceUpdateInput = Omit<KnowledgeSourceInput, 'type'>;

@@ -20,7 +20,12 @@ interface PublicSharingToggleProps {
 const accessDescriptions: Partial<
   Record<
     ResourceType,
-    'com_ui_agent' | 'com_ui_prompt' | 'com_ui_mcp_server' | 'com_ui_skill' | 'com_ui_shared_link'
+    | 'com_ui_agent'
+    | 'com_ui_prompt'
+    | 'com_ui_mcp_server'
+    | 'com_ui_skill'
+    | 'com_ui_knowledge'
+    | 'com_ui_shared_link'
   >
 > = {
   [ResourceType.AGENT]: 'com_ui_agent',
@@ -28,6 +33,7 @@ const accessDescriptions: Partial<
   [ResourceType.MCPSERVER]: 'com_ui_mcp_server',
   [ResourceType.REMOTE_AGENT]: 'com_ui_agent',
   [ResourceType.SKILL]: 'com_ui_skill',
+  [ResourceType.KNOWLEDGE_BASE]: 'com_ui_knowledge',
   [ResourceType.SHARED_LINK]: 'com_ui_shared_link',
 };
 

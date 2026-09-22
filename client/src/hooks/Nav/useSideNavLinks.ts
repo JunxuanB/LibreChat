@@ -64,6 +64,10 @@ export default function useSideNavLinks({
     permissionType: PermissionTypes.SKILLS,
     permission: Permissions.USE,
   });
+  const hasAccessToKnowledgeBases = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.USE,
+  });
   const hasAccessToBookmarks = useHasAccess({
     permissionType: PermissionTypes.BOOKMARKS,
     permission: Permissions.USE,
@@ -148,7 +152,7 @@ export default function useSideNavLinks({
       });
     }
 
-    if (isKnowledgeBasesEnabled(interfaceConfig.knowledgeBases)) {
+    if (hasAccessToKnowledgeBases && isKnowledgeBasesEnabled(interfaceConfig.knowledgeBases)) {
       links.push({
         title: 'com_ui_knowledge',
         label: '',
@@ -263,13 +267,12 @@ export default function useSideNavLinks({
     hasAccessToCreateAgents,
     hasAccessToPrompts,
     hasAccessToSkills,
+    hasAccessToKnowledgeBases,
     skillsEnabled,
     interfaceConfig,
     hasAccessToMemories,
     hasAccessToReadMemories,
     hasAccessToSchedules,
-    interfaceConfig.schedules,
-    interfaceConfig.parameters,
     endpointType,
     hasAccessToBookmarks,
     availableMCPServers,

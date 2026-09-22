@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Button,
   Input,
@@ -12,7 +12,7 @@ import {
   useToastContext,
 } from '@librechat/client';
 import { Database, FilePlus2, Pencil, Plus, RefreshCw, Share2, Trash2 } from 'lucide-react';
-import { ResourceType } from 'librechat-data-provider';
+import { PermissionTypes, Permissions, ResourceType } from 'librechat-data-provider';
 import type { TFile } from 'librechat-data-provider';
 import {
   useGetFiles,
@@ -31,23 +31,41 @@ import type {
 } from '~/data-provider';
 import { GenericGrantAccessDialog } from '~/components/Sharing';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
-import { useLocalize } from '~/hooks';
+import { useAuthContext, useHasAccess, useLocalize } from '~/hooks';
 import { isKnowledgeBaseActionEnabled, isKnowledgeBasesEnabled } from './feature';
-import { partitionConnectorValues } from './sourceConfig';
+import { buildKnowledgeSourceInput } from './sourceConfig';
 
 type DialogName = 'files' | 'sources' | null;
 
 export function useKnowledgeBasesEnabled() {
   const { data } = useGetStartupConfig();
-  return isKnowledgeBasesEnabled(data?.interface?.knowledgeBases);
+  const hasAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.USE,
+  });
+  return hasAccess && isKnowledgeBasesEnabled(data?.interface?.knowledgeBases);
 }
 
 export default function KnowledgeBasesView() {
   const { data: startupConfig } = useGetStartupConfig();
   const featureConfig = startupConfig?.interface?.knowledgeBases;
-  const enabled = isKnowledgeBasesEnabled(featureConfig);
-  const canCreate = isKnowledgeBaseActionEnabled(featureConfig, 'create');
-  const canShare = isKnowledgeBaseActionEnabled(featureConfig, 'share');
+  const { user, roles } = useAuthContext();
+  const hasUseAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.USE,
+  });
+  const hasCreateAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.CREATE,
+  });
+  const hasShareAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.SHARE,
+  });
+  const featureEnabled = isKnowledgeBasesEnabled(featureConfig);
+  const enabled = featureEnabled && hasUseAccess;
+  const canCreate = hasCreateAccess && isKnowledgeBaseActionEnabled(featureConfig, 'create');
+  const canShare = hasShareAccess && isKnowledgeBaseActionEnabled(featureConfig, 'share');
   const navigate = useNavigate();
   const location = useLocation();
   const { knowledgeBaseId } = useParams();
@@ -57,7 +75,20 @@ export default function KnowledgeBasesView() {
   const isCreate = location.pathname.endsWith('/new');
   const isEdit = location.pathname.endsWith('/edit');
 
-  if (!enabled) {
+  const rolesLoaded = user?.role != null && roles?.[user.role] != null;
+  if (!rolesLoaded) {
+    return (
+      <div className="flex h-full items-center justify-center bg-presentation">
+        <Spinner className="text-text-secondary" aria-label={localize('com_ui_loading')} />
+      </div>
+    );
+  }
+
+  if (!hasUseAccess) {
+    return <Navigate to="/c/new" replace />;
+  }
+
+  if (!featureEnabled) {
     return (
       <div className="flex h-full items-center justify-center bg-presentation p-8 text-center">
         <div>
@@ -68,6 +99,10 @@ export default function KnowledgeBasesView() {
         </div>
       </div>
     );
+  }
+
+  if (isCreate && !canCreate) {
+    return <Navigate to="/knowledge" replace />;
   }
 
   let content: React.ReactNode;
@@ -192,7 +227,7 @@ function KnowledgeBaseDetail({
   const navigate = useNavigate();
   const { showToast } = useToastContext();
   const mutations = useKnowledgeBaseMutations();
-  const resourceType = (ResourceType as unknown as Record<string, ResourceType>).KNOWLEDGE_BASE;
+  const resourceType = ResourceType.KNOWLEDGE_BASE;
   const remove = () => {
     if (!window.confirm(localize('com_ui_knowledge_delete_confirm', { 0: knowledgeBase.name }))) {
       return;
@@ -225,7 +260,7 @@ function KnowledgeBaseDetail({
           >
             <Pencil className="size-4" />
           </Button>
-          {canShare && resourceType && (
+          {canShare && (
             <GenericGrantAccessDialog
               resourceDbId={knowledgeBase._id}
               resourceName={knowledgeBase.name}
@@ -688,9 +723,13 @@ function SourceCatalogDialog({
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!selected || !sourceName.trim()) return;
-    const { config, credentials } = partitionConnectorValues(selected.fields ?? [], values);
     mutations.create.mutate(
-      { type: selected.type, name: sourceName.trim(), config, credentials },
+      buildKnowledgeSourceInput({
+        type: selected.type,
+        name: sourceName,
+        fields: selected.fields ?? [],
+        values,
+      }),
       { onSuccess: close },
     );
   };
@@ -859,7 +898,7 @@ function ConnectorField({
         ))}
       </select>
     );
-  } else if (field.type === 'textarea') {
+  } else if (field.type === 'textarea' || field.type === 'string_array') {
     fieldControl = (
       <TextareaAutosize
         id={inputId}
@@ -868,7 +907,7 @@ function ConnectorField({
         value={String(value ?? '')}
         placeholder={field.placeholder}
         onChange={(event) => onChange(event.target.value)}
-        minRows={3}
+        minRows={field.type === 'string_array' ? 2 : 3}
         className="w-full rounded-lg border border-border-medium bg-transparent p-3 text-sm text-text-primary"
       />
     );

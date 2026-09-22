@@ -2,17 +2,22 @@ import { useState } from 'react';
 import { BookOpen, Plus, X } from 'lucide-react';
 import { Button, Spinner } from '@librechat/client';
 import { useFormContext, useWatch } from 'react-hook-form';
+import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import type { AgentForm } from '~/common';
 import { KnowledgeBaseSelectDialog, isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
 import { useGetStartupConfig, useKnowledgeBasesQuery } from '~/data-provider';
-import { useLocalize } from '~/hooks';
+import { useHasAccess, useLocalize } from '~/hooks';
 
 export default function AgentKnowledgeBases() {
   const [open, setOpen] = useState(false);
   const localize = useLocalize();
   const { control, setValue } = useFormContext<AgentForm>();
   const { data: startupConfig } = useGetStartupConfig();
-  const enabled = isKnowledgeBasesEnabled(startupConfig?.interface?.knowledgeBases);
+  const hasAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.USE,
+  });
+  const enabled = hasAccess && isKnowledgeBasesEnabled(startupConfig?.interface?.knowledgeBases);
   const selected = useWatch({ control, name: 'knowledge_base_ids' }) ?? [];
   const query = useKnowledgeBasesQuery(enabled);
   const selectedBases = (query.data?.knowledgeBases ?? []).filter((base) =>

@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, FilterInput, Spinner } from '@librechat/client';
 import { Plus } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import { PanelContent } from '~/components/ui';
 import { useGetStartupConfig, useKnowledgeBasesQuery } from '~/data-provider';
-import { useLocalize } from '~/hooks';
+import { useAuthContext, useHasAccess, useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 import { isKnowledgeBaseActionEnabled, isKnowledgeBasesEnabled } from './feature';
 
@@ -15,10 +16,21 @@ interface KnowledgeBasesSidePanelProps {
 export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSidePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [isPanelReady, setIsPanelReady] = useState(false);
+  const { user, roles } = useAuthContext();
   const { data: startupConfig } = useGetStartupConfig();
   const featureConfig = startupConfig?.interface?.knowledgeBases;
-  const enabled = isKnowledgeBasesEnabled(featureConfig);
-  const canCreate = isKnowledgeBaseActionEnabled(featureConfig, 'create');
+  const hasUseAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.USE,
+  });
+  const hasCreateAccess = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
+    permission: Permissions.CREATE,
+  });
+  const rolesLoaded = user?.role != null && roles?.[user.role] != null;
+  const enabled = rolesLoaded && hasUseAccess && isKnowledgeBasesEnabled(featureConfig);
+  const canCreate =
+    rolesLoaded && hasCreateAccess && isKnowledgeBaseActionEnabled(featureConfig, 'create');
   const localize = useLocalize();
   const navigate = useNavigate();
   const { knowledgeBaseId } = useParams();
@@ -85,7 +97,7 @@ export default function KnowledgeBasesSidePanel({ className }: KnowledgeBasesSid
       </div>
 
       <PanelContent
-        isLoading={list.isLoading}
+        isLoading={!rolesLoaded || list.isLoading}
         isEmpty={!list.isError && bases.length === 0}
         skeleton={
           <div className="flex justify-center p-6">

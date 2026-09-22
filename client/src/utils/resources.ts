@@ -71,6 +71,17 @@ export const RESOURCE_CONFIGS: Partial<Record<ResourceType, ResourceConfig>> = {
       `Manage permissions for ${name && name !== '' ? name : 'skill'}`,
     getCopyUrlMessage: () => 'Skill URL copied',
   },
+  [ResourceType.KNOWLEDGE_BASE]: {
+    resourceType: ResourceType.KNOWLEDGE_BASE,
+    defaultViewerRoleId: AccessRoleIds.KNOWLEDGE_BASE_VIEWER,
+    defaultEditorRoleId: AccessRoleIds.KNOWLEDGE_BASE_EDITOR,
+    defaultOwnerRoleId: AccessRoleIds.KNOWLEDGE_BASE_OWNER,
+    getResourceName: (name?: string) => (name && name !== '' ? name : 'knowledge base'),
+    getShareMessage: (name?: string) => (name && name !== '' ? name : 'knowledge base'),
+    getManageMessage: (name?: string) =>
+      `Manage permissions for ${name && name !== '' ? name : 'knowledge base'}`,
+    getCopyUrlMessage: () => 'Knowledge base URL copied',
+  },
   [ResourceType.SHARED_LINK]: {
     resourceType: ResourceType.SHARED_LINK,
     defaultViewerRoleId: AccessRoleIds.SHARED_LINK_VIEWER,

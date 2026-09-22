@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import KnowledgeBasesSidePanel from '../KnowledgeBasesSidePanel';
 
 const mockList = jest.fn();
+const mockAuth = jest.fn();
 
 jest.mock('@librechat/client', () => ({
   Button: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
@@ -28,6 +29,8 @@ jest.mock('~/data-provider', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
+  useAuthContext: () => mockAuth(),
+  useHasAccess: () => true,
   useLocalize: () => (key: string, values?: Record<string, string>) =>
     values?.[0] ? `${key}:${values[0]}` : key,
 }));
@@ -58,12 +61,21 @@ const bases = [
 
 describe('KnowledgeBasesSidePanel', () => {
   beforeEach(() => {
+    mockAuth.mockReturnValue({ user: { role: 'USER' }, roles: { USER: {} } });
     mockList.mockReturnValue({
       data: { knowledgeBases: bases },
       isLoading: false,
       isError: false,
       refetch: jest.fn(),
     });
+  });
+
+  it('does not expose create before role permissions load', () => {
+    mockAuth.mockReturnValue({ user: { role: 'USER' }, roles: undefined });
+    renderPanel();
+
+    expect(screen.queryByRole('button', { name: 'com_ui_knowledge_create' })).toBeNull();
+    expect(screen.getAllByRole('status')).toHaveLength(2);
   });
 
   it('filters, selects, and marks the route-active knowledge base', () => {

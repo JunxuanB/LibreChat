@@ -7,6 +7,7 @@ const resourceToPermissionMap: Partial<Record<ResourceType, PermissionTypes>> = 
   [ResourceType.MCPSERVER]: PermissionTypes.MCP_SERVERS,
   [ResourceType.REMOTE_AGENT]: PermissionTypes.REMOTE_AGENTS,
   [ResourceType.SKILL]: PermissionTypes.SKILLS,
+  [ResourceType.KNOWLEDGE_BASE]: PermissionTypes.KNOWLEDGE_BASES,
   [ResourceType.SHARED_LINK]: PermissionTypes.SHARED_LINKS,
 };
 
