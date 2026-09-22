@@ -3,10 +3,13 @@ const { ResourceType } = require('librechat-data-provider');
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => {
-  const { selectFileCitationSources } = jest.requireActual('@librechat/api');
+  const { queryKnowledgeFiles, resolveAuthorizedKnowledgeFiles, selectFileCitationSources } =
+    jest.requireActual('@librechat/api');
   return {
     generateShortLivedToken: jest.fn(),
     logAxiosError: jest.fn(),
+    queryKnowledgeFiles,
+    resolveAuthorizedKnowledgeFiles,
     selectFileCitationSources,
   };
 });
@@ -51,6 +54,52 @@ describe('fileSearch.js - agent file authorization', () => {
       agentId: 'agent-123',
       resourceType: ResourceType.REMOTE_AGENT,
     });
+  });
+
+  it('resolves authorized knowledge-base documents through injected control-plane methods', async () => {
+    const knowledgeRetrieval = {
+      authorizeKnowledgeBases: jest.fn(async ({ knowledgeBaseIds }) => knowledgeBaseIds),
+      getKnowledgeDocuments: jest.fn(async () => [
+        {
+          knowledgeBaseId: 'kb-1',
+          file_id: 'knowledge-file',
+          name: 'handbook.pdf',
+          status: 'ready',
+        },
+      ]),
+    };
+
+    const result = await primeFiles({
+      req: { user: { id: 'user-1', role: 'USER' } },
+      knowledgeBaseIds: ['kb-1'],
+      knowledgeRetrieval,
+      tool_resources: {},
+    });
+
+    expect(knowledgeRetrieval.authorizeKnowledgeBases).toHaveBeenCalledWith({
+      knowledgeBaseIds: ['kb-1'],
+      userId: 'user-1',
+      role: 'USER',
+    });
+    expect(result.files).toEqual([
+      {
+        file_id: 'knowledge-file',
+        filename: 'handbook.pdf',
+        knowledge_base_id: 'kb-1',
+        fromKnowledgeBase: true,
+      },
+    ]);
+    expect(result.toolContext).toContain('handbook.pdf (from knowledge base)');
+  });
+
+  it('fails closed when knowledge-base dependencies have not been wired', async () => {
+    await expect(
+      primeFiles({
+        req: { user: { id: 'user-1', role: 'USER' } },
+        knowledgeBaseIds: ['kb-1'],
+        tool_resources: {},
+      }),
+    ).rejects.toThrow('Knowledge-base retrieval dependencies are not configured');
   });
 });
 
@@ -110,6 +159,47 @@ describe('fileSearch.js - tuple return validation', () => {
   });
 
   describe('success cases should return tuple with artifact object', () => {
+    it('queries all knowledge-base files in one collection request', async () => {
+      generateShortLivedToken.mockReturnValue('mock-jwt-token');
+      axios.post.mockResolvedValue({
+        data: [
+          [
+            {
+              page_content: 'The retention period is 30 days.',
+              metadata: { file_id: 'file-2', source: '/generated-name.txt', page: 0 },
+            },
+            0.1,
+          ],
+        ],
+      });
+
+      const fileSearchTool = await createFileSearchTool({
+        userId: 'user1',
+        files: [
+          { file_id: 'file-1', filename: 'policy.pdf', fromKnowledgeBase: true },
+          { file_id: 'file-2', filename: 'handbook.pdf', fromKnowledgeBase: true },
+        ],
+      });
+      const [, artifact] = await fileSearchTool.func({ query: 'retention' });
+
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      expect(axios.post).toHaveBeenCalledWith(
+        'http://localhost:8000/query_multiple',
+        { query: 'retention', file_ids: ['file-1', 'file-2'], k: 10 },
+        {
+          headers: {
+            Authorization: 'Bearer mock-jwt-token',
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+      expect(artifact.file_search.sources[0]).toMatchObject({
+        fileId: 'file-2',
+        fileName: 'handbook.pdf',
+        content: 'The retention period is 30 days.',
+      });
+    });
+
     it.each([
       [0, [1]],
       [2, [3]],

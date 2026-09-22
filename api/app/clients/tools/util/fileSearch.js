@@ -5,6 +5,8 @@ const {
   logAxiosError,
   selectFileCitationSources,
   generateShortLivedToken,
+  queryKnowledgeFiles,
+  resolveAuthorizedKnowledgeFiles,
 } = require('@librechat/api');
 const { Tools, EModelEndpoint, EToolResources } = require('librechat-data-provider');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
@@ -29,14 +31,27 @@ const fileSearchJsonSchema = {
  * @param {Agent['tool_resources']} options.tool_resources
  * @param {string} [options.agentId] - The agent ID for file access control
  * @param {string} [options.agentResourceType] - Permission resource type for the authorized agent route
+ * @param {string[]} [options.knowledgeBaseIds]
+ * @param {import('@librechat/api').KnowledgeRetrievalDependencies} [options.knowledgeRetrieval]
  * @returns {Promise<{
  *   files: Array<{ file_id: string; filename: string; fromAgent: boolean }>,
  *   toolContext: string
  * }>}
  */
 const primeFiles = async (options) => {
-  const { tool_resources, req, agentId, agentResourceType } = options;
+  const {
+    tool_resources,
+    req,
+    agentId,
+    agentResourceType,
+    knowledgeRetrieval,
+    knowledgeBaseIds: explicitKnowledgeBaseIds,
+  } = options;
   const file_ids = tool_resources?.[EToolResources.file_search]?.file_ids ?? [];
+  const knowledgeBaseIds =
+    explicitKnowledgeBaseIds ??
+    tool_resources?.[EToolResources.file_search]?.knowledge_base_ids ??
+    [];
   const agentResourceIds = new Set(file_ids);
   const resourceFiles = tool_resources?.[EToolResources.file_search]?.files ?? [];
 
@@ -59,6 +74,21 @@ const primeFiles = async (options) => {
 
   dbFiles = dbFiles.concat(resourceFiles);
 
+  let knowledgeFiles = [];
+  if (knowledgeBaseIds.length > 0) {
+    if (!knowledgeRetrieval) {
+      throw new Error('Knowledge-base retrieval dependencies are not configured');
+    }
+    knowledgeFiles = await resolveAuthorizedKnowledgeFiles(
+      {
+        knowledgeBaseIds,
+        userId: req?.user?.id,
+        role: req?.user?.role,
+      },
+      knowledgeRetrieval,
+    );
+  }
+
   let toolContext = `- Note: Semantic search is available through the ${Tools.file_search} tool but no files are currently loaded. Request the user to upload documents to search through.`;
 
   const files = [];
@@ -78,6 +108,19 @@ const primeFiles = async (options) => {
       filename: file.filename,
       fromAgent: agentResourceIds.has(file.file_id),
     });
+  }
+
+  const seenFileIds = new Set(files.map((file) => file.file_id));
+  for (const file of knowledgeFiles) {
+    if (seenFileIds.has(file.file_id)) {
+      continue;
+    }
+    if (files.length === 0) {
+      toolContext = `- Note: Use the ${Tools.file_search} tool to find relevant information within:`;
+    }
+    toolContext += `\n\t- ${file.filename} (from knowledge base)`;
+    files.push(file);
+    seenFileIds.add(file.file_id);
   }
 
   return { files, toolContext };
@@ -135,7 +178,9 @@ const createFileSearchTool = async ({
         return body;
       };
 
-      const queryPromises = files.map((file) =>
+      const knowledgeFiles = files.filter((file) => file.fromKnowledgeBase === true);
+      const directFiles = files.filter((file) => file.fromKnowledgeBase !== true);
+      const queryPromises = directFiles.map((file) =>
         axios
           .post(`${process.env.RAG_API_URL}/query`, createQueryBody(file), {
             headers: {
@@ -153,6 +198,29 @@ const createFileSearchTool = async ({
           }),
       );
 
+      if (knowledgeFiles.length > 0) {
+        queryPromises.push(
+          queryKnowledgeFiles(
+            {
+              ragApiUrl: process.env.RAG_API_URL,
+              jwtToken,
+              query,
+              files: knowledgeFiles,
+              k: 10,
+            },
+            axios,
+          )
+            .then((data) => ({ data }))
+            .catch((error) => {
+              logAxiosError({
+                message: 'Error encountered in `file_search` while querying knowledge bases',
+                error,
+              });
+              return null;
+            }),
+        );
+      }
+
       const results = await Promise.all(queryPromises);
       const validResults = results.filter((result) => result !== null);
 
@@ -160,19 +228,26 @@ const createFileSearchTool = async ({
         return ['No results found or errors occurred while searching the files.', undefined];
       }
 
+      const filenamesById = new Map(files.map((file) => [file.file_id, file.filename]));
       const formattedResults = validResults
         .flatMap((result) =>
-          result.data.map(([docInfo, distance]) => ({
-            filename: docInfo.metadata.source.split('/').pop(),
-            content: docInfo.page_content,
-            distance,
-            file_id: result.file_id,
-            page:
-              Number.isInteger(docInfo.metadata.page) && docInfo.metadata.page >= 0
-                ? docInfo.metadata.page + 1
-                : null,
-          })),
+          result.data.map(([docInfo, distance]) => {
+            const fileId = result.file_id ?? docInfo.metadata?.file_id;
+            const source = docInfo.metadata?.source;
+            const sourceName = typeof source === 'string' ? source.split('/').pop() : undefined;
+            return {
+              filename: filenamesById.get(fileId) ?? sourceName ?? fileId,
+              content: docInfo.page_content,
+              distance,
+              file_id: fileId,
+              page:
+                Number.isInteger(docInfo.metadata?.page) && docInfo.metadata.page >= 0
+                  ? docInfo.metadata.page + 1
+                  : null,
+            };
+          }),
         )
+        .filter((result) => result.file_id && result.filename)
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 10);
 

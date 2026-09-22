@@ -93,6 +93,7 @@ export * from './plugins';
 export * from './endpoints';
 /* Files */
 export * from './files';
+export * from './knowledge/retrieval';
 /* Images */
 export * from './images';
 /* Storage */
