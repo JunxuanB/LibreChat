@@ -59,6 +59,15 @@ const createForm = (): AgentForm => ({
 });
 
 describe('composeAgentUpdatePayload', () => {
+  it('preserves attached knowledge bases in the persisted payload', () => {
+    const form = createForm();
+    form.knowledge_base_ids = ['kb-1', 'kb-2'];
+
+    const { payload } = composeAgentUpdatePayload(form, 'agent_123');
+
+    expect(payload.knowledge_base_ids).toEqual(['kb-1', 'kb-2']);
+  });
+
   it('includes avatar: null when resetting a persistent agent', () => {
     const form = createForm();
     form.avatar_action = 'reset';

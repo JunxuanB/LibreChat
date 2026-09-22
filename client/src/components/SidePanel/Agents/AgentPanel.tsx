@@ -103,6 +103,7 @@ export function composeAgentUpdatePayload(
     skill_authoring_enabled,
     skills_scope,
     memory_scope,
+    knowledge_base_ids,
     avatar_action: avatarActionState,
   } = data;
 
@@ -177,6 +178,7 @@ export function composeAgentUpdatePayload(
       /** A hidden stale 'agent' scope must not survive disabling memory —
        *  runtime partitioning keys off memory_scope alone. */
       memory_scope: data.memory === true ? memory_scope : MemoryScope.user,
+      knowledge_base_ids,
       ...(shouldResetAvatar ? { avatar: null } : {}),
     },
     provider,

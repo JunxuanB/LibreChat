@@ -52,6 +52,7 @@ export const getDefaultAgentFormValues = (
   avatar_file: null,
   avatar_preview: '',
   avatar_action: null,
+  knowledge_base_ids: undefined as string[] | undefined,
 });
 
 export const processAgentOption = ({

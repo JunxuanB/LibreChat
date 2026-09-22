@@ -19,6 +19,8 @@ import {
 } from '~/hooks';
 import ArtifactsSubMenu from '~/components/Chat/Input/ArtifactsSubMenu';
 import MCPSubMenu from '~/components/Chat/Input/MCPSubMenu';
+import KnowledgeBasesSubMenu from '~/components/Chat/Input/KnowledgeBasesSubMenu';
+import { isKnowledgeBasesEnabled } from '~/components/KnowledgeBases';
 import { useGetStartupConfig } from '~/data-provider';
 import { useBadgeRowContext } from '~/Providers';
 import { cn } from '~/utils';
@@ -63,6 +65,11 @@ const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
 
   const canUseMcp = useHasAccess({
     permissionType: PermissionTypes.MCP_SERVERS,
+    permission: Permissions.USE,
+  });
+
+  const canUseKnowledgeBases = useHasAccess({
+    permissionType: PermissionTypes.KNOWLEDGE_BASES,
     permission: Permissions.USE,
   });
 
@@ -191,6 +198,13 @@ const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
           </button>
         </div>
       ),
+    });
+  }
+
+  if (canUseKnowledgeBases && isKnowledgeBasesEnabled(startupConfig?.interface?.knowledgeBases)) {
+    dropdownItems.push({
+      hideOnClick: false,
+      render: (props) => <KnowledgeBasesSubMenu {...props} />,
     });
   }
 

@@ -6,4 +6,3 @@ export type KnowledgeBasesFeatureConfig =
 
 export const isKnowledgeBasesEnabled = (config: KnowledgeBasesFeatureConfig) =>
   config != null && config !== false && !(typeof config === 'object' && config.use === false);
-

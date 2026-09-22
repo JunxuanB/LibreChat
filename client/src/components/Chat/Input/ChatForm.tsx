@@ -70,6 +70,7 @@ import EditBadges from './EditBadges';
 import BadgeRow from './BadgeRow';
 import Mention from './Mention';
 import store from '~/store';
+import type { KnowledgeConversation } from '~/components/KnowledgeBases/conversation';
 
 export function toRestoredComposerFile(
   file: NonNullable<TMessage['files']>[number],
@@ -982,6 +983,7 @@ function ChatFormWrapper({
       conversation?.codeApprovalMode,
       conversation?.codeEnvironmentMode,
       conversation?.codeWorkspaces,
+      (conversation as KnowledgeConversation | null)?.knowledge_base_ids,
       hasMessages,
     ],
   );

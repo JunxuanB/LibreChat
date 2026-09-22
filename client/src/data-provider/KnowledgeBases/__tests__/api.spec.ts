@@ -83,4 +83,3 @@ describe('knowledgeBaseApi', () => {
     await expect(knowledgeBaseApi.connectors()).resolves.toEqual({ connectors: [] });
   });
 });
-
