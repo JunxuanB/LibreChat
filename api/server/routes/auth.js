@@ -130,7 +130,6 @@ router.post(
   '/passkey/login/options',
   middleware.logHeaders,
   middleware.passkeyLimiter,
-  middleware.validateEmailLogin,
   middleware.checkBan,
   loginPasskeyOptions,
 );
@@ -139,7 +138,6 @@ router.post(
   middleware.logHeaders,
   middleware.requireSameOrigin,
   middleware.passkeyLimiter,
-  middleware.validateEmailLogin,
   middleware.checkBan,
   authenticatePasskey,
   setBalanceConfig,
