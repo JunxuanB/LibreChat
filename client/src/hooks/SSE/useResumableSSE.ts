@@ -1350,6 +1350,7 @@ export default function useResumableSSE(
     enabled: !!isAuthenticated && startupConfig?.balance?.enabled,
   });
   const {
+    bindResponse,
     contextHandler,
     usageHandler,
     tapStream,
@@ -1463,6 +1464,7 @@ export default function useResumableSSE(
         editPrefixClearedRef.current = false;
         editPrefixFirstPartFoldedRef.current = false;
       }
+      bindResponse(currentSubmission);
       let { userMessage } = currentSubmission;
       let textIndex: number | null = null;
       let finalReceived = false;
@@ -2206,6 +2208,7 @@ export default function useResumableSSE(
               initialResponse: createdInitialResponse,
             };
             submissionRef.current = currentSubmission;
+            bindResponse(currentSubmission);
             createdHandler(data, currentSubmission as EventSubmission);
             replayPreCreatedStepEvents();
             return;
@@ -2617,8 +2620,11 @@ export default function useResumableSSE(
             };
             /** Legacy non-agent streams send cumulative text here — feed the
              *  live estimate like the content path above */
-            tapContent(text, { ...currentSubmission, userMessage });
-            messageHandler(text, { ...currentSubmission, userMessage, initialResponse });
+            const textSubmission = { ...currentSubmission, userMessage, initialResponse };
+            currentSubmission = textSubmission;
+            submissionRef.current = textSubmission;
+            tapContent(text, textSubmission);
+            messageHandler(text, textSubmission);
           }
         } catch (error) {
           logger.error('ResumableSSE', 'Error processing message:', error);
@@ -3931,6 +3937,7 @@ export default function useResumableSSE(
       balanceQuery,
       removeActiveJob,
       queryClient,
+      bindResponse,
       contextHandler,
       usageHandler,
       tapStream,
@@ -4251,6 +4258,7 @@ export default function useResumableSSE(
         return;
       }
 
+      bindResponse(submission);
       setIsSubmitting(true);
       /** Starting a new generation is the one interval where `isSubmitting`
        *  is true but no generation epoch exists yet. Clear any prior epoch and
