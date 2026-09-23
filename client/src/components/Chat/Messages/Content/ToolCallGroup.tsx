@@ -514,68 +514,26 @@ export default function ToolCallGroup({
   }, [hasActiveToolCall, userOverride, suppressAutoExpand]);
 
   return (
-    <div className="mb-2 mt-1" ref={rootRef}>
-      <div className="flex w-full items-center gap-2">
-        <Button
-          variant="ghost"
-          type="button"
-          className={cn(
-            'inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 text-text-secondary hover:bg-transparent hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy focus-visible:ring-offset-0',
-            /** An open header is the title of the rows under it, so it is the
-             *  one line in the fold set in the primary colour. */
-            isExpanded && 'text-text-primary hover:text-text-primary',
-          )}
-          onClick={handleToggle}
-          aria-expanded={isExpanded}
-          aria-label={groupAriaLabel}
-        >
-          {iconStatus == null && (allSubagents || allAskQuestions || allTaskChecks) ? (
-            /** Homogeneous categories keep the same glyph as their individual
-             *  cards instead of stacking identical tool icons. */
-            <div
-              className={cn(
-                ROW_GLYPH_SLOT,
-                'text-text-secondary',
-                isGroupLive && 'animate-pulse text-text-primary',
-              )}
-              aria-hidden="true"
-            >
-              <CategoryIcon size={14} />
-            </div>
-          ) : (
-            <div className={ROW_GLYPH_SLOT} aria-hidden="true">
-              <StackedToolIcons
-                toolNames={iconToolNames}
-                mcpIconMap={mcpIconMap}
-                maxIcons={4}
-                sourceDomains={sourceDomains}
-                status={iconStatus}
-                isAnimating={isGroupLive}
-              />
-            </div>
-          )}
-          <span
+    <div className="mt-1 mb-2" ref={rootRef}>
+      <Button
+        variant="ghost"
+        type="button"
+        className="text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto w-full items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0"
+        onClick={handleToggle}
+        aria-expanded={isExpanded}
+        aria-label={groupAriaLabel}
+      >
+        {iconStatus == null && (allSubagents || allAskQuestions) ? (
+          /** Homogeneous category groups get a single category glyph instead
+           *  of StackedToolIcons' generic wrenches: a Users glyph for
+           *  subagents, a question glyph for ask_user_question — matching
+           *  their individual card headers and reading as the category
+           *  rather than "tools". */
+          <div
             className={cn(
-              'tool-status-text min-w-0 truncate font-medium',
-              activityFailed && 'text-text-warning',
-            )}
-            role="status"
-            title={groupLabel}
-          >
-            {groupLabel}
-          </span>
-          {visibleGroupDetail && (
-            <span
-              className="min-w-0 max-w-[40%] truncate text-xs font-normal text-text-secondary"
-              title={visibleGroupDetail}
-            >
-              · {visibleGroupDetail}
-            </span>
-          )}
-          <ChevronDown
-            className={cn(
-              'size-4 shrink-0 text-text-secondary transition-transform duration-200 ease-out',
-              isExpanded && 'rotate-180',
+              ROW_GLYPH_SLOT,
+              'text-text-secondary',
+              isGroupLive && 'text-text-primary animate-pulse',
             )}
             aria-hidden="true"
           />
@@ -587,7 +545,32 @@ export default function ToolCallGroup({
             onReveal={handleRevealFailed}
           />
         )}
-      </div>
+        <span
+          className={cn(
+            'tool-status-text min-w-0 truncate font-medium',
+            activityFailed && 'text-text-warning',
+          )}
+          role="status"
+          title={groupLabel}
+        >
+          {groupLabel}
+        </span>
+        {groupDetail && (
+          <span
+            className="text-text-secondary max-w-[40%] min-w-0 truncate text-xs font-normal"
+            title={groupDetail}
+          >
+            · {groupDetail}
+          </span>
+        )}
+        <ChevronDown
+          className={cn(
+            'text-text-secondary size-4 shrink-0 transition-transform duration-200 ease-out',
+            isExpanded && 'rotate-180',
+          )}
+          aria-hidden="true"
+        />
+      </Button>
       <div
         style={expandStyle}
         onTransitionEnd={handleTransitionEnd}
@@ -648,7 +631,7 @@ export default function ToolCallGroup({
                 </div>
               </FailedRevealContext.Provider>
             </ToolAuthWarningContext.Provider>
-            {hasPendingAuthRequest && <ToolAuthWarning className="mb-1 mt-2.5" />}
+            {hasPendingAuthRequest && <ToolAuthWarning className="mt-2.5 mb-1" />}
           </div>
         )}
       </div>

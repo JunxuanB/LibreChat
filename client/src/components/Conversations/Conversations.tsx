@@ -105,7 +105,7 @@ const LoadingSpinner = memo(() => {
   return (
     <div className="mx-auto mt-2 flex items-center justify-center gap-2">
       <Spinner className="text-text-primary" />
-      <span className="animate-pulse text-text-primary">{localize('com_ui_loading')}</span>
+      <span className="text-text-primary animate-pulse">{localize('com_ui_loading')}</span>
     </div>
   );
 });
@@ -129,7 +129,7 @@ const ChatsHeader: FC<ChatsHeaderProps> = memo(({ isExpanded, onToggle, trailing
     <div
       className={cn(
         'flex h-8 w-full items-center pr-2',
-        highlight && 'rounded-lg bg-surface-active-alt',
+        highlight && 'bg-surface-active-alt rounded-lg',
       )}
     >
       <button
@@ -138,7 +138,7 @@ const ChatsHeader: FC<ChatsHeaderProps> = memo(({ isExpanded, onToggle, trailing
         type="button"
         aria-expanded={isExpanded}
       >
-        <span className="select-none truncate">{localize('com_ui_chats')}</span>
+        <span className="truncate select-none">{localize('com_ui_chats')}</span>
         <ChevronDown
           className={cn(
             'h-3 w-3 shrink-0 transition-transform duration-200',
@@ -160,15 +160,11 @@ const DateLabel: FC<{ groupName: string; isFirst?: boolean; isAlphabetical?: boo
     const displayName = localize(groupName as TranslationKeys) || groupName;
     return (
       <h2
-        aria-label={
-          groupName === RUNNING_CHATS_GROUP
-            ? localize('com_a11y_chats_running_section')
-            : localize(
-                isAlphabetical ? 'com_a11y_chats_alpha_section' : 'com_a11y_chats_date_section',
-                isAlphabetical ? { letter: displayName } : { date: displayName },
-              )
-        }
-        className={cn('pl-1 pt-1 text-text-secondary', isFirst === true ? 'mt-0' : 'mt-2')}
+        aria-label={localize(
+          isAlphabetical ? 'com_a11y_chats_alpha_section' : 'com_a11y_chats_date_section',
+          isAlphabetical ? { letter: displayName } : { date: displayName },
+        )}
+        className={cn('text-text-secondary pt-1 pl-1', isFirst === true ? 'mt-0' : 'mt-2')}
         style={{ fontSize: '0.7rem' }}
       >
         {displayName}
@@ -549,7 +545,7 @@ const Conversations: FC<ConversationsProps> = ({
         rowRenderer={rowRenderer}
         overscanRowCount={10}
         aria-readonly={false}
-        className="outline-none"
+        className="outline-hidden"
         aria-label="Conversations"
         onRowsRendered={handleRowsRendered}
         tabIndex={-1}
@@ -562,7 +558,7 @@ const Conversations: FC<ConversationsProps> = ({
     body = (
       <div className="flex flex-1 items-center justify-center">
         <Spinner className="text-text-primary" />
-        <span className="ml-2 text-text-primary">{localize('com_ui_loading')}</span>
+        <span className="text-text-primary ml-2">{localize('com_ui_loading')}</span>
       </div>
     );
   } else if (isListError) {
@@ -572,12 +568,12 @@ const Conversations: FC<ConversationsProps> = ({
         data-testid="convo-list-error"
         role="alert"
       >
-        <span className="text-sm text-text-secondary">{localize('com_ui_chats_load_error')}</span>
+        <span className="text-text-secondary text-sm">{localize('com_ui_chats_load_error')}</span>
         {onRetry && (
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-lg px-2 py-1 text-sm text-text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary"
+            className="text-text-primary focus-visible:ring-text-primary rounded-lg px-2 py-1 text-sm underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-hidden"
           >
             {localize('com_ui_retry')}
           </button>
@@ -590,12 +586,12 @@ const Conversations: FC<ConversationsProps> = ({
         className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
         data-testid="convo-list-empty"
       >
-        <span className="text-sm text-text-secondary">{localize(emptyLabel)}</span>
+        <span className="text-text-secondary text-sm">{localize(emptyLabel)}</span>
         {activeFilterCount > 0 && (
           <button
             type="button"
             onClick={() => resetFilters()}
-            className="rounded-lg px-2 py-1 text-sm text-text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary"
+            className="text-text-primary focus-visible:ring-text-primary rounded-lg px-2 py-1 text-sm underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-hidden"
           >
             {localize('com_ui_clear_filters')}
           </button>
@@ -607,7 +603,7 @@ const Conversations: FC<ConversationsProps> = ({
   return (
     <div
       ref={chatsRegionRef}
-      className="relative flex flex-1 flex-col pb-2 text-sm text-text-primary"
+      className="text-text-primary relative flex flex-1 flex-col pb-2 text-sm"
     >
       <div className="px-3">
         <ChatsHeader

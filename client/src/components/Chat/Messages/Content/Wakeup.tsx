@@ -85,8 +85,8 @@ function WakeupTaskCard({
   }, [openPanel, selection]);
 
   return (
-    <div className="my-1.5 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
-      <div className="flex min-h-6 items-center gap-1.5 text-xs text-text-secondary">
+    <div className="border-border-light bg-surface-secondary/40 my-1.5 rounded-lg border p-3">
+      <div className="text-text-secondary flex min-h-6 items-center gap-1.5 text-xs">
         <StatusIcon
           size={13}
           aria-hidden
@@ -112,7 +112,7 @@ function WakeupTaskCard({
         )}
       </div>
       {hasResult && (
-        <div className="markdown prose prose-sm message-content light dark:prose-invert mt-2 max-h-96 w-full max-w-none overflow-y-auto break-words pr-1 text-text-primary">
+        <div className="markdown prose prose-sm message-content light dark:prose-invert text-text-primary mt-2 max-h-96 w-full max-w-none overflow-y-auto pr-1 break-words">
           <MarkdownLite content={task.result} codeExecution={false} />
         </div>
       )}
@@ -223,29 +223,17 @@ const Wakeup = memo(function Wakeup({
         {shouldRenderBody && (
           <div className="overflow-hidden" ref={expandRef}>
             <div className="pb-1">
-              {display.kind === 'subagent' && (
-                <div className="mt-1 text-xs text-text-secondary">
-                  {localize('com_ui_wakeup_explainer')}
-                </div>
-              )}
-              {display.tasks.map((task) =>
-                display.kind === 'background_tool' ? (
-                  <div key={task.taskId} className="my-2">
-                    <BackgroundTaskCard
-                      task={{
-                        taskId: task.taskId,
-                        toolName: task.toolName ?? '',
-                        status: task.status,
-                        result: task.result,
-                      }}
-                      mcpIconMap={mcpIconMap}
-                      mcpServerNames={mcpServerNames}
-                    />
-                  </div>
-                ) : (
-                  <WakeupTaskCard key={task.taskId} task={task} conversationId={conversationId} />
-                ),
-              )}
+              <div className="text-text-secondary mt-1 text-xs">
+                {localize('com_ui_wakeup_explainer')}
+              </div>
+              {display.tasks.map((task) => (
+                <WakeupTaskCard
+                  key={task.taskId}
+                  task={task}
+                  kind={display.kind}
+                  conversationId={conversationId}
+                />
+              ))}
             </div>
           </div>
         )}
