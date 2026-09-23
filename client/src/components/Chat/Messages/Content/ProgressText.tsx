@@ -13,7 +13,7 @@ import { ROW_GLYPH_SLOT } from './rows';
 import { useLocalize } from '~/hooks';
 
 const wrapperClass =
-  'progress-text-wrapper text-token-text-secondary relative -mt-[0.75px] h-5 w-full leading-5';
+  'progress-text-wrapper text-text-secondary relative -mt-[0.75px] h-5 w-full leading-5';
 
 /** `right-0` and `max-w-full` cap the absolutely-positioned line at the message
  *  column; the label span truncates itself, so overflow stays visible for the
@@ -79,7 +79,7 @@ export default function ProgressText({
 }: {
   /**
    * The card's settled state, resolved once by the caller via
-   * `resolveToolCallPhase`. Replaces the former `error` + `errorSuffix`
+   * `resolveToolCallPhase`. Replaces the former `error`+ `errorSuffix`
    * pair, which encoded three terminal states in two booleans — `error`
    * meant cancelled, a present `errorSuffix` meant failed, and every
    * consumer had to reconstruct the distinction. That shape is what let a
@@ -213,24 +213,12 @@ export default function ProgressText({
           </span>
         )}
         {/* The label names the card and stays whole; a subtitle can be
-            arbitrary authored text (a question, an error line), so it takes
-            ALL of the shrink and ellipsizes instead of pushing the line past
-            the message column. All, not most: a weighted share left the label
-            a fraction of a pixel short of its text, and that fraction is
-            enough for `truncate` to swap its last letters for an ellipsis.
-            The pair sits in its own shrinking box so the verdict, the
-            duration and the chevron after it never lose width: the box gives
-            up the subtitle first, and a label wider than the box truncates at
-            the box (`max-w-full`), not past the row. */}
-        <span className="flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              showShimmer ? 'shimmer' : '',
-              'min-w-0 max-w-full truncate font-medium',
-              subtitle && 'shrink-0',
-            )}
-          >
-            {text}
+            arbitrary authored text (a question, a server name), so it takes
+            essentially all of the shrink and ellipsizes instead of pushing
+            the line past the message column. */}
+        {subtitle && (
+          <span className="text-text-secondary min-w-0 shrink-[100] truncate font-normal">
+            {subtitle}
           </span>
           {subtitle && (
             <span className="min-w-0 shrink truncate font-normal text-text-secondary">
@@ -241,13 +229,17 @@ export default function ProgressText({
         {errorSuffix && (
           <span className="shrink-0 font-normal text-status-error">· {errorSuffix}</span>
         )}
-        {isRunning && phaseStartAt != null && localPhaseStart != null && (
-          <ElapsedTimer start={localPhaseStart} />
-        )}
-        {durationParts.map(({ label, duration }) => (
-          <span key={label} className="shrink-0 font-normal text-text-secondary">
-            <span aria-hidden="true">
-              · {label} {localize(duration.key, duration.values)}
+        {errorSuffix && <span className="text-status-error font-normal">· {errorSuffix}</span>}
+        {duration && (
+          <>
+            {/* The compact form is the readable one on screen but a poor
+                thing to hear ("one point four s"), so it is hidden from
+                assistive technology and paired with a spoken equivalent.
+                Both live inside the button, so its accessible name carries
+                the duration — this is not an `aria-live` region and does not
+                re-announce. */}
+            <span className="text-text-secondary font-normal" aria-hidden="true">
+              · {localize(duration.key, duration.values)}
             </span>
             <span className="sr-only">
               {label} {localize(duration.announcedKey, duration.announcedValues)}
