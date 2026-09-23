@@ -1,4 +1,5 @@
 import { getDefaultStore } from 'jotai';
+import { QueryClient } from '@tanstack/react-query';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import {
   Constants,
@@ -10,7 +11,7 @@ import {
   request,
 } from 'librechat-data-provider';
 import type { TMessage, TSubmission } from 'librechat-data-provider';
-import { recoveryDispositionsFamily } from '~/components/Chat/Steering/recovery';
+import type { Query, QueryKey } from '@tanstack/react-query';
 import { pendingApprovalActionFamily } from '~/components/Chat/approval/state';
 
 type SSEEventListener = (e: Partial<MessageEvent> & { responseCode?: number }) => void;
@@ -65,7 +66,9 @@ const mockGetQueryData = jest.fn();
 const mockFetchQuery = jest.fn();
 const mockInvalidateQueries = jest.fn();
 const mockRemoveQueries = jest.fn();
-const mockFindAll = jest.fn((_queryKey?: unknown): Array<{ queryKey: unknown[] }> => []);
+const mockBackingQueryClient = new QueryClient();
+const mockQueryCache = mockBackingQueryClient.getQueryCache();
+const mockFindAll = jest.fn((_queryKey?: QueryKey): Query[] => []);
 const mockQueryClient = {
   setQueryData: mockSetQueryData,
   getQueryData: mockGetQueryData,
@@ -74,6 +77,9 @@ const mockQueryClient = {
   removeQueries: mockRemoveQueries,
   getQueryCache: () => ({
     findAll: mockFindAll,
+    getAll: mockQueryCache.getAll.bind(mockQueryCache),
+    find: mockQueryCache.find.bind(mockQueryCache),
+    subscribe: mockQueryCache.subscribe.bind(mockQueryCache),
   }),
 };
 
@@ -378,7 +384,9 @@ describe('useResumableSSE', () => {
     );
     mockInvalidateQueries.mockClear();
     mockRemoveQueries.mockClear();
-    mockFindAll.mockClear();
+    mockFindAll.mockReset();
+    mockFindAll.mockReturnValue([]);
+    mockBackingQueryClient.clear();
     mockUseSetRecoilStateMock.mockClear();
     mockSetActiveRun.mockClear();
     mockSetAbortScroll.mockClear();
@@ -507,8 +515,8 @@ describe('useResumableSSE', () => {
     mockGetConversationById.mockRejectedValueOnce({ response: { status: 404 } });
     /* Key-aware: the conversation cache helpers now run a second, pinned-keyed pass,
        and a fixed return value would attribute those writes to allConversations. */
-    mockFindAll.mockImplementation((queryKey?: unknown) => [
-      { queryKey: [(queryKey as unknown[])[0]] },
+    mockFindAll.mockImplementation((queryKey?: QueryKey) => [
+      mockQueryCache.build(mockBackingQueryClient, { queryKey: [queryKey![0]] as QueryKey }),
     ]);
     const submission = buildSubmission({
       conversation: {},
@@ -650,8 +658,8 @@ describe('useResumableSSE', () => {
   it('reconciles conversations via refetch instead of removing them on a resume 404', async () => {
     /* Key-aware: the conversation cache helpers now run a second, pinned-keyed pass,
        and a fixed return value would attribute those writes to allConversations. */
-    mockFindAll.mockImplementation((queryKey?: unknown) => [
-      { queryKey: [(queryKey as unknown[])[0]] },
+    mockFindAll.mockImplementation((queryKey?: QueryKey) => [
+      mockQueryCache.build(mockBackingQueryClient, { queryKey: [queryKey![0]] as QueryKey }),
     ]);
     // A deduped start returns status: 'resumed', so the client subscribes with resume=true.
     (request.post as jest.Mock).mockResolvedValue({ streamId: 'stream-123', status: 'resumed' });
@@ -4983,8 +4991,8 @@ describe('useResumableSSE', () => {
   it('removes the optimistic sidebar row when a new conversation errors before created', async () => {
     /* Key-aware: the conversation cache helpers now run a second, pinned-keyed pass,
        and a fixed return value would attribute those writes to allConversations. */
-    mockFindAll.mockImplementation((queryKey?: unknown) => [
-      { queryKey: [(queryKey as unknown[])[0]] },
+    mockFindAll.mockImplementation((queryKey?: QueryKey) => [
+      mockQueryCache.build(mockBackingQueryClient, { queryKey: [queryKey![0]] as QueryKey }),
     ]);
     const submission = buildSubmission({
       conversation: {},

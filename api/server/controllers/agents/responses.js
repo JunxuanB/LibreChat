@@ -88,6 +88,7 @@ const {
   resolveAdmittedCodeEnvironmentDecision,
   resolvePersistableCodeEnvironmentDecision,
   createTerminalRunErrorObserver,
+  announceReply,
 } = require('@librechat/api');
 const {
   createResponsesToolEndCallback,
@@ -423,7 +424,7 @@ async function saveResponseOutput(
   const langfuseTraceFields = await getLangfuseTraceMessageFields(req.config, responseId);
 
   // Save the assistant message
-  await db.saveMessage(
+  return db.saveMessage(
     req,
     {
       messageId: responseId,
@@ -1415,7 +1416,7 @@ const executeResponse = async (envelope, { req, res }) => {
 
             // Build response for saving (use tracker with buildResponse for streaming)
             const finalResponse = buildResponse(context, tracker, 'completed');
-            await saveResponseOutput(
+            const savedResponse = await saveResponseOutput(
               req,
               conversationId,
               responseId,
@@ -1423,6 +1424,15 @@ const executeResponse = async (envelope, { req, res }) => {
               agentId,
               tracker.usage.outputTokens,
             );
+            await announceReply(db, {
+              userId: req?.user?.id,
+              conversationId,
+              reply: {
+                ...savedResponse,
+                isTemporary: req?.resolvedConversation?.isTemporary ?? req?.body?.isTemporary,
+              },
+              context: 'Responses API - announce stored reply',
+            });
 
             logger.debug(
               `[Responses API] Stored response ${responseId} in conversation ${conversationId}`,
@@ -1649,7 +1659,7 @@ const executeResponse = async (envelope, { req, res }) => {
 
             await saveInputMessages(req, conversationId, inputMessages, agentId);
 
-            await saveResponseOutput(
+            const savedResponse = await saveResponseOutput(
               req,
               conversationId,
               responseId,
@@ -1657,6 +1667,15 @@ const executeResponse = async (envelope, { req, res }) => {
               agentId,
               aggregator.usage.outputTokens,
             );
+            await announceReply(db, {
+              userId: req?.user?.id,
+              conversationId,
+              reply: {
+                ...savedResponse,
+                isTemporary: req?.resolvedConversation?.isTemporary ?? req?.body?.isTemporary,
+              },
+              context: 'Responses API - announce stored reply',
+            });
 
             logger.debug(
               `[Responses API] Stored response ${responseId} in conversation ${conversationId}`,
