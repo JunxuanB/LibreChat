@@ -28,6 +28,8 @@ import { AttachmentGroup, StreamingThoughtPeek } from './Parts';
 import { useMCPIconMap, useMCPServerNames } from '~/hooks/MCP';
 import { getActivityLabelText } from '~/utils/activityLabels';
 import { getOutcomeStatus, summarizeSpan } from './outcome';
+import { ROW_GLYPH_SLOT, TOOL_ROW_CLASSES } from './rows';
+import { MCPAppViews } from '~/components/MCPUIResource';
 import { sandboxStartingByToolCallId } from '~/store';
 import useClockFormat from '~/hooks/useClockFormat';
 import { cn, getMessageTimestamp } from '~/utils';
@@ -400,7 +402,7 @@ function LivePhaseHeader({
         {combo !== '' && (
           <span
             id={comboId}
-            className="shrink-0 text-xs font-normal text-text-secondary"
+            className="text-text-secondary shrink-0 text-xs font-normal"
             data-testid="live-phase-combo"
           >
             {combo}
@@ -418,13 +420,8 @@ function LivePhaseHeader({
            *  the failed rows. Only a stop count has no pill and stays visible.
            *  The verdict is the span's, not the newest line's, so it keeps its
            *  own separator from whatever the row happens to be saying. */}
-          {failedNote !== '' && <span className="sr-only">· {failedNote}</span>}
-          {cancelledNote !== '' && (
-            <>
-              <span className="mr-1 text-text-secondary">·</span>
-              <span>{cancelledNote}</span>
-            </>
-          )}
+          <span className="text-text-secondary mr-1">·</span>
+          <span>{detail}</span>
         </span>
       )}
     </>
@@ -754,6 +751,7 @@ export default function ActivityPhaseGroup({
       <>
         <SearchVerticals attachments={attachments} />
         <AttachmentGroup attachments={attachments} />
+        <MCPAppViews attachments={attachments} />
       </>
     ) : null;
   if (!label && !isLive) {
