@@ -1,15 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { useStore } from 'jotai';
 import { useRecoilCallback } from 'recoil';
-import {
-  Constants,
-  StepTypes,
-  StepEvents,
-  ContentTypes,
-  getRunStepDurationMs,
-  getRunStepCloseMetadata,
-  getToolTimingDurations,
-} from 'librechat-data-provider';
+import { Constants, StepTypes, StepEvents, ContentTypes } from 'librechat-data-provider';
 import type {
   Agents,
   TMessage,
@@ -34,14 +26,17 @@ import {
 } from '~/components/Chat/Subagents/state';
 import {
   applyReasoningDelta,
+  applyToolCallCompleted,
+  isSkillAuthoringToolCall,
+  applyToolCallDelta,
   applySummarizeDelta,
+  applyRunStepClosed,
+  applyToolCallsStep,
   applyMessageDelta,
   finalizeSummaries,
   applyAgentUpdate,
   applySummaryStep,
-  getStepMetadata,
   getEditPrefix,
-  updateContent,
 } from './steps';
 import {
   sandboxStartingByToolCallId,
@@ -85,34 +80,6 @@ type TStepEvent =
   | { event: StepEvents.ON_SUBAGENT_UPDATE; data: SubagentUpdateEvent }
   | { event: StepEvents.ON_SANDBOX_STARTING; data: SandboxStartingEvent }
   | { event: StepEvents.ON_PTC_TOOL_CALL; data: PtcToolCallEvent };
-
-/** Mirrors `SKILL_FILE_PREFIX` in `@librechat/api` file-authoring handlers. */
-const SKILL_FILE_PREFIX = 'skills/';
-const FILE_AUTHORING_TOOLS = new Set(['create_file', 'edit_file']);
-
-/**
- * True when a completed tool call authored a skill file (`create_file` /
- * `edit_file` targeting a `skills/...` path). Skills created or edited
- * mid-chat must invalidate the cached skill queries, or the Skills panel
- * and builder keep showing the pre-authoring catalog.
- */
-function isSkillAuthoringToolCall(toolCall?: Agents.ToolCall): boolean {
-  if (!toolCall?.name || !FILE_AUTHORING_TOOLS.has(toolCall.name)) {
-    return false;
-  }
-  const { args } = toolCall;
-  let filePath: unknown;
-  if (typeof args === 'object' && args !== null) {
-    filePath = (args as { file_path?: unknown }).file_path;
-  } else if (typeof args === 'string') {
-    try {
-      filePath = (JSON.parse(args) as { file_path?: unknown }).file_path;
-    } catch {
-      return false;
-    }
-  }
-  return typeof filePath === 'string' && filePath.startsWith(SKILL_FILE_PREFIX);
-}
 
 export default function useStepHandler({
   setMessages,
@@ -644,42 +611,14 @@ export default function useStepHandler({
         }
 
         if (runStep.stepDetails.type === StepTypes.TOOL_CALLS) {
-          const streamedCallCount = runStep.stepDetails.tool_calls?.length ?? 0;
-          let updatedResponse = { ...response };
-          const contentIndex = runStep.index + editPrefixOffset;
-          ((runStep.stepDetails.tool_calls ?? []) as Agents.ToolCall[]).forEach((toolCall) => {
-            const toolCallId = toolCall.id ?? '';
-            if ('id' in toolCall && toolCallId) {
-              toolCallIdMap.current.set(runStep.id, toolCallId);
-            }
-
-            const contentPart: Agents.MessageContentComplex = {
-              type: ContentTypes.TOOL_CALL,
-              tool_call: {
-                name: toolCall.name ?? '',
-                args: toolCall.args,
-                id: toolCallId,
-                stepId: runStep.id,
-                toolPreparationStartedAt:
-                  firstFragmentByCall.current.get(toolTimingKey(runStep.id, toolCallId)) ??
-                  (streamedCallCount <= 1
-                    ? firstFragmentByStep.current.get(runStep.id)
-                    : undefined),
-                toolDispatchedAt: dispatchedByCall.current.get(
-                  toolTimingKey(runStep.id, toolCallId),
-                ),
-              },
-            };
-
-            updatedResponse = updateContent(
-              updatedResponse,
-              contentIndex,
-              contentPart,
-              false,
-              getStepMetadata(runStep),
-            );
-          });
-
+          const { message: updatedResponse, toolCallId } = applyToolCallsStep(
+            response,
+            runStep,
+            editPrefixOffset,
+          );
+          if (toolCallId) {
+            toolCallIdMap.current.set(runStep.id, toolCallId);
+          }
           messageMap.current.set(responseMessageId, updatedResponse);
           setMessages(
             mergeResponseMessage(messages, updatedResponse, responseMessageId, {
@@ -886,50 +825,16 @@ export default function useStepHandler({
         }
 
         const response = messageMap.current.get(responseMessageId);
-        if (
+        const updatedResponse =
           response &&
-          runStepDelta.delta.type === StepTypes.TOOL_CALLS &&
-          runStepDelta.delta.tool_calls
-        ) {
-          let updatedResponse = { ...response };
-
-          runStepDelta.delta.tool_calls.forEach((toolCallDelta) => {
-            const toolCallId = toolCallDelta.id || toolCallIdMap.current.get(runStepDelta.id) || '';
-
-            const contentPart: Agents.MessageContentComplex = {
-              type: ContentTypes.TOOL_CALL,
-              tool_call: {
-                name: toolCallDelta.name ?? '',
-                args: toolCallDelta.args ?? '',
-                id: toolCallId,
-                stepId: runStepDelta.id,
-                toolPreparationStartedAt:
-                  firstFragmentByCall.current.get(toolTimingKey(runStepDelta.id, toolCallId)) ??
-                  (toolCallDelta.index === 0
-                    ? firstFragmentByStep.current.get(runStepDelta.id)
-                    : undefined),
-                toolDispatchedAt: dispatchedByCall.current.get(
-                  toolTimingKey(runStepDelta.id, toolCallId),
-                ),
-              },
-            };
-
-            if (runStepDelta.delta.auth != null) {
-              contentPart.tool_call.auth = runStepDelta.delta.auth;
-              contentPart.tool_call.expires_at = runStepDelta.delta.expires_at;
-            }
-
-            // Use server's index, offset by the retained edit prefix
-            const currentIndex = runStep.index + editPrefixOffset;
-            updatedResponse = updateContent(
-              updatedResponse,
-              currentIndex,
-              contentPart,
-              false,
-              getStepMetadata(runStep),
-            );
-          });
-
+          applyToolCallDelta(
+            response,
+            runStep,
+            runStepDelta,
+            toolCallIdMap.current.get(runStepDelta.id) ?? '',
+            editPrefixOffset,
+          );
+        if (updatedResponse) {
           messageMap.current.set(responseMessageId, updatedResponse);
           setMessages(
             mergeResponseMessage(messages, updatedResponse, responseMessageId, {
@@ -1005,23 +910,12 @@ export default function useStepHandler({
 
         const response = messageMap.current.get(responseMessageId);
         if (response) {
-          let updatedResponse = { ...response };
-
-          const contentPart: Agents.MessageContentComplex = {
-            type: ContentTypes.TOOL_CALL,
-            tool_call: { ...result.tool_call, stepId },
-          };
-
-          // Use server's index, offset by the retained edit prefix
-          const currentIndex = runStep.index + editPrefixOffset;
-          updatedResponse = updateContent(
-            updatedResponse,
-            currentIndex,
-            contentPart,
-            true,
-            getStepMetadata(runStep),
+          const updatedResponse = applyToolCallCompleted(
+            response,
+            runStep,
+            result,
+            editPrefixOffset,
           );
-
           messageMap.current.set(responseMessageId, updatedResponse);
           setMessages(
             mergeResponseMessage(messages, updatedResponse, responseMessageId, {
@@ -1052,58 +946,10 @@ export default function useStepHandler({
           return;
         }
 
-        const currentIndex = runStep.index + editPrefixOffset;
-        const existing = response.content?.[currentIndex];
-        /**
-         * Only tool calls render a running state, so only they need the
-         * terminal status. Leaving other part types untouched keeps this from
-         * disturbing text or reasoning content.
-         */
-        if (!existing || existing.type !== ContentTypes.TOOL_CALL) {
+        const updatedResponse = applyRunStepClosed(response, runStep, closed, editPrefixOffset);
+        if (!updatedResponse) {
           return;
         }
-
-        const existingToolCall = existing[ContentTypes.TOOL_CALL];
-        if (!existingToolCall) {
-          return;
-        }
-
-        /** Spread conditionally so an unknowable duration leaves any value the
-         *  server already stamped in place, rather than overwriting it with
-         *  `undefined`. */
-        const durationMs = getRunStepDurationMs(closed);
-        const callId = existingToolCall.id ?? '';
-        const key = toolTimingKey(closed.id, callId);
-        const singleCallStep =
-          runStep.stepDetails.type === StepTypes.TOOL_CALLS &&
-          (runStep.stepDetails.tool_calls?.length ?? 0) <= 1;
-        const observedAt = Math.min(
-          firstFragmentByCall.current.get(key) ?? Infinity,
-          existingToolCall.toolPreparationStartedAt ?? Infinity,
-          singleCallStep ? (firstFragmentByStep.current.get(closed.id) ?? Infinity) : Infinity,
-        );
-        const timing = getToolTimingDurations({
-          observedAt: Number.isFinite(observedAt) ? observedAt : undefined,
-          dispatchedAt: existingToolCall.toolDispatchedAt ?? dispatchedByCall.current.get(key),
-          completedAt: completedByCall.current.get(key),
-        });
-        firstFragmentByCall.current.delete(key);
-        firstFragmentByStep.current.delete(closed.id);
-        dispatchedByCall.current.delete(key);
-        completedByCall.current.delete(key);
-        const updatedContent = [...(response.content ?? [])];
-        updatedContent[currentIndex] = {
-          ...existing,
-          [ContentTypes.TOOL_CALL]: {
-            ...existingToolCall,
-            runStepStatus: closed.status,
-            ...getRunStepCloseMetadata(closed),
-            ...(durationMs != null && { runStepDurationMs: durationMs }),
-            ...timing,
-          },
-        };
-
-        const updatedResponse = { ...response, content: updatedContent };
         messageMap.current.set(responseMessageId, updatedResponse);
         setMessages(
           mergeResponseMessage(messages, updatedResponse, responseMessageId, {
