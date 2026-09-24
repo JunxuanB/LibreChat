@@ -82,6 +82,7 @@ describe('mergeConfigOverrides', () => {
         maxSourcesPerDirective: 64,
         maxSerializedLength: 8192,
         maxAdmissionRequestsPerMinute: 480,
+        maxPersistedMessageBytes: 123456,
       },
     } as unknown as AppConfig;
     const configs = [
@@ -92,6 +93,7 @@ describe('mergeConfigOverrides', () => {
             maxSourcesPerDirective: 128,
             maxSerializedLength: 16384,
             maxAdmissionRequestsPerMinute: 960,
+            maxPersistedMessageBytes: 200000,
           },
         },
         10,

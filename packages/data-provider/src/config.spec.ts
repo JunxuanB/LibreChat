@@ -2012,6 +2012,7 @@ describe('MCP Apps configuration', () => {
     expect(configSchema.parse({ version: '1.2.1' }).mcpAppSandbox).toEqual({
       ...DEFAULT_MCP_APP_CSP_LIMITS,
       maxPersistedAppBytes: DEFAULT_MCP_APP_PERSISTED_BYTES,
+      maxPersistedMessageBytes: 12 * 1024 * 1024,
       maxAdmissionRequestsPerMinute: DEFAULT_MCP_APP_ADMISSION_REQUESTS_PER_MINUTE,
     });
     expect(
@@ -2021,6 +2022,7 @@ describe('MCP Apps configuration', () => {
           maxSourcesPerDirective: 64,
           maxSerializedLength: 8192,
           maxPersistedAppBytes: 2048,
+          maxPersistedMessageBytes: 1024 * 1024,
           maxAdmissionRequestsPerMinute: 480,
           url: 'https://mcp-sandbox.example.com/api/mcp/sandbox',
         },
@@ -2029,6 +2031,7 @@ describe('MCP Apps configuration', () => {
       maxSourcesPerDirective: 64,
       maxSerializedLength: 8192,
       maxPersistedAppBytes: 2048,
+      maxPersistedMessageBytes: 1024 * 1024,
       maxAdmissionRequestsPerMinute: 480,
       url: 'https://mcp-sandbox.example.com/api/mcp/sandbox',
     });
@@ -2038,6 +2041,9 @@ describe('MCP Apps configuration', () => {
       { maxSerializedLength: -1 },
       { maxSerializedLength: 1.5 },
       { maxSerializedLength: Number.MAX_SAFE_INTEGER + 1 },
+      { maxPersistedMessageBytes: 0 },
+      { maxPersistedMessageBytes: 1.5 },
+      { maxPersistedMessageBytes: 12 * 1024 * 1024 + 1 },
       { maxPersistedAppBytes: 0 },
       { maxPersistedAppBytes: 1.5 },
       { maxPersistedAppBytes: MAX_MCP_APP_PERSISTED_BYTES + 1 },
