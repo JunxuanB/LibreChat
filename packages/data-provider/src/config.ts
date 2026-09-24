@@ -2292,26 +2292,34 @@ export enum RetentionMode {
   TEMPORARY = 'temporary',
 }
 
-/** Single source for the agents panel selector's unsearched list cap; the
- * schema default and the client fallback both read it. */
-export const DEFAULT_AGENT_SELECTOR_LIMIT = 10;
-export const AGENT_SELECTOR_LIMIT_MIN = 1;
-export const AGENT_SELECTOR_LIMIT_MAX = 100;
+const themeModeSchema = z
+  .object({
+    colors: z.record(z.string().regex(/^rgb-/), z.string().regex(/^\d{1,3} \d{1,3} \d{1,3}$/)),
+    appearance: z.record(z.string()),
+    brands: z.record(z.string()),
+  })
+  .partial()
+  .strict();
 
-/** Runtime guard for values that bypass `interfaceSchema`: raw librechat.yaml
- * reads and principal-scoped admin overrides reach the client unparsed, so an
- * out-of-bounds value falls back to the default instead of emptying the list. */
-export function normalizeAgentSelectorLimit(value: unknown): number {
-  return typeof value === 'number' &&
-    Number.isInteger(value) &&
-    value >= AGENT_SELECTOR_LIMIT_MIN &&
-    value <= AGENT_SELECTOR_LIMIT_MAX
-    ? value
-    : DEFAULT_AGENT_SELECTOR_LIMIT;
-}
+/**
+ * Shape of an inline deployment theme. Token names and value ranges are checked
+ * by the client registry (`validateThemeDefinition`), which owns the token list.
+ */
+export const themeDefinitionSchema = z
+  .object({
+    version: z.literal(1),
+    name: z.string().trim().min(1),
+    modes: z.object({ light: themeModeSchema, dark: themeModeSchema }).partial().strict(),
+    brands: z.record(z.string()).optional(),
+  })
+  .strict();
+
+export type TThemeDefinitionConfig = z.infer<typeof themeDefinitionSchema>;
 
 export const interfaceSchema = z
   .object({
+    /** A bundled theme name or an inline theme definition applied to every user. */
+    theme: z.union([z.string().trim().min(1), themeDefinitionSchema]).optional(),
     privacyPolicy: z
       .object({
         externalUrl: z.string().optional(),
