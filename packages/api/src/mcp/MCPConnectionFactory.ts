@@ -94,6 +94,7 @@ export class MCPConnectionFactory {
   protected readonly ephemeralConnection: boolean;
   protected readonly directBearerRecoveryEnabled: boolean;
   protected readonly capabilityProfile: t.BasicConnectionOptions['capabilityProfile'];
+  protected readonly operationLimits: t.BasicConnectionOptions['operationLimits'];
 
   // OAuth-related properties (only set when useOAuth is true)
   protected readonly userId?: string;
@@ -422,6 +423,7 @@ export class MCPConnectionFactory {
         allowedAddresses: this.allowedAddresses,
         ephemeralConnection: this.ephemeralConnection,
         ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
+        ...(this.operationLimits && { operationLimits: this.operationLimits }),
         ...(this.directBearerRecoveryEnabled && { directBearerRecoveryEnabled: true }),
       });
 
@@ -582,6 +584,7 @@ export class MCPConnectionFactory {
       allowedAddresses: this.allowedAddresses,
       ephemeralConnection: this.ephemeralConnection,
       ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
+      ...(this.operationLimits && { operationLimits: this.operationLimits }),
     });
 
     unauthConnection.on('oauthRequired', () => {
@@ -634,6 +637,7 @@ export class MCPConnectionFactory {
       basic.directBearerSourceConfig ?? basic.serverConfig,
     );
     this.capabilityProfile = basic.capabilityProfile;
+    this.operationLimits = basic.operationLimits;
     this.connectionTimeout = options?.connectionTimeout;
     this.deadlineMs = options?.deadlineMs;
     this.onOAuthCredentialsChanged = options?.onOAuthCredentialsChanged;
@@ -777,6 +781,7 @@ export class MCPConnectionFactory {
       allowedAddresses: this.allowedAddresses,
       ephemeralConnection: this.ephemeralConnection,
       ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
+      ...(this.operationLimits && { operationLimits: this.operationLimits }),
       ...(this.directBearerRecoveryEnabled && {
         directBearerRecoveryEnabled: true,
       }),
