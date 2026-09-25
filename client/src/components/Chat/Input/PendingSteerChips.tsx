@@ -327,12 +327,12 @@ function QueuedRow({
           0: String(fileCount),
         })}
       />
-      {(isRejected || isUnconfirmed || isIndeterminate) && (
-        <span className="text-text-warning shrink-0 text-xs">{localize(statusLabel)}</span>
-      )}
-      {revealed === true && (
-        <span className="text-text-secondary shrink-0 text-xs">
-          {localize('com_ui_queued_turn_starting')}
+      {(recoveryHeld || isRejected || isUnconfirmed || isIndeterminate) && (
+        <span
+          className="text-text-warning shrink-0 text-xs"
+          title={recoveryHeld ? localize('com_ui_steer_recovery_review') : undefined}
+        >
+          {localize(statusLabel)}
         </span>
       )}
       {showPrimary && (

@@ -205,7 +205,7 @@ export default function CodeWorkspaceMenu({
     const pending = status === 'pending';
     return (
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span role="status" className="text-xs text-text-secondary">
+        <span role="status" className="text-text-secondary text-xs">
           {localize(
             pending
               ? 'com_ui_code_workspace_reconciling'
@@ -340,7 +340,10 @@ export default function CodeWorkspaceMenu({
         }
       >
         <Icon className="text-text-secondary size-4 shrink-0" aria-hidden="true" />
-        <span className="max-w-[16rem] min-w-0 truncate">{label}</span>
+        <span role="status" className="min-w-0 max-w-[16rem] truncate">
+          {label}
+        </span>
+        <RefreshCw className="text-text-secondary size-3 shrink-0" aria-hidden="true" />
       </TooltipAnchor>
     );
   }
@@ -369,7 +372,7 @@ export default function CodeWorkspaceMenu({
             }
             className={cn(
               composerControlClasses(),
-              'md:px-theme-normal max-w-full min-w-0 px-2.5',
+              'min-w-0 max-w-full px-2.5 md:px-theme-normal',
               isOpen && 'bg-surface-hover',
               buttonDisabled && 'cursor-not-allowed opacity-50',
             )}
@@ -377,7 +380,7 @@ export default function CodeWorkspaceMenu({
         }
       >
         <ButtonIcon className="text-text-secondary size-4 shrink-0" aria-hidden="true" />
-        <span className="max-w-[12rem] min-w-0 truncate">{relocationText?.label ?? label}</span>
+        <span className="min-w-0 max-w-[12rem] truncate">{buttonLabel}</span>
         <ChevronDown
           className={cn(
             'text-text-secondary size-3 shrink-0 transition-transform',
@@ -391,7 +394,7 @@ export default function CodeWorkspaceMenu({
         gutter={8}
         unmountOnHide={true}
         className={cn(
-          'z-50 flex max-w-[min(360px,calc(100vw-2rem))] min-w-[280px] flex-col rounded-xl',
+          'z-50 flex min-w-[280px] max-w-[min(360px,calc(100vw-2rem))] flex-col rounded-xl',
           'border-border-light bg-presentation max-h-[var(--popover-available-height)] overflow-y-auto border p-1.5 shadow-lg',
           'origin-bottom opacity-0 transition-[opacity,transform] duration-200 ease-out',
           'data-[enter]:scale-100 data-[enter]:opacity-100',
@@ -403,8 +406,8 @@ export default function CodeWorkspaceMenu({
             <Ariakit.MenuHeading render={<div />} className={headingClasses}>
               {transitionText.label}
             </Ariakit.MenuHeading>
-            <p className="text-text-secondary px-2.5 pb-2 text-xs">{relocationText.info}</p>
-            {relocation.targets.map((target) => (
+            <p className="text-text-secondary px-2.5 pb-2 text-xs">{transitionText.info}</p>
+            {transition.targets.map((target) => (
               <EnvironmentWorkspaces
                 key={target.environment.id}
                 environment={target.environment}
@@ -421,20 +424,47 @@ export default function CodeWorkspaceMenu({
               />
             ))}
             <Ariakit.MenuSeparator className="border-border-light my-1 h-0 w-full border-t" />
-            <Ariakit.MenuItem
-              disabled={!moveReady || moveMutation.isLoading}
-              hideOnClick={true}
-              onClick={confirmMove}
-              className={cn(
-                menuItemClasses(),
-                'items-center aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
-              )}
-            >
-              <FolderSync className="text-text-secondary size-4 shrink-0" aria-hidden="true" />
-              <span className="text-text-primary min-w-0 flex-1 truncate text-left text-sm font-medium">
-                {relocationText.label}
-              </span>
-            </Ariakit.MenuItem>
+            {offersMove && (
+              <Ariakit.MenuItem
+                disabled={disabled || !moveReady || moveMutation.isLoading}
+                hideOnClick={true}
+                onClick={confirmMove}
+                className={cn(
+                  menuItemClasses(),
+                  'items-center aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+                )}
+              >
+                <ConfirmIcon className="text-text-secondary size-4 shrink-0" aria-hidden="true" />
+                <span className="text-text-primary min-w-0 flex-1 truncate text-left text-sm font-medium">
+                  {transitionText.label}
+                </span>
+              </Ariakit.MenuItem>
+            )}
+            {transition.detachable && (
+              <Ariakit.MenuItem
+                data-testid="code-workspace-detach"
+                disabled={disabled || moveMutation.isLoading}
+                hideOnClick={true}
+                onClick={confirmDetach}
+                className={cn(
+                  menuItemClasses(),
+                  'aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+                )}
+              >
+                <FolderX
+                  className="text-text-secondary mt-0.5 size-4 shrink-0"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="text-text-primary truncate text-sm font-medium">
+                    {localize('com_ui_code_workspace_detach')}
+                  </div>
+                  <p className="text-text-secondary text-xs">
+                    {localize('com_ui_code_workspace_detach_info')}
+                  </p>
+                </div>
+              </Ariakit.MenuItem>
+            )}
           </>
         ) : (
           <>
@@ -482,7 +512,7 @@ export default function CodeWorkspaceMenu({
             ))}
           </>
         )}
-        <Ariakit.MenuSeparator className="my-1 h-0 w-full border-t border-border-light" />
+        <Ariakit.MenuSeparator className="border-border-light my-1 h-0 w-full border-t" />
         <Ariakit.MenuItem
           disabled={buttonDisabled || isRefreshing}
           hideOnClick={false}
@@ -493,8 +523,8 @@ export default function CodeWorkspaceMenu({
             'items-center aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
           )}
         >
-          <RefreshCw className="size-4 shrink-0 text-text-secondary" aria-hidden="true" />
-          <span className="text-sm font-medium text-text-primary">
+          <RefreshCw className="text-text-secondary size-4 shrink-0" aria-hidden="true" />
+          <span className="text-text-primary text-sm font-medium">
             {localize('com_ui_refresh')}
           </span>
         </Ariakit.MenuItem>
