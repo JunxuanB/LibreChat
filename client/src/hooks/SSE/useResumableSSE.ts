@@ -1,11 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { v4 } from 'uuid';
-import { SSE } from 'sse.js';
 import { useStore } from 'jotai';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSetRecoilState, useRecoilCallback } from 'recoil';
 import {
-  request,
   Constants,
   QueryKeys,
   ErrorTypes,
@@ -27,6 +25,7 @@ import {
 import type {
   Agents,
   TMessage,
+  ChatEvent,
   TPayload,
   TSubmission,
   TConversation,
@@ -36,12 +35,17 @@ import type {
   TSteerUpdatedEvent,
   TActivityLabelEvent,
   TReasoningLabelEvent,
+  ChatFinalFrame,
+  TAttachment,
+  TTokenUsageEvent,
+  TContextUsageEvent,
+  ChatStreamConnection,
 } from 'librechat-data-provider';
 import type { ActiveJobsResponse, StreamStatusResponse } from '~/data-provider';
 import type { DrainAfterAbort, QueuedMessageOrigin } from '~/store/families';
 import type { GenerationProtocolVersion } from '~/data-provider';
 import type { EventHandlerParams } from './useEventHandlers';
-import type { TResData } from '~/common';
+import type { TResData, TFinalResData } from '~/common';
 import {
   logger,
   clearComposerDrafts,
@@ -94,10 +98,14 @@ import useEventHandlers, {
 import { pendingApprovalActionFamily } from '~/components/Chat/approval/state';
 import useSteerConvert from '~/hooks/Chat/useSteerConvert';
 import { useAuthContext } from '~/hooks/AuthContext';
+import { createSSETransport } from './transport';
 import { useFileMapContext } from '~/Providers';
 import useUsageHandler from './useUsageHandler';
 import useLocalize from '~/hooks/useLocalize';
 import store from '~/store';
+
+/** The step handler predates the wire types and accepts a narrower payload. */
+type StepEvent = Parameters<ReturnType<typeof useEventHandlers>['stepHandler']>[0];
 
 type ChatHelpers = Pick<
   EventHandlerParams,
@@ -905,7 +913,7 @@ export default function useResumableSSE(
   const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(runIndex));
   const setLiveAppliedSteerIds = useSetRecoilState(store.liveAppliedSteerIds);
 
-  const sseRef = useRef<SSE | null>(null);
+  const streamRef = useRef<AbortController | null>(null);
   /** Removes the foreground re-attach listener owned by the newest
    *  subscription; exactly one is registered at a time. */
   const stopForegroundReattachRef = useRef<(() => void) | null>(null);
@@ -1474,7 +1482,7 @@ export default function useResumableSSE(
        *  stream the server no longer has — and by the dev-only navigation
        *  simulator below. `finalReceived` covers the frame-carried terminals. */
       let subscriptionRetired = false;
-      const preCreatedStepEvents: Array<Parameters<typeof stepHandler>[0]> = [];
+      const preCreatedStepEvents: StepEvent[] = [];
       const replayPreCreatedStepEvents = () => {
         if (!isCurrentSubscription() || preCreatedStepEvents.length === 0) {
           return;
@@ -1897,34 +1905,17 @@ export default function useResumableSSE(
       const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
       logger.log('ResumableSSE', 'Subscribing to stream:', url, { isResume });
 
-      const sse = new SSE(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...generationProtocolHeaders(),
-        },
-        method: 'GET',
-      });
-      sseRef.current = sse;
+      /** Closing is per connection: the transport tells this hook's own close
+       *  (`abort`) apart from a cancel by the user agent (`error` with status 0). */
+      const streamController = new AbortController();
+      streamRef.current = streamController;
+      let connection: ChatStreamConnection | null = null;
       const isCurrentSubscription = () =>
         lifecycleSignal?.aborted !== true &&
-        sseRef.current === sse &&
+        streamRef.current === streamController &&
         submissionRef.current === currentSubmission;
 
-      /**
-       * Whether THIS connection was closed by this hook. The abort listener
-       * used to infer that from `reconnectAttemptRef`, but that ref is shared
-       * across the reconnect ladder and stays raised from the moment a retry is
-       * scheduled until the replacement connection opens — so a user agent that
-       * cancelled the replacement before it opened (the ordinary case when the
-       * retry timer fires while the tab is still backgrounded) read as the
-       * previous connection's deliberate close, and recovery stopped there.
-       * Ownership is per connection, so the flag must be too.
-       */
-      let closedByUs = false;
-      const closeStream = () => {
-        closedByUs = true;
-        sse.close();
-      };
+      const closeStream = () => streamController.abort();
 
       let foregroundStatusCheckInFlight = false;
       const reattachOnForeground = () => {
@@ -1976,7 +1967,7 @@ export default function useResumableSSE(
           return;
         }
 
-        if (sse.readyState === SSE.CLOSED) {
+        if (connection?.closed === true) {
           reattachOnForeground();
           return;
         }
@@ -2027,7 +2018,7 @@ export default function useResumableSSE(
       stopForegroundReattachRef.current = () =>
         document.removeEventListener('visibilitychange', handleForegroundReattach);
 
-      sse.addEventListener('open', () => {
+      const handleOpen = () => {
         if (!isCurrentSubscription()) {
           return;
         }
@@ -2037,19 +2028,16 @@ export default function useResumableSSE(
         setIsSubmitting(true);
         setShowStopButton(generationCreatedAt != null);
         reconnectAttemptRef.current = 0;
-      });
+      };
 
-      sse.addEventListener('message', async (e: MessageEvent) => {
+      const handleFrame = async (event: ChatEvent) => {
         try {
-          if (!isCurrentSubscription()) {
-            return;
-          }
-          const data = JSON.parse(e.data);
-          if (finalReceived) {
+          if (!isCurrentSubscription() || finalReceived) {
             return;
           }
 
-          if (data.final === true && data.reconcile === true) {
+          if (event.type === 'final' && event.data.reconcile === true) {
+            const { data } = event;
             if (
               generationProtocolVersion !== GENERATION_PROTOCOL_VERSION ||
               !supportsGenerationProtocolV2(data)
@@ -2066,7 +2054,8 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.final != null) {
+          if (event.type === 'final') {
+            const { data } = event;
             finalReceived = true;
             const finalConvoId =
               data.conversation?.conversationId ??
@@ -2131,7 +2120,7 @@ export default function useResumableSSE(
             );
             let finalHandled = false;
             try {
-              finalHandler(data, currentSubmission as EventSubmission);
+              finalHandler(data as TFinalResData, currentSubmission as EventSubmission);
               finalHandled = true;
               finalizeUsage(data, { ...currentSubmission, userMessage });
             } catch (error) {
@@ -2181,7 +2170,8 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.created != null) {
+          if (event.type === 'created') {
+            const { data } = event;
             logger.log('ResumableSSE', 'Received CREATED event', {
               messageId: data.message?.messageId,
               conversationId: data.message?.conversationId,
@@ -2214,60 +2204,57 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.event === 'attachment' && data.data) {
+          if (event.type === 'attachment' && event.data) {
             attachmentHandler({
-              data: data.data,
+              data: event.data as TAttachment,
               submission: currentSubmission as EventSubmission,
             });
             return;
           }
 
-          if (data.event === 'title') {
-            titleHandler(data);
+          if (event.type === 'title') {
+            titleHandler(event.data);
             return;
           }
 
-          if (data.event === UsageEvents.ON_CONTEXT_USAGE) {
-            contextHandler(data.data, { ...currentSubmission, userMessage });
+          if (event.type === 'context_usage') {
+            contextHandler(event.data, { ...currentSubmission, userMessage });
             return;
           }
 
-          if (data.event === UsageEvents.ON_TOKEN_USAGE) {
-            usageHandler(data.data, { ...currentSubmission, userMessage });
+          if (event.type === 'token_usage') {
+            usageHandler(event.data, { ...currentSubmission, userMessage });
             return;
           }
 
-          if (data.event === ApprovalEvents.ON_PENDING_ACTION) {
-            applyPendingActionToMessages(data.data as Agents.PendingAction);
+          if (event.type === 'pending_action') {
+            applyPendingActionToMessages(event.data);
             setIsSubmitting(true);
             return;
           }
 
-          if (data.event === SteerEvents.ON_STEER_APPLIED) {
-            applySteerToMessages(data.data as TSteerAppliedEvent);
+          if (event.type === 'steer_applied') {
+            applySteerToMessages(event.data);
             return;
           }
 
-          if (data.event === SteerEvents.ON_STEER_UPDATED) {
-            updateSteerChips(data.data as TSteerUpdatedEvent);
+          if (event.type === 'steer_updated') {
+            updateSteerChips(event.data);
             return;
           }
 
-          if (data.event === ActivityLabelEvents.ON_ACTIVITY_LABEL) {
-            applyActivityLabelToMessages(data.data as TActivityLabelEvent);
+          if (event.type === 'activity_label') {
+            applyActivityLabelToMessages(event.data);
             return;
           }
 
-          if (data.event === ReasoningLabelEvents.ON_REASONING_LABEL) {
-            applyReasoningLabelToMessages(data.data as TReasoningLabelEvent);
+          if (event.type === 'reasoning_label') {
+            applyReasoningLabelToMessages(event.data);
             return;
           }
 
-          if (data.event === ReasoningLabelEvents.ON_REASONING_LABEL_ATTEMPT) {
-            return;
-          }
-
-          if (data.event != null) {
+          if (event.type === 'step') {
+            const data = event.data as StepEvent;
             if (
               data.event === StepEvents.ON_MESSAGE_DELTA ||
               data.event === StepEvents.ON_REASONING_DELTA
@@ -2287,7 +2274,8 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.sync != null) {
+          if (event.type === 'sync') {
+            const { data } = event;
             logger.log('ResumableSSE', 'SYNC received', {
               runSteps: data.resumeState?.runSteps?.length ?? 0,
               pendingEvents: data.pendingEvents?.length ?? 0,
@@ -2510,12 +2498,10 @@ export default function useResumableSSE(
              *  normally on the restored stream and updates its row in place. */
             prunePtcTraces();
 
-            if (data.resumeState?.replayEvents?.length > 0) {
-              logger.log(
-                'ResumableSSE',
-                `Replaying ${data.resumeState.replayEvents.length} resume events`,
-              );
-              for (const replayEvent of data.resumeState.replayEvents) {
+            const replayEvents = data.resumeState?.replayEvents ?? [];
+            if (replayEvents.length > 0) {
+              logger.log('ResumableSSE', `Replaying ${replayEvents.length} resume events`);
+              for (const replayEvent of replayEvents) {
                 const replayStepId = getStepEventId(replayEvent);
                 if (
                   replayStepId != null &&
@@ -2525,9 +2511,9 @@ export default function useResumableSSE(
                   continue;
                 }
                 if (replayEvent.event === UsageEvents.ON_CONTEXT_USAGE) {
-                  contextHandler(replayEvent.data, resumeSubmission);
+                  contextHandler(replayEvent.data as TContextUsageEvent, resumeSubmission);
                 } else if (replayEvent.event === UsageEvents.ON_TOKEN_USAGE) {
-                  usageHandler(replayEvent.data, resumeSubmission);
+                  usageHandler(replayEvent.data as TTokenUsageEvent, resumeSubmission);
                 } else if (replayEvent.event === ApprovalEvents.ON_PENDING_ACTION) {
                   // A pause that landed after the resume snapshot must still render its
                   // controls (mirror the live handler), not fall through to stepHandler.
@@ -2547,16 +2533,29 @@ export default function useResumableSSE(
                     replayEvent.event === StepEvents.ON_MESSAGE_DELTA ||
                     replayEvent.event === StepEvents.ON_REASONING_DELTA
                   ) {
-                    tapStream(replayEvent.data, resumeSubmission);
+                    tapStream(replayEvent.data as Agents.MessageDeltaEvent, resumeSubmission);
                   }
-                  stepHandler(replayEvent, resumeSubmission);
+                  stepHandler(replayEvent as StepEvent, resumeSubmission);
                 }
               }
             }
 
-            if (data.pendingEvents?.length > 0) {
-              logger.log('ResumableSSE', `Replaying ${data.pendingEvents.length} pending events`);
-              for (const pendingEvent of data.pendingEvents) {
+            const pendingEvents = data.pendingEvents ?? [];
+            if (pendingEvents.length > 0) {
+              logger.log('ResumableSSE', `Replaying ${pendingEvents.length} pending events`);
+              for (const pendingEvent of pendingEvents) {
+                if (!('event' in pendingEvent)) {
+                  if ('type' in pendingEvent) {
+                    /** Gap output streamed past the resume snapshot must reach the
+                     *  live estimate too, not just the message UI */
+                    tapContent(
+                      'text' in pendingEvent ? pendingEvent.text : undefined,
+                      resumeSubmission,
+                    );
+                    contentHandler({ data: pendingEvent, submission: resumeSubmission });
+                  }
+                  continue;
+                }
                 if (pendingEvent.event === 'title') {
                   titleHandler(pendingEvent);
                 } else if (pendingEvent.event === UsageEvents.ON_CONTEXT_USAGE) {
@@ -2586,12 +2585,7 @@ export default function useResumableSSE(
                   ) {
                     tapStream(pendingEvent.data, resumeSubmission);
                   }
-                  stepHandler(pendingEvent, resumeSubmission);
-                } else if (pendingEvent.type != null) {
-                  /** Gap output streamed past the resume snapshot must reach the
-                   *  live estimate too, not just the message UI */
-                  tapContent(pendingEvent.text, resumeSubmission);
-                  contentHandler({ data: pendingEvent, submission: resumeSubmission });
+                  stepHandler(pendingEvent as StepEvent, resumeSubmission);
                 }
               }
             }
@@ -2601,8 +2595,10 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.type != null) {
-            const { text, index } = data;
+          if (event.type === 'content') {
+            const { data } = event;
+            const { index } = data;
+            const text = 'text' in data ? data.text : undefined;
             if (text != null && index !== textIndex) {
               textIndex = index;
             }
@@ -2611,13 +2607,14 @@ export default function useResumableSSE(
             return;
           }
 
-          if (data.message != null) {
+          if (event.type === 'text') {
+            const { data } = event;
             const text = data.text ?? data.response;
             const initialResponse = {
               ...(currentSubmission.initialResponse as TMessage),
               parentMessageId: data.parentMessageId,
               messageId: data.messageId,
-            };
+            } as TMessage;
             /** Legacy non-agent streams send cumulative text here — feed the
              *  live estimate like the content path above */
             const textSubmission = { ...currentSubmission, userMessage, initialResponse };
@@ -2629,7 +2626,7 @@ export default function useResumableSSE(
         } catch (error) {
           logger.error('ResumableSSE', 'Error processing message:', error);
         }
-      });
+      };
 
       async function handoffToReplacement(
         conversationId: string,
@@ -2824,12 +2821,12 @@ export default function useResumableSSE(
         return true;
       }
 
-      const reconcileGenerationLifecycle = async (event: {
-        reconcileReason?: string;
-        terminalStatus?: 'complete' | 'error' | 'aborted';
-        generationCreatedAt?: number;
-        conversation?: { conversationId?: string };
-      }): Promise<void> => {
+      const reconcileGenerationLifecycle = async (
+        event: Pick<
+          ChatFinalFrame,
+          'reconcileReason' | 'terminalStatus' | 'generationCreatedAt' | 'conversation'
+        >,
+      ): Promise<void> => {
         if (!isCurrentSubscription()) {
           return;
         }
@@ -3086,21 +3083,24 @@ export default function useResumableSSE(
 
       /**
        * Error event handler - handles BOTH:
-       * 1. HTTP-level errors (responseCode present) - 404, 401, network failures
+       * 1. HTTP-level errors (status present) - 404, 409, network failures (0)
        * 2. Server-sent error events (event: error with data) - known errors like ViolationTypes/ErrorTypes
        *
-       * Order matters: check responseCode first since HTTP errors may also include data
+       * Order matters: check the status first since HTTP errors may also include data.
+       * The transport has already retried a 401 with a refreshed token.
        */
-      const handleTransportFailure = async (e: MessageEvent) => {
+      const handleTransportFailure = async ({
+        status: responseCode,
+        data,
+      }: Pick<Extract<ChatEvent, { type: 'error' }>, 'status' | 'data'>) => {
         if (!isCurrentSubscription()) {
           return;
         }
-        const responseCode = (e as MessageEvent & { responseCode?: number }).responseCode;
 
         if (finalReceived) {
           logger.log('ResumableSSE', 'Ignoring error after FINAL event', {
             responseCode,
-            hasData: !!e.data,
+            hasData: data != null,
           });
           return;
         }
@@ -3391,41 +3391,14 @@ export default function useResumableSSE(
           return;
         }
 
-        // Check for 401 and try to refresh token (same pattern as useSSE)
-        if (responseCode === 401) {
-          try {
-            const refreshResponse = await request.refreshToken();
-            if (!isCurrentSubscription()) {
-              return;
-            }
-            const newToken = refreshResponse?.token ?? '';
-            if (!newToken) {
-              throw new Error('Token refresh failed.');
-            }
-            sse.headers = {
-              ...sse.headers,
-              ...generationProtocolHeaders(),
-              Authorization: `Bearer ${newToken}`,
-            };
-            request.dispatchTokenUpdatedEvent(newToken);
-            sse.stream();
-            return;
-          } catch (error) {
-            if (!isCurrentSubscription()) {
-              return;
-            }
-            logger.log('ResumableSSE', 'Token refresh failed:', error);
-          }
-        }
-
         /**
          * Server-sent error event (event: error with data) - no responseCode.
          * These are known errors (ErrorTypes, ViolationTypes) that should be displayed to user.
-         * Only check e.data if there's no HTTP responseCode, since HTTP errors may also have body data.
+         * Only check the data if there's no HTTP status, since HTTP errors may also have body data.
          * Note: responseCode === 0 means transport failure (connection dropped) - treat as network error,
          * not a server-sent error payload. Use `== null` to only match undefined/null (no HTTP status).
          */
-        if (responseCode == null && e.data) {
+        if (responseCode == null && data != null) {
           finalReceived = true;
           const recoveryConvoId = currentSubmission.conversation?.conversationId ?? currentStreamId;
           if (
@@ -3434,7 +3407,7 @@ export default function useResumableSSE(
           ) {
             return;
           }
-          logger.log('ResumableSSE', 'Server-sent error event received:', e.data);
+          logger.log('ResumableSSE', 'Server-sent error event received:', data);
           cancelSteerRetryFrames();
           closeStream();
           /** FLUSH (not cancel): the error card below is built from the cache
@@ -3452,42 +3425,32 @@ export default function useResumableSSE(
             removeConvoFromAllQueries(queryClient, currentStreamId);
           }
 
-          let errorSupportsV2 = false;
+          const errorSupportsV2 = supportsGenerationProtocolV2(data);
+          const errorString =
+            typeof data === 'string' ? data : (data.error ?? data.message ?? JSON.stringify(data));
+
+          // Check if it's a known error type (ViolationTypes or ErrorTypes)
+          let isKnownError = false;
           try {
-            const errorData = JSON.parse(e.data);
-            errorSupportsV2 = supportsGenerationProtocolV2(errorData);
-            const errorString = errorData.error ?? errorData.message ?? JSON.stringify(errorData);
-
-            // Check if it's a known error type (ViolationTypes or ErrorTypes)
-            let isKnownError = false;
-            try {
-              const parsed =
-                typeof errorString === 'string' ? JSON.parse(errorString) : errorString;
-              const errorType = parsed?.type ?? parsed?.code;
-              if (errorType) {
-                const violationValues = Object.values(ViolationTypes) as string[];
-                const errorTypeValues = Object.values(ErrorTypes) as string[];
-                isKnownError =
-                  violationValues.includes(errorType) || errorTypeValues.includes(errorType);
-              }
-            } catch {
-              // Not JSON or parsing failed - treat as generic error
+            const parsed = typeof errorString === 'string' ? JSON.parse(errorString) : errorString;
+            const errorType = parsed?.type ?? parsed?.code;
+            if (errorType) {
+              const violationValues = Object.values(ViolationTypes) as string[];
+              const errorTypeValues = Object.values(ErrorTypes) as string[];
+              isKnownError =
+                violationValues.includes(errorType) || errorTypeValues.includes(errorType);
             }
-
-            logger.log('ResumableSSE', 'Error type check:', { isKnownError, errorString });
-
-            // Display the error to user via errorHandler
-            errorHandler({
-              data: { text: errorString } as unknown as Parameters<typeof errorHandler>[0]['data'],
-              submission: currentSubmission as EventSubmission,
-            });
-          } catch (parseError) {
-            logger.error('ResumableSSE', 'Failed to parse server error:', parseError);
-            errorHandler({
-              data: { text: e.data } as unknown as Parameters<typeof errorHandler>[0]['data'],
-              submission: currentSubmission as EventSubmission,
-            });
+          } catch {
+            // Not JSON or parsing failed - treat as generic error
           }
+
+          logger.log('ResumableSSE', 'Error type check:', { isKnownError, errorString });
+
+          // Display the error to user via errorHandler
+          errorHandler({
+            data: { text: errorString } as unknown as Parameters<typeof errorHandler>[0]['data'],
+            submission: currentSubmission as EventSubmission,
+          });
 
           setIsSubmitting(false);
           setShowStopButton(false);
@@ -3553,7 +3516,7 @@ export default function useResumableSSE(
         // Network failure or unknown HTTP error - attempt reconnection with backoff
         logger.log('ResumableSSE', 'Stream error (network failure) - will attempt reconnect', {
           responseCode,
-          hasData: !!e.data,
+          hasData: data != null,
         });
 
         if (reconnectAttemptRef.current < MAX_RETRIES) {
@@ -3815,41 +3778,15 @@ export default function useResumableSSE(
         }
       };
 
-      sse.addEventListener('error', handleTransportFailure);
-
       /**
-       * Abort event - fired when the underlying XHR is cancelled, either by one
-       * of this hook's own closes or by the user agent.
+       * The transport emits `abort` only for this hook's own closes. A cancel
+       * the user agent issued (a backgrounded or frozen mobile tab, while the
+       * generation keeps running server-side) arrives as an `error` with status
+       * 0 instead, so it climbs the same reconnect ladder as any dropped
+       * connection rather than stranding the pane on its partial content.
        */
-      sse.addEventListener('abort', () => {
+      const handleClose = () => {
         if (!isCurrentSubscription()) {
-          return;
-        }
-
-        /**
-         * A cancellation this hook did not issue came from the user agent,
-         * which cancels in-flight requests when a mobile browser is
-         * backgrounded or the page is frozen — and the generation it was
-         * carrying is still running server-side.
-         *
-         * Treating that as a deliberate close is what strands the response:
-         * the pane goes idle holding whatever partial content arrived before
-         * the switch, looking finished, and nothing re-reads the conversation
-         * until a reload or a navigation remounts the messages query. It is a
-         * dropped connection by every meaningful measure, so hand it to the
-         * transport-failure path verbatim rather than re-deriving a ladder
-         * beside it: that one already climbs its backoff, adjudicates the
-         * retry ceiling against durable status, and terminalizes into the
-         * refetch when the job turns out to have finished meanwhile.
-         */
-        if (!closedByUs) {
-          logger.log(
-            'ResumableSSE',
-            'Stream aborted by the user agent - recovering as transport failure',
-          );
-          void handleTransportFailure({
-            responseCode: 0,
-          } as MessageEvent & { responseCode?: number });
           return;
         }
 
@@ -3880,25 +3817,41 @@ export default function useResumableSSE(
          *  merge into the next response in this conversation. On a resume the
          *  collected usage is re-folded via backfillUsage, so nothing is lost. */
         resetLive({ ...currentSubmission, userMessage });
-      });
+      };
 
-      // Start the SSE connection
-      sse.stream();
+      connection = createSSETransport({ token }).reconnectToStream(
+        { url, headers: generationProtocolHeaders() },
+        {
+          signal: streamController.signal,
+          onEvent: (event) => {
+            switch (event.type) {
+              case 'open':
+                handleOpen();
+                return;
+              case 'error':
+                void handleTransportFailure(event);
+                return;
+              case 'abort':
+                handleClose();
+                return;
+              default:
+                void handleFrame(event);
+            }
+          },
+        },
+      );
 
       // Debug hooks for testing reconnection vs clean close behavior (dev only)
       if (import.meta.env.DEV) {
         const debugWindow = window as Window & {
-          __sse?: SSE;
           __killNetwork?: () => void;
           __closeClean?: () => void;
         };
-        debugWindow.__sse = sse;
 
         /** Simulate network drop - triggers error event → reconnection */
         debugWindow.__killNetwork = () => {
           logger.log('Debug', 'Simulating network drop...');
-          // @ts-ignore - sse.js types are incorrect, dispatchEvent actually takes Event
-          sse.dispatchEvent(new Event('error'));
+          void handleTransportFailure({});
         };
 
         /** Simulate clean close (navigation away) - triggers abort event → no reconnection */
@@ -4222,10 +4175,8 @@ export default function useResumableSSE(
       stopForegroundReattachRef.current?.();
       stopForegroundReattachRef.current = null;
       // Close SSE but do NOT dispatch cancel - navigation should not abort
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
+      streamRef.current?.abort();
+      streamRef.current = null;
       setStreamId(null);
       reconnectAttemptRef.current = 0;
       submissionRef.current = null;
@@ -4766,10 +4717,8 @@ export default function useResumableSSE(
       stopForegroundReattachRef.current = null;
       // Reset reconnect counter before closing (so abort handler doesn't think we're reconnecting)
       reconnectAttemptRef.current = 0;
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
+      streamRef.current?.abort();
+      streamRef.current = null;
       // Clear handler maps to prevent memory leaks and stale state
       clearStepMaps();
       // Reset UI state on ordinary cleanup. A generation handoff already
