@@ -814,6 +814,8 @@ export type GraphEdge = {
   condition?: (state: BaseGraphState) => boolean | string | string[];
   /** 'handoff' creates tools for dynamic routing, 'direct' creates direct edges, which also allow parallel execution */
   edgeType?: 'handoff' | 'direct';
+  /** Omitted edges stay turn-scoped; conversation scope nominates the next-turn agent. */
+  handoffScope?: 'turn' | 'conversation';
   /**
    * For direct edges: Optional prompt to add when transitioning through this edge.
    * String prompts can include variables like {results} which will be replaced with
@@ -918,12 +920,13 @@ export type AgentOwnerContact = {
  */
 export type AgentSubagentGraphEdge = Omit<
   GraphEdge,
-  'edgeType' | 'condition' | 'prompt' | 'promptKey'
+  'edgeType' | 'condition' | 'prompt' | 'promptKey' | 'handoffScope'
 > & {
   edgeType: 'direct';
   condition?: never;
   prompt?: string;
   promptKey?: never;
+  handoffScope?: never;
 };
 
 /** A bounded saved-agent team that can be spawned as one isolated child graph. */

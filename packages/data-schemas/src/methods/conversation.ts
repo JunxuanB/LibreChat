@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { RetentionMode } from 'librechat-data-provider';
+import { EModelEndpoint, RetentionMode } from 'librechat-data-provider';
 import type {
   AnyBulkWriteOperation,
   DeleteResult,
@@ -50,6 +50,24 @@ import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { decrementTagCounts } from './conversationTag';
 import logger from '~/config/winston';
+
+const PRIVATE_AGENT_ROUTING_FIELDS = [
+  'agentRoutingRevision',
+  'agentRoutingGeneration',
+  'agentRoutingTransitionId',
+  'agentRoutingPreviousAgentId',
+  'automaticHandoffsEnabled',
+] as const;
+
+function stripAgentRoutingFields(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record)) {
+    if (
+      PRIVATE_AGENT_ROUTING_FIELDS.some((field) => key === field || key.startsWith(`${field}.`))
+    ) {
+      delete record[key];
+    }
+  }
+}
 
 const ACTOR_CHECKPOINT_FIELDS = [
   'agentEventActor',
@@ -249,7 +267,46 @@ async function refreshChatProjectStatsInBatches(
   }
 }
 
+export interface AgentRoutingDecision {
+  agentId: string | null;
+  revision: number;
+  automaticHandoffsEnabled: boolean;
+  generation?: number;
+  transitionId?: string;
+  previousAgentId?: string;
+}
+
+export interface AgentRoutingIdentity {
+  user: string;
+  conversationId: string;
+  tenantId?: string;
+}
+
+export interface AgentRoutingCommitResult {
+  status: 'committed' | 'already_committed' | 'conflict' | 'missing';
+  decision: AgentRoutingDecision | null;
+}
+
 export interface ConversationMethods {
+  getConvoAgentRoutingDecision(
+    identity: AgentRoutingIdentity,
+  ): Promise<AgentRoutingDecision | null>;
+  admitConvoAgentRoutingGeneration(
+    identity: AgentRoutingIdentity & { expectedAgentId: string; generation: number },
+  ): Promise<AgentRoutingDecision | null>;
+  commitConvoAgentHandoff(
+    identity: AgentRoutingIdentity & {
+      expected: { agentId: string; revision: number; generation: number };
+      agentId: string;
+      transitionId: string;
+    },
+  ): Promise<AgentRoutingCommitResult>;
+  selectConvoAgentRoutingDecision(
+    identity: AgentRoutingIdentity & { agentId: string; expectedRevision: number },
+  ): Promise<AgentRoutingDecision | null>;
+  setConvoAutomaticHandoffs(
+    identity: AgentRoutingIdentity & { enabled: boolean; expectedRevision: number },
+  ): Promise<AgentRoutingDecision | null>;
   getConvoFiles(conversationId: string): Promise<string[]>;
   searchConversation(
     conversationId: string,
@@ -2243,6 +2300,7 @@ export function createConversationMethods(
       delete update.codeEnvironmentMode;
       delete update.codeWorkspaces;
       stripActorCheckpointFields(update);
+      stripAgentRoutingFields(update);
       if (appendMessageIds == null) {
         update.messages = await getMessages({ conversationId, user: userId }, '_id');
       } else {
@@ -2254,6 +2312,7 @@ export function createConversationMethods(
       delete unsetFields.codeEnvironmentMode;
       delete unsetFields.codeWorkspaces;
       stripActorCheckpointFields(unsetFields);
+      stripAgentRoutingFields(unsetFields);
 
       if (Object.prototype.hasOwnProperty.call(update, 'chatProjectId') && update.chatProjectId) {
         const chatProjectId = typeof update.chatProjectId === 'string' ? update.chatProjectId : '';
@@ -2368,13 +2427,17 @@ export function createConversationMethods(
           ? metadata.initialAgentId
           : null;
 
-      const buildOperation = (setFields: Record<string, unknown>) => {
+      const buildOperation = (
+        setFields: Record<string, unknown>,
+        unsets: Record<string, number> = unsetFields,
+        insertAgentId?: string,
+      ) => {
         const operation: Record<string, unknown> = { $set: setFields };
         if (appendMessageIds != null && appendMessageIds.length > 0) {
           operation.$addToSet = { messages: { $each: appendMessageIds } };
         }
-        if (Object.keys(unsetFields).length > 0) {
-          operation.$unset = unsetFields;
+        if (Object.keys(unsets).length > 0) {
+          operation.$unset = unsets;
         }
         const createdAtForInsert = updatesArchiveState
           ? (createdAtOnInsert ??
@@ -2382,6 +2445,7 @@ export function createConversationMethods(
           : createdAtOnInsert;
         operation.$setOnInsert = {
           initial_agent_id: initialAgentId,
+          ...(insertAgentId == null ? {} : { agent_id: insertAgentId }),
           ...decisionOnInsert,
           ...retentionOnInsert,
           ...(createdAtForInsert ? { createdAt: createdAtForInsert } : {}),
@@ -2402,6 +2466,53 @@ export function createConversationMethods(
           ...timestampOptions,
         }) as unknown as Promise<ConversationUpdateResult>;
 
+      const runProtectedUpdate = async (
+        filter: Record<string, unknown>,
+        fields: Record<string, unknown>,
+        upsert: boolean,
+      ): Promise<ConversationUpdateResult> => {
+        const changesAgent =
+          Object.prototype.hasOwnProperty.call(fields, 'agent_id') ||
+          Object.prototype.hasOwnProperty.call(unsetFields, 'agent_id');
+        if (!changesAgent) {
+          return runUpdate(filter, buildOperation(fields), upsert);
+        }
+        const sameAgentIsSafe =
+          typeof fields.agent_id === 'string' &&
+          !Object.prototype.hasOwnProperty.call(unsetFields, 'agent_id');
+        const legacy = await runUpdate(
+          {
+            ...filter,
+            ...(sameAgentIsSafe
+              ? {
+                  $or: [
+                    { agentRoutingRevision: { $exists: false } },
+                    { agent_id: fields.agent_id },
+                  ],
+                }
+              : { agentRoutingRevision: { $exists: false } }),
+          },
+          buildOperation(fields),
+          false,
+        );
+        if (legacy.value) {
+          return legacy;
+        }
+        const protectedFields = { ...fields };
+        delete protectedFields.agent_id;
+        const protectedUnsets = { ...unsetFields };
+        delete protectedUnsets.agent_id;
+        return runUpdate(
+          filter,
+          buildOperation(
+            protectedFields,
+            protectedUnsets,
+            typeof fields.agent_id === 'string' ? fields.agent_id : undefined,
+          ),
+          upsert,
+        );
+      };
+
       let conversationResult: ConversationUpdateResult;
       if (update.isArchived === true) {
         /** DocumentDB documents no support for pipeline-form updates on any engine
@@ -2415,19 +2526,15 @@ export function createConversationMethods(
         const stamped = { ...withoutStamp, archivedAt: update.archivedAt ?? new Date() };
 
         const runArchiveWrites = async () => {
-          const transitioned = await runUpdate(
+          const transitioned = await runProtectedUpdate(
             { ...baseFilter, isArchived: { $ne: true } },
-            buildOperation(stamped),
+            stamped,
             false,
           );
           if (transitioned.value) {
             return transitioned;
           }
-          return runUpdate(
-            { ...baseFilter, isArchived: true },
-            buildOperation(withoutStamp),
-            false,
-          );
+          return runProtectedUpdate({ ...baseFilter, isArchived: true }, withoutStamp, false);
         };
 
         conversationResult = await runArchiveWrites();
@@ -2442,7 +2549,7 @@ export function createConversationMethods(
           conversationResult = await runArchiveWrites();
         }
         if (!conversationResult.value && canUpsert) {
-          conversationResult = await runUpdate(baseFilter, buildOperation(stamped), true);
+          conversationResult = await runProtectedUpdate(baseFilter, stamped, true);
         }
         if (!conversationResult.value) {
           /** Alternating archive and unarchive requests can split every attempt, so
@@ -2457,9 +2564,9 @@ export function createConversationMethods(
           }
         }
       } else {
-        conversationResult = await runUpdate(
+        conversationResult = await runProtectedUpdate(
           baseFilter,
-          buildOperation(updatesArchiveState ? { ...update, archivedAt: null } : update),
+          updatesArchiveState ? { ...update, archivedAt: null } : update,
           canUpsert,
         );
       }
@@ -2663,6 +2770,163 @@ export function createConversationMethods(
     }
   }
 
+  const routingFields =
+    'agent_id agentRoutingRevision automaticHandoffsEnabled +agentRoutingGeneration +agentRoutingTransitionId +agentRoutingPreviousAgentId';
+  const routingFilter = ({ user, conversationId, tenantId }: AgentRoutingIdentity) => ({
+    user,
+    conversationId,
+    endpoint: EModelEndpoint.agents,
+    subagentThread: { $exists: false },
+    ...(tenantId == null ? {} : { tenantId }),
+  });
+  const routingDecision = (row: IConversation | null): AgentRoutingDecision | null =>
+    row == null
+      ? null
+      : {
+          agentId: row.agent_id ?? null,
+          revision: row.agentRoutingRevision ?? 0,
+          automaticHandoffsEnabled: row.automaticHandoffsEnabled !== false,
+          ...(row.agentRoutingGeneration == null ? {} : { generation: row.agentRoutingGeneration }),
+          ...(row.agentRoutingTransitionId == null
+            ? {}
+            : { transitionId: row.agentRoutingTransitionId }),
+          ...(row.agentRoutingPreviousAgentId == null
+            ? {}
+            : { previousAgentId: row.agentRoutingPreviousAgentId }),
+        };
+  const routingRevisionFilter = (expectedRevision: number) =>
+    expectedRevision === 0 ? { $in: [null, 0] } : expectedRevision;
+
+  async function getConvoAgentRoutingDecision(identity: AgentRoutingIdentity) {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await Conversation.findOne(routingFilter(identity))
+      .select(routingFields)
+      .lean<IConversation>();
+    return routingDecision(row);
+  }
+
+  async function admitConvoAgentRoutingGeneration({
+    expectedAgentId,
+    generation,
+    ...identity
+  }: AgentRoutingIdentity & { expectedAgentId: string; generation: number }) {
+    if (!Number.isSafeInteger(generation) || generation < 0 || !expectedAgentId) {
+      throw new Error('Invalid agent routing generation');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await withoutMeiliIndexing(
+      Conversation.findOneAndUpdate(
+        { ...routingFilter(identity), agent_id: expectedAgentId },
+        { $set: { agentRoutingGeneration: generation }, $inc: { agentRoutingRevision: 1 } },
+        { new: true, timestamps: false },
+      ),
+    )
+      .select(routingFields)
+      .lean<IConversation>();
+    return routingDecision(row);
+  }
+
+  async function commitConvoAgentHandoff({
+    expected,
+    agentId,
+    transitionId,
+    ...identity
+  }: AgentRoutingIdentity & {
+    expected: { agentId: string; revision: number; generation: number };
+    agentId: string;
+    transitionId: string;
+  }): Promise<AgentRoutingCommitResult> {
+    if (!agentId || !transitionId || !Number.isSafeInteger(expected.generation)) {
+      throw new Error('Invalid terminal agent handoff');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await Conversation.findOneAndUpdate(
+      {
+        ...routingFilter(identity),
+        agent_id: expected.agentId,
+        agentRoutingRevision: expected.revision,
+        agentRoutingGeneration: expected.generation,
+        automaticHandoffsEnabled: { $ne: false },
+      },
+      {
+        $set: {
+          agent_id: agentId,
+          agentRoutingTransitionId: transitionId,
+          agentRoutingPreviousAgentId: expected.agentId,
+        },
+        $inc: { agentRoutingRevision: 1 },
+      },
+      { new: true, timestamps: false },
+    )
+      .select(routingFields)
+      .lean<IConversation>();
+    if (row != null) {
+      return { status: 'committed', decision: routingDecision(row) };
+    }
+    const current = await getConvoAgentRoutingDecision(identity);
+    if (current == null) {
+      return { status: 'missing', decision: null };
+    }
+    if (current.transitionId === transitionId && current.agentId === agentId) {
+      return { status: 'already_committed', decision: current };
+    }
+    return { status: 'conflict', decision: current };
+  }
+
+  async function selectConvoAgentRoutingDecision({
+    agentId,
+    expectedRevision,
+    ...identity
+  }: AgentRoutingIdentity & { agentId: string; expectedRevision: number }) {
+    if (!agentId || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      throw new Error('Invalid manual agent selection');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await Conversation.findOneAndUpdate(
+      { ...routingFilter(identity), agentRoutingRevision: routingRevisionFilter(expectedRevision) },
+      {
+        $set: { agent_id: agentId },
+        $unset: { agentRoutingTransitionId: 1, agentRoutingPreviousAgentId: 1 },
+        $inc: { agentRoutingRevision: 1 },
+      },
+      { new: true, timestamps: false },
+    )
+      .select(routingFields)
+      .lean<IConversation>();
+    return routingDecision(row);
+  }
+
+  async function setConvoAutomaticHandoffs({
+    enabled,
+    expectedRevision,
+    ...identity
+  }: AgentRoutingIdentity & { enabled: boolean; expectedRevision: number }) {
+    if (
+      typeof enabled !== 'boolean' ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0
+    ) {
+      throw new Error('Invalid conversation handoff preference');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await withoutMeiliIndexing(
+      Conversation.findOneAndUpdate(
+        {
+          ...routingFilter(identity),
+          agentRoutingRevision: routingRevisionFilter(expectedRevision),
+        },
+        {
+          $set: { automaticHandoffsEnabled: enabled },
+          $inc: { agentRoutingRevision: 1 },
+        },
+        { new: true, timestamps: false },
+      ),
+    )
+      .select(routingFields)
+      .lean<IConversation>();
+    return routingDecision(row);
+  }
+
   /** Internal snapshot for a transition. The revision is never exposed in ordinary chat reads. */
   async function getConvoCodeEnvironmentDecision(user: string, conversationId: string) {
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
@@ -2792,15 +3056,26 @@ export function createConversationMethods(
        * O(1) in round-trips regardless of batch size.
        */
       const previousProjectByConversation = new Map<string, string>();
+      const legacyAgentConversations = new Set<string>();
       const conversationPairs = conversations
         .filter((c) => typeof c.user === 'string' && typeof c.conversationId === 'string')
         .map((c) => ({ user: c.user as string, conversationId: c.conversationId as string }));
       if (conversationPairs.length > 0) {
         const existing = await Conversation.find(
           { $or: conversationPairs },
-          'user conversationId chatProjectId',
-        ).lean<Array<{ user: string; conversationId: string; chatProjectId?: string | null }>>();
+          'user conversationId chatProjectId +agentRoutingRevision',
+        ).lean<
+          Array<{
+            user: string;
+            conversationId: string;
+            chatProjectId?: string | null;
+            agentRoutingRevision?: number;
+          }>
+        >();
         for (const doc of existing) {
+          if (doc.agentRoutingRevision == null) {
+            legacyAgentConversations.add(`${doc.user}:${doc.conversationId}`);
+          }
           if (doc.chatProjectId) {
             previousProjectByConversation.set(
               `${doc.user}:${doc.conversationId}`,
@@ -2811,11 +3086,32 @@ export function createConversationMethods(
       }
 
       const affectedProjectStats = new Map<string, { user: string; projectId: string }>();
+      const legacyAgentOps: AnyBulkWriteOperation[] = [];
       const bulkOps = conversations.map((convo) => {
-        const { codeEnvironmentMode, codeWorkspaces, ...sanitized } = convo;
+        const { codeEnvironmentMode, codeWorkspaces, agent_id, ...sanitized } = convo;
         delete sanitized.initial_agent_id;
         delete sanitized.codeEnvironmentRevision;
         stripActorCheckpointFields(sanitized);
+        stripAgentRoutingFields(sanitized);
+        if (
+          typeof agent_id === 'string' &&
+          typeof sanitized.user === 'string' &&
+          typeof sanitized.conversationId === 'string' &&
+          legacyAgentConversations.has(`${sanitized.user}:${sanitized.conversationId}`)
+        ) {
+          legacyAgentOps.push({
+            updateOne: {
+              filter: {
+                user: sanitized.user,
+                conversationId: sanitized.conversationId,
+                agentRoutingRevision: { $exists: false },
+              },
+              update: { $set: { agent_id } },
+              upsert: false,
+              timestamps: false,
+            },
+          });
+        }
         if (typeof sanitized.user === 'string' && typeof sanitized.chatProjectId === 'string') {
           if (ownedProjects.has(`${sanitized.user}:${sanitized.chatProjectId}`)) {
             affectedProjectStats.set(`${sanitized.user}:${sanitized.chatProjectId}`, {
@@ -2849,6 +3145,7 @@ export function createConversationMethods(
               $set: sanitized,
               $setOnInsert: {
                 initial_agent_id: null,
+                ...(typeof agent_id === 'string' && { agent_id }),
                 ...(codeEnvironmentMode != null && { codeEnvironmentMode }),
                 ...(codeWorkspaces != null && { codeWorkspaces }),
               },
@@ -2860,6 +3157,9 @@ export function createConversationMethods(
       });
 
       const result = await tenantSafeBulkWrite(Conversation, bulkOps);
+      if (legacyAgentOps.length > 0) {
+        await tenantSafeBulkWrite(Conversation, legacyAgentOps);
+      }
       await Promise.all(
         [...affectedProjectStats.values()].map(({ user, projectId }) =>
           refreshChatProjectStatsForUser(mongoose, user, projectId),
@@ -3581,6 +3881,11 @@ export function createConversationMethods(
     saveConvo,
     setConvoPinned,
     appendConvoMessageReference,
+    getConvoAgentRoutingDecision,
+    admitConvoAgentRoutingGeneration,
+    commitConvoAgentHandoff,
+    selectConvoAgentRoutingDecision,
+    setConvoAutomaticHandoffs,
     getConvoCodeEnvironmentDecision,
     readAdmittedConvoCodeEnvironmentDecision,
     replaceConvoCodeEnvironmentDecision,

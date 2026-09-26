@@ -1298,6 +1298,13 @@ export const agentsEndpointSchema = baseEndpointSchema
         .default(DEFAULT_AGENT_MODEL_RESPONSE_HEADERS_TIMEOUT_MS),
       recursionLimit: z.number().optional(),
       disableBuilder: z.boolean().optional().default(false),
+      /** Omitted or disabled preserves turn-only handoffs and existing recursion limits. */
+      conversationHandoffs: z
+        .object({
+          enabled: z.boolean().default(false),
+          maxHandoffs: z.number().int().min(1).max(100).default(10),
+        })
+        .optional(),
       /** Optional workspace guidance acquisition budget, separate from command execution. */
       repositoryInstructions: z
         .object({
