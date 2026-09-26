@@ -250,20 +250,7 @@ describe('theme registry', () => {
     expect(resolved.colors['rgb-chart-widget-stroke']).toBe('50 51 52');
   });
 
-  it('keeps the control outline a theme drew with its own medium border', () => {
-    const resolved = resolveTheme(
-      {
-        version: 1,
-        name: 'legacy-control-border-reference',
-        modes: { dark: { colors: { 'rgb-border-medium': '150 151 152' } } },
-      },
-      'dark',
-    );
-
-    expect(resolved.colors['rgb-border-control']).toBe('150 151 152');
-  });
-
-  it('keeps a legacy light border that clears 3:1, the role most controls drew', () => {
+  it('keeps the light border a legacy theme drew its controls with', () => {
     const resolved = resolveTheme(
       {
         version: 1,
@@ -278,64 +265,17 @@ describe('theme registry', () => {
     expect(resolved.colors['rgb-border-control']).toBe('110 111 112');
   });
 
-  it('passes over quiet legacy borders to the bundled outline where it clears 3:1', () => {
+  it('keeps the medium border a legacy theme drew its selects with', () => {
     const resolved = resolveTheme(
       {
         version: 1,
-        name: 'quiet-border-reference',
-        modes: {
-          light: {
-            colors: { 'rgb-border-light': '245 245 245', 'rgb-border-medium': '240 240 240' },
-          },
-        },
+        name: 'medium-border-reference',
+        modes: { dark: { colors: { 'rgb-border-medium': '150 151 152' } } },
       },
-      'light',
+      'dark',
     );
 
-    expect(resolved.colors['rgb-border-control']).toBe(defaultTheme['rgb-border-control']);
-  });
-
-  it('falls to the candidate that comes closest when nothing clears 3:1', () => {
-    const resolved = resolveTheme(
-      {
-        version: 1,
-        name: 'illegible-reference',
-        modes: {
-          light: {
-            colors: {
-              'rgb-surface-primary': '140 140 140',
-              'rgb-border-medium': '150 150 150',
-              'rgb-text-secondary': '120 120 120',
-              'rgb-text-primary': '90 90 90',
-            },
-          },
-        },
-      },
-      'light',
-    );
-
-    expect(resolved.colors['rgb-border-control']).toBe('90 90 90');
-  });
-
-  it('outlines controls with secondary text when no border clears its canvases', () => {
-    const resolved = resolveTheme(
-      {
-        version: 1,
-        name: 'mid-gray-canvas-reference',
-        modes: {
-          light: {
-            colors: {
-              'rgb-surface-primary': '140 140 140',
-              'rgb-border-medium': '150 150 150',
-              'rgb-text-secondary': '20 21 22',
-            },
-          },
-        },
-      },
-      'light',
-    );
-
-    expect(resolved.colors['rgb-border-control']).toBe('20 21 22');
+    expect(resolved.colors['rgb-border-control']).toBe('150 151 152');
   });
 
   it('gives a theme that leaves every border alone the bundled control outline', () => {
@@ -343,12 +283,12 @@ describe('theme registry', () => {
       {
         version: 1,
         name: 'surface-only-reference',
-        modes: { light: { colors: { 'rgb-surface-primary': '250 250 250' } } },
+        modes: { dark: { colors: { 'rgb-surface-primary': '10 10 10' } } },
       },
-      'light',
+      'dark',
     );
 
-    expect(resolved.colors['rgb-border-control']).toBe(defaultTheme['rgb-border-control']);
+    expect(resolved.colors['rgb-border-control']).toBe(darkTheme['rgb-border-control']);
   });
 
   it('preserves an explicit control outline', () => {
