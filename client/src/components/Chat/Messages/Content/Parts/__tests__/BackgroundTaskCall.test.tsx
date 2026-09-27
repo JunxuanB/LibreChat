@@ -424,6 +424,10 @@ describe('BackgroundTaskCall', () => {
       </RecoilRoot>,
     );
     expect(screen.getByTestId('task-header')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('task-header').parentElement?.nextElementSibling).toHaveAttribute(
+      'data-expanded',
+      'true',
+    );
     expect(screen.getByTestId('task-output')).toHaveTextContent('checked at=2026-09-27');
   });
 });
