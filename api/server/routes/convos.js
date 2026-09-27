@@ -56,6 +56,9 @@ const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const { importConversations } = require('~/server/utils/import');
 const { getAppConfig } = require('~/server/services/Config');
 const subagentThreadTaskStore = require('~/server/services/Endpoints/agents/subagentThreadStore');
+const {
+  pendingBackgroundToolCompletions,
+} = require('~/server/services/Endpoints/agents/backgroundCompletion');
 const getLogStores = require('~/cache/getLogStores');
 const db = require('~/models');
 
@@ -160,6 +163,7 @@ const markConvoUnreadHandler = createMarkConvoUnreadHandler({
 const backgroundTaskPolicy = createBackgroundTaskPolicyMiddleware({ getAppConfig });
 const backgroundTaskIndexHandler = createBackgroundTaskIndexHandler({
   registry: backgroundTaskRegistry,
+  pending: pendingBackgroundToolCompletions,
 });
 const backgroundTaskCancelHandler = createBackgroundTaskCancelHandler({
   registry: backgroundTaskRegistry,

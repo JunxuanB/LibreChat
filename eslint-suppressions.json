@@ -514,9 +514,6 @@
     },
     "shadcn/no-raw-colors": {
       "count": 1
-    },
-    "shadcn/no-restyle": {
-      "count": 13
     }
   },
   "client/src/components/Chat/Messages/Content/AgentHandoff.tsx": {
@@ -805,9 +802,6 @@
   "client/src/components/Chat/Messages/Content/ToolCallGroup.tsx": {
     "shadcn/no-inline-styles": {
       "count": 1
-    },
-    "shadcn/no-restyle": {
-      "count": 11
     }
   },
   "client/src/components/Chat/Messages/Content/ToolCallInfo.tsx": {

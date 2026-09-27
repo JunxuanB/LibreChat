@@ -26,6 +26,7 @@ const {
   resolveWebSearchSSRFAgents,
   buildWebSearchDynamicContext,
   codeExecutionAuthHeaders,
+  getCodeFileLocation,
   resolveCodeExecutionContext,
   resolveMCPClientCapabilityProfile,
 } = require('@librechat/api');
@@ -398,6 +399,7 @@ const loadTools = async ({
           executionProfile: codeExecutionContext.executionProfile,
           executionRouteKey: codeExecutionContext.executionRouteKey,
           bridgeWorkerId: codeExecutionContext.bridgeWorkerId,
+          codeFileLocation: getCodeFileLocation(codeExecutionContext),
         });
         if (toolContext) {
           dynamicToolContextMap[tool] = toolContext;

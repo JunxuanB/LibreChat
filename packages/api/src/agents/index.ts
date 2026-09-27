@@ -85,7 +85,7 @@ export * from './activityPhases';
 export * from './subagentDelivery';
 export * from './view';
 export * from './tasks';
-export { backgroundTaskRegistry } from './background';
+export { backgroundTaskRegistry, registerBackgroundTaskShutdown } from './background';
 export * from './workspace';
 export * from './reasoningLabels';
 export * from './refusal';

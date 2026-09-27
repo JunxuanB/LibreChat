@@ -97,6 +97,11 @@ import {
   isFileResourceToolName,
 } from './tools';
 import {
+  BACKGROUND_TASK_ABORT_GRACE_MS,
+  BACKGROUND_TASK_SHUTDOWN_MESSAGE,
+  BACKGROUND_TOOL_PRODUCER_HEARTBEAT_MS,
+} from './backgroundCompletion';
+import {
   createCodeApiRateLimitBudget,
   isAbortError,
   logAxiosError,
@@ -109,10 +114,6 @@ import {
   contentFilterModelBoundBlockResponse,
   isContentFilterError,
 } from '~/middleware/contentFilter';
-import {
-  BACKGROUND_TASK_ABORT_GRACE_MS,
-  BACKGROUND_TOOL_PRODUCER_HEARTBEAT_MS,
-} from './backgroundCompletion';
 import {
   WorkspaceToolHttpError,
   WORKSPACE_EDIT_MAX_COUNT,
@@ -398,6 +399,7 @@ export interface ToolExecuteOptions {
      *  prior cache entry. */
     version: number;
     fileCount: number;
+    source?: 'inline' | 'github' | 'notion' | 'deployment';
     /** True for deployment-directory skills that are loaded in memory. */
     deployment?: boolean;
     /**
@@ -432,6 +434,7 @@ export interface ToolExecuteOptions {
     _id: Types.ObjectId;
     version: number;
     fileCount: number;
+    source?: 'inline' | 'github' | 'notion' | 'deployment';
     disableModelInvocation?: boolean;
   } | null>;
   /** Creates a skill from a tool-authored SKILL.md body. */
@@ -493,6 +496,8 @@ export interface ToolExecuteOptions {
     relativePath: string;
     content: string;
     mimeType: string;
+    expectedFileId?: string;
+    createOnly: boolean;
   }) => Promise<{
     bytes: number;
     relativePath: string;
@@ -547,6 +552,7 @@ export interface ToolExecuteOptions {
     skillId: Types.ObjectId | string,
     relativePath: string,
   ) => Promise<{
+    file_id?: string;
     content?: string;
     isBinary?: boolean;
     mimeType: string;
@@ -560,6 +566,7 @@ export interface ToolExecuteOptions {
     skillId: Types.ObjectId | string,
     relativePath: string,
     update: { content?: string; isBinary?: boolean },
+    expectedFileId?: string,
   ) => Promise<void>;
   /** Reads a bounded text range from an attached worker's logical workspace. */
   readWorkspaceFile?: (params: {
@@ -1037,12 +1044,12 @@ type MatchStatus =
   | { status: 'ambiguous'; strategy: string; count: number };
 
 type LoadedSkillText =
-  | { status: 'loaded'; content: string; bytes: number }
+  | { status: 'loaded'; content: string; bytes: number; fileId?: string }
   | { status: 'missing' }
   | { status: 'error'; message: string };
 
 type ExistingSkillFile =
-  | { status: 'present'; oldContent?: string }
+  | { status: 'present'; oldContent?: string; fileId?: string }
   | { status: 'missing' }
   | { status: 'error'; message: string };
 
@@ -3474,6 +3481,7 @@ async function loadSkillFileTextForAuthoring({
       status: 'loaded',
       content: file.content,
       bytes: Buffer.byteLength(file.content, 'utf8'),
+      fileId: file.file_id,
     };
   }
   if (file.bytes > MAX_CACHE_BYTES) {
@@ -3516,7 +3524,7 @@ async function loadSkillFileTextForAuthoring({
   for (let i = 0; i < checkLen; i++) {
     if (buffer[i] === 0) {
       if (updateSkillFileContent) {
-        updateSkillFileContent(skill._id, relativePath, { isBinary: true }).catch(
+        updateSkillFileContent(skill._id, relativePath, { isBinary: true }, file.file_id).catch(
           (err: unknown) => {
             logAxiosError({
               message: '[loadSkillFileTextForAuthoring] cache write failed',
@@ -3531,16 +3539,19 @@ async function loadSkillFileTextForAuthoring({
 
   const text = buffer.toString('utf-8');
   if (updateSkillFileContent) {
-    updateSkillFileContent(skill._id, relativePath, { content: text, isBinary: false }).catch(
-      (err: unknown) => {
-        logAxiosError({
-          message: '[loadSkillFileTextForAuthoring] cache write failed',
-          error: err,
-        });
-      },
-    );
+    updateSkillFileContent(
+      skill._id,
+      relativePath,
+      { content: text, isBinary: false },
+      file.file_id,
+    ).catch((err: unknown) => {
+      logAxiosError({
+        message: '[loadSkillFileTextForAuthoring] cache write failed',
+        error: err,
+      });
+    });
   }
-  return { status: 'loaded', content: text, bytes: buffer.length };
+  return { status: 'loaded', content: text, bytes: buffer.length, fileId: file.file_id };
 }
 
 async function inspectBundledSkillFileForCreate({
@@ -3564,13 +3575,13 @@ async function inspectBundledSkillFileForCreate({
     return { status: 'missing' };
   }
   if (file.isBinary === true || file.bytes > MAX_CACHE_BYTES) {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
   if (file.content != null && file.content !== '') {
-    return { status: 'present', oldContent: file.content };
+    return { status: 'present', oldContent: file.content, fileId: file.file_id };
   }
   if (!options.getStrategyFunctions || !req) {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
 
   const loaded = await loadSkillFileTextForAuthoring({
@@ -3583,9 +3594,9 @@ async function inspectBundledSkillFileForCreate({
     return { status: 'missing' };
   }
   if (loaded.status === 'error') {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
-  return { status: 'present', oldContent: loaded.content };
+  return { status: 'present', oldContent: loaded.content, fileId: loaded.fileId };
 }
 
 async function ensureBundledSkillVersionCurrent({
@@ -3803,6 +3814,7 @@ async function writeBundledSkillFile({
   displayPath,
   content,
   oldContent,
+  fileId,
   created,
 }: {
   tc: ToolCallRequest;
@@ -3813,6 +3825,7 @@ async function writeBundledSkillFile({
   displayPath: string;
   content: string;
   oldContent?: string;
+  fileId?: string;
   created: boolean;
 }): AuthoringResult {
   const editDenied = await ensureCanEditSkill(tc, options, req, skill._id);
@@ -3821,6 +3834,15 @@ async function writeBundledSkillFile({
   }
   if (!req || !options.saveSkillFileContent) {
     return errorResult(tc, 'Skill file writing is not configured.');
+  }
+  if (skill.source != null && skill.source !== 'inline') {
+    return errorResult(tc, 'Externally managed skill files are read-only.');
+  }
+  if (!created && !fileId) {
+    return errorResult(
+      tc,
+      `File revision unavailable for ${displayPath}. Re-read the file and retry.`,
+    );
   }
   const staleDenied = await ensureBundledSkillVersionCurrent({
     tc,
@@ -3858,13 +3880,27 @@ async function writeBundledSkillFile({
     diff = undefined;
   }
 
-  await options.saveSkillFileContent({
-    req,
-    skillId: skill._id,
-    relativePath,
-    content,
-    mimeType: guessMimeType(relativePath),
-  });
+  try {
+    await options.saveSkillFileContent({
+      req,
+      skillId: skill._id,
+      relativePath,
+      content,
+      mimeType: guessMimeType(relativePath),
+      expectedFileId: fileId,
+      createOnly: created,
+    });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'SKILL_FILE_CONFLICT') {
+      return errorResult(
+        tc,
+        created
+          ? `File already exists: ${displayPath}. Re-read it and pass overwrite: true to replace.`
+          : `Skill file changed while editing. Re-read ${displayPath} and retry.`,
+      );
+    }
+    throw error;
+  }
   const action = created ? 'Created' : 'Updated';
   const summary = `${action} ${displayPath} (${content.length} chars).`;
   return successResult(tc, diff ? `${summary}\n\n${diff}` : summary, {
@@ -4367,6 +4403,7 @@ async function handleCreateFileCall(
     displayPath: parsed.displayPath,
     content: args.content,
     oldContent: current.status === 'present' ? current.oldContent : undefined,
+    fileId: current.status === 'present' ? current.fileId : undefined,
     created: current.status === 'missing',
   });
 }
@@ -4494,6 +4531,7 @@ async function handleEditFileCall(
     displayPath: parsed.displayPath,
     content: edited.content,
     oldContent: current.content,
+    fileId: current.fileId,
     created: false,
   });
   if (result.status === 'success') {
@@ -4987,7 +5025,7 @@ async function handleReadFileCall(
     if (isBinary) {
       // Cache the binary flag (first read only)
       if (file.isBinary == null && updateSkillFileContent) {
-        updateSkillFileContent(skill._id, relativePath, { isBinary: true }).catch(
+        updateSkillFileContent(skill._id, relativePath, { isBinary: true }, file.file_id).catch(
           (err: unknown) => {
             logAxiosError({
               message: '[handleReadFileCall] cache write failed',
@@ -5033,14 +5071,17 @@ async function handleReadFileCall(
 
     // Cache text on first read (skill files are immutable)
     if (file.content == null && updateSkillFileContent && buffer.length <= MAX_CACHE_BYTES) {
-      updateSkillFileContent(skill._id, relativePath, { content: text, isBinary: false }).catch(
-        (err: unknown) => {
-          logAxiosError({
-            message: '[handleReadFileCall] cache write failed',
-            error: err,
-          });
-        },
-      );
+      updateSkillFileContent(
+        skill._id,
+        relativePath,
+        { content: text, isBinary: false },
+        file.file_id,
+      ).catch((err: unknown) => {
+        logAxiosError({
+          message: '[handleReadFileCall] cache write failed',
+          error: err,
+        });
+      });
     }
 
     if (buffer.length > MAX_READABLE_BYTES) {
@@ -5901,7 +5942,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 };
               }
               const backgroundAbortController = new AbortController();
-              let backgroundAbortSource: 'manual' | 'timeout' | undefined;
+              let backgroundAbortSource: 'manual' | 'timeout' | 'shutdown' | undefined;
               const created = backgroundTaskRegistry.create({
                 ...(detachedReservation?.status === 'reserved'
                   ? { taskId: detachedReservation.taskId }
@@ -5972,6 +6013,63 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     );
                   }
                 }
+                let durableReceiptWrite: Promise<boolean> | undefined;
+                let durableReceiptAmbiguous = false;
+                let durableResultConfirmed = false;
+                let forcedShutdownResult = false;
+                let resolveDurableReceipt: () => void = () => undefined;
+                const durableReceiptSettled = new Promise<void>((resolve) => {
+                  resolveDurableReceipt = resolve;
+                });
+                const confirmDurableResult = (): void => {
+                  durableResultConfirmed = true;
+                  resolveDurableReceipt();
+                };
+                /** One durable receipt per task. The task's own settlement and a
+                 *  shutdown flush share the first write, so neither can retire or
+                 *  contradict a receipt the other already stored. */
+                const writeDurableReceipt = (receipt: {
+                  status: 'completed' | 'error' | 'cancelled';
+                  output?: string;
+                  settledAt: Date;
+                }): Promise<boolean> => {
+                  if (durableReceiptWrite != null) {
+                    return durableReceiptWrite;
+                  }
+                  durableReceiptWrite = (async (): Promise<boolean> => {
+                    if (completionAdmission?.persistResult == null) {
+                      return false;
+                    }
+                    try {
+                      return await completionAdmission.persistResult({
+                        status: receipt.status,
+                        output: truncateMiddle(
+                          receipt.output ?? '',
+                          backgroundCompletionResultMaxChars,
+                        ),
+                        settledAt: receipt.settledAt,
+                      });
+                    } catch (receiptError) {
+                      durableReceiptAmbiguous = true;
+                      logger.warn(
+                        `[background] Failed to persist independent result receipt for task ${task.id}:`,
+                        receiptError,
+                      );
+                      return false;
+                    }
+                  })();
+                  void durableReceiptWrite.then((written) => {
+                    if (written) {
+                      confirmDurableResult();
+                    }
+                  });
+                  return durableReceiptWrite;
+                };
+                /** The task's own terminal result, recorded before its (possibly slow)
+                 *  persistence starts, so a shutdown flush can store it durably. */
+                let settledReceipt:
+                  | { status: 'completed' | 'error' | 'cancelled'; output?: string }
+                  | undefined;
                 /** Persists the settled result onto the dispatch turn's message
                  *  (patch the tool-call part's output, persist generated files,
                  *  append attachments), so a backgrounded code call reads like a
@@ -6034,37 +6132,18 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   );
                   const backgroundTask = resolveBackgroundTask();
                   let durableReceiptReady = false;
-                  let durableReceiptAmbiguous = false;
-                  const persistDurableReceipt = async (receipt: {
+                  const persistDurableReceipt = (receipt: {
                     status: 'completed' | 'error' | 'cancelled';
                     output?: string;
-                  }): Promise<boolean> => {
-                    if (completionAdmission?.persistResult == null) {
-                      return false;
-                    }
-                    try {
-                      return await completionAdmission.persistResult({
-                        status: receipt.status,
-                        output: truncateMiddle(
-                          receipt.output ?? '',
-                          backgroundCompletionResultMaxChars,
-                        ),
-                        settledAt: backgroundTask.settledAt,
-                      });
-                    } catch (receiptError) {
-                      durableReceiptAmbiguous = true;
-                      logger.warn(
-                        `[background] Failed to persist independent result receipt for task ${task.id}:`,
-                        receiptError,
-                      );
-                      return false;
-                    }
-                  };
+                  }): Promise<boolean> =>
+                    writeDurableReceipt({ ...receipt, settledAt: backgroundTask.settledAt });
                   const retireFailedPersistence = async (
                     reason: string,
                     certainty: 'definite' | 'ambiguous',
                   ): Promise<void> => {
-                    if (durableReceiptAmbiguous) {
+                    /** Never retire a delivery that already holds a durable receipt,
+                     *  including one a shutdown flush stored ahead of this path. */
+                    if (durableReceiptAmbiguous || (await durableReceiptWrite) === true) {
                       return;
                     }
                     if (completionAdmission == null) {
@@ -6149,6 +6228,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           'definite',
                         );
                       } else if (deliveryReady && !durableReceiptReady) {
+                        confirmDurableResult();
                         completionAdmission?.expedite?.();
                       }
                     } catch (persistError) {
@@ -6220,6 +6300,9 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         output: params.output ?? localTask?.result,
                       });
                     }
+                    if (persisted.deliveryReady !== false) {
+                      confirmDurableResult();
+                    }
                     if (persisted.deliveryReady === false) {
                       await retireFailedPersistence(
                         'background code result was not persisted',
@@ -6277,11 +6360,18 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     );
                   }
                 };
-                const persistSettledBackgroundResult = async (params: {
-                  output?: string;
-                  artifact?: unknown;
-                  status: 'completed' | 'error' | 'cancelled';
-                }): Promise<void> => {
+                const persistSettledBackgroundResult = async (
+                  params: {
+                    output?: string;
+                    artifact?: unknown;
+                    status: 'completed' | 'error' | 'cancelled';
+                  },
+                  forced = false,
+                ): Promise<void> => {
+                  if (forcedShutdownResult && !forced) {
+                    return;
+                  }
+                  settledReceipt = { status: params.status, output: params.output };
                   /** Held for the whole persist, including a code harvest that waits for
                    *  a long dispatch turn, so retention pressure cannot evict the task. */
                   backgroundTaskRegistry.markCompletionPersistencePending(
@@ -6444,7 +6534,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   }, BACKGROUND_TASK_ABORT_GRACE_MS);
                   producerRetirementTimeout.unref?.();
                 };
-                void (async () => {
+                const settlement = (async () => {
                   try {
                     const result = await withBackgroundTaskTimeout(
                       invokePromise,
@@ -6565,7 +6655,12 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         backgroundControlEnabled,
                       ),
                     );
-                    const errorOutput = policyError ?? message;
+                    /** Tools report an abort in their own words; a shutdown interrupt
+                     *  tells the agent why it happened and that it may retry. */
+                    const errorOutput =
+                      backgroundAbortSource === 'shutdown'
+                        ? BACKGROUND_TASK_SHUTDOWN_MESSAGE
+                        : (policyError ?? message);
                     const filteredError =
                       policyError == null
                         ? filteredToolOutputResult(tc, backgroundReq, {
@@ -6634,6 +6729,74 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     await stopProducerHeartbeat();
                   }
                 })();
+                void settlement.then(
+                  () => {
+                    if (completionAdmission == null || !completionPreregistered) {
+                      resolveDurableReceipt();
+                    }
+                  },
+                  () => undefined,
+                );
+                backgroundTaskRegistry.trackShutdown(task, {
+                  settled: durableReceiptSettled,
+                  interrupt: (reason) => {
+                    if (backgroundAbortSource != null || backgroundAbortController.signal.aborted) {
+                      return;
+                    }
+                    backgroundAbortSource = 'shutdown';
+                    backgroundAbortController.abort(new DOMException(reason, 'AbortError'));
+                  },
+                  flush: async (reason) => {
+                    await stopProducerHeartbeat();
+                    if (durableReceiptWrite != null) {
+                      await durableReceiptWrite;
+                    } else if (settledReceipt != null) {
+                      await writeDurableReceipt({ ...settledReceipt, settledAt: new Date() });
+                    } else {
+                      forcedShutdownResult = true;
+                      const failure = toBackgroundToolFailure(tc.name, reason);
+                      backgroundTaskRegistry.fail(
+                        backgroundUserId,
+                        backgroundConversationId,
+                        task.id,
+                        isCodeCall ? failure : reason,
+                        { harvestStarted: harvestEnabled },
+                      );
+                      try {
+                        await persistDetachedTerminal({ status: 'failed', error: failure });
+                      } catch (detachedError) {
+                        logger.warn(
+                          `[background] Failed to settle detached action for interrupted task ${task.id}:`,
+                          detachedError,
+                        );
+                      }
+                      if (completionAdmission?.persistResult != null) {
+                        await writeDurableReceipt({
+                          status: 'error',
+                          output: failure,
+                          settledAt: new Date(),
+                        });
+                      } else if (completionAdmission != null) {
+                        await persistSettledBackgroundResult(
+                          { status: 'error', output: failure },
+                          true,
+                        );
+                      }
+                    }
+                    if (durableResultConfirmed || completionAdmission == null) {
+                      return;
+                    }
+                    if (settledReceipt != null && !forcedShutdownResult) {
+                      await settlement;
+                      if (durableResultConfirmed) {
+                        return;
+                      }
+                    }
+                    if (completionPreregistered) {
+                      throw new Error(`Background task ${task.id} has no durable shutdown result`);
+                    }
+                  },
+                });
                 if (
                   detachedReservation?.status === 'reserved' &&
                   eventActorDetachedAction != null &&
