@@ -107,29 +107,29 @@ export default function AgentRoutingNotice({
       aria-label={localize('com_ui_agent_handoff_future_turns')}
       className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs text-text-secondary xl:max-w-4xl"
     >
-      {canSwitchBack && (agents == null || previous != null) ? (
+      {canSwitchBack ? (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span role="status">
             {localize('com_ui_agent_handoff_future_agent', {
               0: selected?.name ?? localize('com_ui_agent'),
             })}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={update.isLoading}
-            onClick={() =>
-              update.mutate({
-                action: 'switch_back',
-                transitionId: decision.transitionId!,
-                expectedRevision: decision.revision,
-              })
-            }
-          >
-            {localize('com_ui_agent_handoff_switch_back', {
-              0: previous?.name ?? localize('com_ui_agent'),
-            })}
-          </Button>
+          {previous != null && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={update.isLoading}
+              onClick={() =>
+                update.mutate({
+                  action: 'switch_back',
+                  transitionId: decision.transitionId!,
+                  expectedRevision: decision.revision,
+                })
+              }
+            >
+              {localize('com_ui_agent_handoff_switch_back', { 0: previous.name })}
+            </Button>
+          )}
         </div>
       ) : (
         <span />
