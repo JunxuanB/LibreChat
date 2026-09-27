@@ -22,12 +22,17 @@ export type CustomConfigLoadMode = 'startup' | 'reload';
 
 export interface CustomConfigLoadOptions {
   mode?: CustomConfigLoadMode;
+  remoteTimeoutMs?: number;
 }
 
 export interface CustomConfigLoaderOptions {
   defaultConfigPath: string;
   loadLocal: (configPath: string) => unknown;
-  fetchRemote?: (configPath: string, mode: CustomConfigLoadMode) => Promise<unknown>;
+  fetchRemote?: (
+    configPath: string,
+    mode: CustomConfigLoadMode,
+    timeoutMs: number,
+  ) => Promise<unknown>;
   redactConfig: (config: TCustomConfig) => TCustomConfig;
 }
 
@@ -61,9 +66,7 @@ function isOpenRouterEndpoint(endpoint: TEndpoint): boolean {
 function shouldPreserveCustomParams(customParams: CustomParams | undefined): boolean {
   const defaultEndpoint = customParams?.defaultParamsEndpoint;
   return (
-    defaultEndpoint != null &&
-    defaultEndpoint !== 'custom' &&
-    defaultEndpoint !== Providers.OPENROUTER
+    !!defaultEndpoint && defaultEndpoint !== 'custom' && defaultEndpoint !== Providers.OPENROUTER
   );
 }
 
@@ -163,10 +166,14 @@ export function createCustomConfigLoader({
   defaultConfigPath,
   loadLocal,
   redactConfig,
-  fetchRemote = async (configPath: string, mode: CustomConfigLoadMode): Promise<unknown> =>
+  fetchRemote = async (
+    configPath: string,
+    mode: CustomConfigLoadMode,
+    timeoutMs: number,
+  ): Promise<unknown> =>
     (
       await (mode === 'reload'
-        ? axios.get(configPath, { timeout: REMOTE_CONFIG_RELOAD_TIMEOUT_MS })
+        ? axios.get(configPath, { timeout: timeoutMs })
         : axios.get(configPath))
     ).data,
 }: CustomConfigLoaderOptions): (
@@ -214,7 +221,11 @@ export function createCustomConfigLoader({
       let loadedConfig: unknown;
       if (isRemoteConfigPath(configPath)) {
         try {
-          loadedConfig = await fetchRemote(configPath, mode);
+          loadedConfig = await fetchRemote(
+            configPath,
+            mode,
+            options.remoteTimeoutMs ?? REMOTE_CONFIG_RELOAD_TIMEOUT_MS,
+          );
         } catch (error) {
           return failSourceLoad(`Failed to fetch the remote config file from ${configPath}`, error);
         }
@@ -258,6 +269,13 @@ export function createCustomConfigLoader({
           (error) => error.path != null && error.path.includes('imageOutputType'),
         )
       ) {
+        if (mode === 'reload') {
+          throw new ConfigReloadError(
+            'Invalid imageOutputType in custom config',
+            result.error,
+            result.error.errors,
+          );
+        }
         throw new Error(
           `\nPlease specify a correct \`imageOutputType\` value (case-sensitive).\n\n` +
             'The available options are:\n' +
@@ -310,7 +328,20 @@ export function createCustomConfigLoader({
       }
       for (const endpoint of customEndpoints) {
         if (endpoint.customParams) {
-          parseCustomParams(endpoint.name, endpoint.customParams);
+          try {
+            parseCustomParams(endpoint.name, endpoint.customParams);
+          } catch (error) {
+            if (mode !== 'reload') {
+              throw error;
+            }
+            throw new ConfigReloadError('Invalid custom endpoint parameters', error, [
+              {
+                code: 'custom',
+                path: ['endpoints', 'custom'],
+                message: error instanceof Error ? error.message : 'Invalid parameter definitions',
+              },
+            ]);
+          }
         }
       }
       if (result.data.modelSpecs) {

@@ -83,6 +83,23 @@ function createHandlers(overrides = {}) {
 
 describe('createAdminConfigHandlers', () => {
   describe('reloadConfig', () => {
+    it('rejects an admin without broad manage:configs before reading the deployment source', async () => {
+      const reloadCustomConfig = jest.fn();
+      const hasConfigCapability = jest.fn().mockResolvedValue(false);
+      const { handlers } = createHandlers({ reloadCustomConfig, hasConfigCapability });
+      const res = mockRes();
+
+      await handlers.reloadConfig(mockReq(), res);
+
+      expect(res.statusCode).toBe(403);
+      expect(hasConfigCapability).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'u1' }),
+        null,
+        'manage',
+      );
+      expect(reloadCustomConfig).not.toHaveBeenCalled();
+    });
+
     it('returns the per-section reload report', async () => {
       const report = {
         scope: 'cluster' as const,

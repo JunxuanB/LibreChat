@@ -1,6 +1,11 @@
 import { useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
-import { AgentCapabilities, PermissionTypes, Permissions } from 'librechat-data-provider';
+import {
+  AgentCapabilities,
+  PermissionTypes,
+  Permissions,
+  SystemRoles,
+} from 'librechat-data-provider';
 import type { SettingsContextValue } from './types';
 import useProviderKeys from '../SettingsTabs/ProviderKeys/useProviderKeys';
 import { useHasAccess, useAuthContext, useGetAgentsConfig } from '~/hooks';
@@ -30,6 +35,7 @@ export function useSettingsContext(): SettingsContextValue {
   const balanceEnabled = startupConfig?.balance?.enabled === true;
   const langfuseConnectionAccess = startupConfig?.langfuseConnectionAccess === true;
   const adminPanelURL = startupConfig?.adminPanelURL ?? '';
+  const isAdmin = user?.role === SystemRoles.ADMIN;
   const isLocalProvider = user?.provider === 'local';
   const emailEnabled = startupConfig?.emailEnabled === true;
   const allowEmailChange = startupConfig?.allowEmailChange === true;
@@ -75,6 +81,7 @@ export function useSettingsContext(): SettingsContextValue {
       engineTTS,
       langfuseConnectionAccess,
       adminPanelURL,
+      isAdmin,
       replyTabBadgeAllowed,
       replyNotificationsAllowed,
       replyNotificationSoundAllowed,
@@ -98,6 +105,7 @@ export function useSettingsContext(): SettingsContextValue {
       engineTTS,
       langfuseConnectionAccess,
       adminPanelURL,
+      isAdmin,
       replyTabBadgeAllowed,
       replyNotificationsAllowed,
       replyNotificationSoundAllowed,

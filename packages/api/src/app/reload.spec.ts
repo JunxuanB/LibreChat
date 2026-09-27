@@ -1,20 +1,28 @@
+import { FileSources } from 'librechat-data-provider';
 import type { TCustomConfig } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import {
   createConfigReloader,
   createConfigReloadReport,
   createConfigGenerationTracker,
+  hashConfig,
+  retainRestartOnlyConfig,
 } from './reload';
 import { createAppConfigService } from './service';
 import { ConfigReloadError } from './loader';
 
 class MemoryGenerationStore {
   private generation = 0;
+  private digest = '';
 
-  get = jest.fn(async (): Promise<string> => String(this.generation));
+  get = jest.fn(
+    async (): Promise<string> =>
+      JSON.stringify({ generation: this.generation, digest: this.digest }),
+  );
 
-  incr = jest.fn(async (): Promise<number> => {
+  publish = jest.fn(async (_key: string, digest: string): Promise<number> => {
     this.generation += 1;
+    this.digest = digest;
     return this.generation;
   });
 }
@@ -88,6 +96,8 @@ describe('config reload', () => {
     });
     const result = await reload();
 
+    await replicaB.getAppConfig({ baseOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
     const [configA, configB] = await Promise.all([
       replicaA.getAppConfig({ baseOnly: true }),
       replicaB.getAppConfig({ baseOnly: true }),
@@ -95,7 +105,91 @@ describe('config reload', () => {
     expect(result).toMatchObject({ scope: 'cluster', distributed: true, generation: 1 });
     expect(configA.config?.endpoints?.custom?.[0].models?.default).toEqual(['new-model']);
     expect(configB.config?.endpoints?.custom?.[0].models?.default).toEqual(['new-model']);
-    expect(store.incr).toHaveBeenCalledTimes(1);
+    expect(store.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not acknowledge a valid but lagging replica source until it matches the published digest', async () => {
+    const sourceA = { current: customConfig('old-model') };
+    const sourceB = { current: customConfig('old-model') };
+    const store = new MemoryGenerationStore();
+    const replicaA = createReplica(
+      sourceA,
+      createConfigGenerationTracker(store, { pollIntervalMs: 0 }),
+    );
+    const replicaB = createReplica(
+      sourceB,
+      createConfigGenerationTracker(store, { pollIntervalMs: 0 }),
+    );
+    await Promise.all([
+      replicaA.getAppConfig({ baseOnly: true }),
+      replicaB.getAppConfig({ baseOnly: true }),
+    ]);
+    sourceA.current = customConfig('new-model');
+    const reload = createConfigReloader({
+      loadConfig: async () => sourceA.current,
+      buildBaseConfig: async (config) => appConfig(config),
+      getBaseConfig: () => replicaA.getAppConfig({ baseOnly: true }),
+      replaceBaseConfig: replicaA.replaceBaseConfig,
+      clearOverrideCache: replicaA.clearOverrideCache,
+      generation: createConfigGenerationTracker(store, { pollIntervalMs: 0 }),
+    });
+    await reload();
+
+    await replicaB.getAppConfig({ baseOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      (await replicaB.getAppConfig({ baseOnly: true })).config.endpoints?.custom?.[0].models
+        ?.default,
+    ).toEqual(['old-model']);
+
+    sourceB.current = customConfig('new-model');
+    await replicaB.getAppConfig({ baseOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      (await replicaB.getAppConfig({ baseOnly: true })).config.endpoints?.custom?.[0].models
+        ?.default,
+    ).toEqual(['new-model']);
+  });
+
+  it('waits for a lagging replica source while ignoring differences in restart-only settings', async () => {
+    const publisherSource = {
+      current: { ...customConfig('old-model'), fileStrategy: FileSources.local } as TCustomConfig,
+    };
+    const followerSource = {
+      current: { ...customConfig('old-model'), fileStrategy: FileSources.s3 } as TCustomConfig,
+    };
+    const store = new MemoryGenerationStore();
+    const publisherGeneration = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+    const followerGeneration = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+    const publisher = createReplica(publisherSource, publisherGeneration);
+    const follower = createReplica(followerSource, followerGeneration);
+    await Promise.all([
+      publisher.getAppConfig({ baseOnly: true }),
+      follower.getAppConfig({ baseOnly: true }),
+    ]);
+    publisherSource.current = { ...customConfig('new-model'), fileStrategy: FileSources.local };
+    const reload = createConfigReloader({
+      loadConfig: async () => publisherSource.current,
+      buildBaseConfig: async (config) => appConfig(config),
+      getBaseConfig: () => publisher.getAppConfig({ baseOnly: true }),
+      replaceBaseConfig: publisher.replaceBaseConfig,
+      clearOverrideCache: () => publisher.clearOverrideCache(),
+      generation: publisherGeneration,
+    });
+    await reload();
+
+    await follower.getAppConfig({ baseOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(
+      (await follower.getAppConfig({ baseOnly: true })).config?.endpoints?.custom?.[0].models
+        ?.default,
+    ).toEqual(['old-model']);
+    followerSource.current = { ...customConfig('new-model'), fileStrategy: FileSources.s3 };
+    await follower.getAppConfig({ baseOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    const config = await follower.getAppConfig({ baseOnly: true });
+    expect(config.config?.endpoints?.custom?.[0].models?.default).toEqual(['new-model']);
+    expect(config.config?.fileStrategy).toBe(FileSources.s3);
   });
 
   it('rejects invalid config without changing the base config or generation', async () => {
@@ -204,6 +298,79 @@ describe('config reload', () => {
     expect(generation.bump).not.toHaveBeenCalled();
   });
 
+  it('keeps restart-only storage settings out of the installed config', async () => {
+    const previous = appConfig({ ...customConfig('old-model'), fileStrategy: FileSources.local });
+    const next: TCustomConfig = { ...customConfig('new-model'), fileStrategy: FileSources.s3 };
+    const buildBaseConfig = jest.fn(async (config: TCustomConfig) => appConfig(config));
+    const reload = createConfigReloader({
+      loadConfig: async () => next,
+      buildBaseConfig,
+      getBaseConfig: async () => previous,
+      replaceBaseConfig: async (config) => config,
+      clearOverrideCache: async () => undefined,
+      generation: createConfigGenerationTracker(),
+    });
+
+    const result = await reload();
+
+    expect(buildBaseConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ fileStrategy: 'local', endpoints: next.endpoints }),
+    );
+    expect(result.sections).toContainEqual({
+      section: 'fileStrategy',
+      status: 'restart_required',
+      restartRequired: true,
+      restartRequiredPaths: ['fileStrategy'],
+    });
+    expect(result.sections).toContainEqual({
+      section: 'endpoints',
+      status: 'applied_live',
+      restartRequired: false,
+    });
+  });
+
+  it('keeps startup-only nested agent policies from becoming live', () => {
+    const previous: TCustomConfig = {
+      version: '1.0',
+      endpoints: { agents: { backgroundTasks: { completionWakeups: false } } },
+    };
+    const next: TCustomConfig = {
+      version: '1.0',
+      endpoints: { agents: { backgroundTasks: { completionWakeups: true } } },
+    };
+    const effective = retainRestartOnlyConfig(previous, next);
+
+    expect(effective.endpoints?.agents?.backgroundTasks?.completionWakeups).toBe(false);
+    expect(createConfigReloadReport(previous, next)).toContainEqual({
+      section: 'endpoints',
+      status: 'restart_required',
+      restartRequired: true,
+      restartRequiredPaths: ['endpoints.agents.backgroundTasks.completionWakeups'],
+    });
+    expect(hashConfig(effective)).toBe(hashConfig(previous));
+  });
+
+  it('ignores startup-only differences in the shared digest after a replica restarts', () => {
+    const live = customConfig('new-model');
+    const publisher: TCustomConfig = { ...live, fileStrategy: FileSources.local };
+    const restartedReplica: TCustomConfig = { ...live, fileStrategy: FileSources.s3 };
+    expect(hashConfig(restartedReplica)).toBe(hashConfig(publisher));
+    expect(hashConfig(customConfig('old-model'))).not.toBe(hashConfig(publisher));
+  });
+
+  it('prunes newly added restart-only parents so startup defaults remain available', () => {
+    const previous: TCustomConfig = { version: '1.0' };
+    const next: TCustomConfig = {
+      version: '1.0',
+      registration: { socialLogins: ['openid'] },
+      endpoints: { agents: { backgroundTasks: { completionWakeups: false } } },
+    };
+
+    expect(retainRestartOnlyConfig(previous, next)).toEqual(previous);
+    expect(hashConfig(next)).toBe(hashConfig(previous));
+    expect(next.registration?.socialLogins).toEqual(['openid']);
+  });
+
   it('flags an MCP server edit as restart-required', () => {
     const previous: TCustomConfig = {
       version: '1.2.1',
@@ -235,8 +402,8 @@ describe('config reload', () => {
     );
 
     const staleCheck = tracker.check();
-    await tracker.bump();
-    resolveRead?.('0');
+    await tracker.bump(hashConfig(customConfig('new-model')));
+    resolveRead?.(JSON.stringify({ generation: 0, digest: hashConfig(customConfig('old-model')) }));
 
     await expect(staleCheck).resolves.toBeUndefined();
     await expect(tracker.check()).resolves.toBeUndefined();
@@ -246,7 +413,7 @@ describe('config reload', () => {
     const store = new MemoryGenerationStore();
     const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
     await tracker.check();
-    await store.incr();
+    await store.publish('config:generation', hashConfig(customConfig('new-model')));
 
     const failedAttempt = await tracker.check();
     const retry = await tracker.check();
@@ -264,6 +431,34 @@ describe('config reload', () => {
     await Promise.all([tracker.check(), tracker.check(), tracker.check()]);
 
     expect(store.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue repeated Redis reads after a physical GET times out', async () => {
+    jest.useFakeTimers();
+    try {
+      let resolveRead: ((value: string) => void) | undefined;
+      const store = new MemoryGenerationStore();
+      store.get.mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveRead = resolve;
+          }),
+      );
+      const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+      const timedOut = tracker.check('old');
+      await jest.advanceTimersByTimeAsync(250);
+      await expect(timedOut).resolves.toBeUndefined();
+      for (let index = 0; index < 5; index++) {
+        await tracker.check('old');
+      }
+      expect(store.get).toHaveBeenCalledTimes(1);
+      resolveRead?.(JSON.stringify({ generation: 0, digest: 'old' }));
+      await Promise.resolve();
+      await tracker.check('old');
+      expect(store.get).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('limits generation reads to one per poll interval', async () => {

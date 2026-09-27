@@ -7,6 +7,7 @@ import type {
   TTraceRecordDetail,
 } from './types/traces';
 import type { TInsightsAccessResponse, TInsightsParams, TInsightsResponse } from './types/insights';
+import type { TConfigReloadResult } from './types/configReload';
 import type { TFileConfig } from './file-config';
 import type * as tl from './types/tools';
 import type * as t from './types';
@@ -68,6 +69,10 @@ export function getConversationTraceRecord(
     endpoints.conversationTraceRecord(conversationId, recordId, messageId, sourceId),
     signal ? { signal } : undefined,
   );
+}
+
+export function reloadCustomConfig(): Promise<TConfigReloadResult> {
+  return request.post(endpoints.adminConfigReload());
 }
 
 export function getLangfuseConnection(): Promise<t.TLangfuseConnectionStatus> {

@@ -3191,6 +3191,11 @@ export const configSchema = z.object({
   version: z.string(),
   permissions: z.object({ maxWriteAttempts: permissionWriteAttemptsSchema }).optional(),
   cache: z.boolean().default(true),
+  /** Last-good value bounds reload requests to a remote CONFIG_PATH; startup remains unchanged. */
+  configReload: z
+    .object({ remoteTimeoutMs: z.number().int().positive().max(120_000).default(10_000) })
+    .strict()
+    .optional(),
   ocr: ocrSchema.optional(),
   webSearch: webSearchSchema.optional(),
   langfuse: langfuseConfigSchema.optional(),

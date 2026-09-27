@@ -121,6 +121,7 @@ export enum MutationKeys {
   updateFavorites = 'updateFavorites',
   /** Pinned-section display order write, keyed for the same reason. */
   updatePinnedOrder = 'updatePinnedOrder',
+  reloadCustomConfig = 'reloadCustomConfig',
   updateLangfuseConnection = 'updateLangfuseConnection',
   testLangfuseConnection = 'testLangfuseConnection',
   createAgentApiKey = 'createAgentApiKey',

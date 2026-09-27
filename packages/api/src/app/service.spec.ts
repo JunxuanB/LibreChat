@@ -5,6 +5,7 @@ import {
   _resetOverrideStrictCache,
   getAppConfigOptionsFromUser,
 } from './service';
+import { hashConfig } from './reload';
 
 /** Extends AppConfig with mock fields used by merge behavior tests. */
 interface TestConfig extends AppConfig {
@@ -66,7 +67,7 @@ describe('createAppConfigService', () => {
       const config = await getAppConfig();
 
       expect(deps.loadBaseConfig).toHaveBeenCalledTimes(1);
-      expect(deps.loadBaseConfig).toHaveBeenCalledWith('startup');
+      expect(deps.loadBaseConfig).toHaveBeenCalledWith('startup', undefined);
       expect(config).toEqual(deps._baseConfig);
     });
 
@@ -105,7 +106,7 @@ describe('createAppConfigService', () => {
       await getAppConfig({ refresh: true });
 
       expect(deps.loadBaseConfig).toHaveBeenCalledTimes(2);
-      expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload');
+      expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload', expect.any(Object));
     });
 
     it.each(['invalid YAML', 'missing local file', 'remote fetch failure'])(
@@ -121,7 +122,7 @@ describe('createAppConfigService', () => {
 
         expect(reloaded).toBe(initial);
         expect(deps._cache._store.get('app_config:_BASE_')).toBe(initial);
-        expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload');
+        expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload', expect.any(Object));
       },
     );
 
@@ -154,7 +155,7 @@ describe('createAppConfigService', () => {
       const { getAppConfig } = createAppConfigService(deps);
 
       await expect(getAppConfig({ baseOnly: true })).rejects.toBe(failure);
-      expect(deps.loadBaseConfig).toHaveBeenCalledWith('startup');
+      expect(deps.loadBaseConfig).toHaveBeenCalledWith('startup', undefined);
     });
 
     it('drops base and override entries when another replica publishes a generation', async () => {
@@ -167,16 +168,21 @@ describe('createAppConfigService', () => {
       });
       const { getAppConfig } = createAppConfigService(deps);
       await getAppConfig({ role: 'USER' });
-
-      const next = { ...deps._baseConfig, endpoints: ['new-endpoint'] };
+      const next = { ...deps._baseConfig, config: { version: '2.0' }, endpoints: ['new-endpoint'] };
       deps.loadBaseConfig.mockResolvedValueOnce(next);
       const acknowledge = jest.fn();
-      syncConfigGeneration.mockResolvedValueOnce({ acknowledge });
+      syncConfigGeneration.mockResolvedValueOnce({
+        expectedDigest: hashConfig(next.config),
+        acknowledge,
+      });
+
+      await getAppConfig({ role: 'USER' });
+      await new Promise((resolve) => setImmediate(resolve));
       const config = await getAppConfig({ role: 'USER' });
 
       expect(config.endpoints).toEqual(['new-endpoint']);
       expect(acknowledge).toHaveBeenCalledTimes(1);
-      expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload');
+      expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload', expect.any(Object));
       expect(deps.getApplicableConfigs).toHaveBeenCalledTimes(2);
     });
 
@@ -186,17 +192,57 @@ describe('createAppConfigService', () => {
       const { getAppConfig } = createAppConfigService(deps);
       const initial = await getAppConfig({ baseOnly: true });
       const acknowledge = jest.fn();
-
-      syncConfigGeneration.mockResolvedValueOnce({ acknowledge });
+      const next = { ...initial, config: { version: '2.0' } };
+      const change = { expectedDigest: hashConfig(next.config), acknowledge };
+      syncConfigGeneration.mockResolvedValueOnce(change);
       deps.loadBaseConfig.mockRejectedValueOnce(new Error('remote unavailable'));
-      await expect(getAppConfig({ baseOnly: true })).resolves.toBe(initial);
+      await getAppConfig({ baseOnly: true });
+      await new Promise((resolve) => setImmediate(resolve));
       expect(acknowledge).not.toHaveBeenCalled();
+      expect((await getAppConfig({ baseOnly: true })).config).toBe(initial.config);
 
-      const next = { ...initial, interfaceConfig: { modelSelect: false } };
-      syncConfigGeneration.mockResolvedValueOnce({ acknowledge });
+      syncConfigGeneration.mockResolvedValueOnce(change);
       deps.loadBaseConfig.mockResolvedValueOnce(next);
-      await expect(getAppConfig({ baseOnly: true })).resolves.toBe(next);
+      await getAppConfig({ baseOnly: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect((await getAppConfig({ baseOnly: true })).config).toEqual(next.config);
       expect(acknowledge).toHaveBeenCalledTimes(1);
+    });
+
+    it('serves a cached base without waiting for an unavailable Redis generation check', async () => {
+      const check = jest.fn(() => new Promise<undefined>(() => undefined));
+      const deps = createDeps({ syncConfigGeneration: check });
+      const { getAppConfig } = createAppConfigService(deps);
+      await getAppConfig({ baseOnly: true });
+
+      await expect(getAppConfig({ baseOnly: true })).resolves.toMatchObject(deps._baseConfig);
+      expect(check).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not cache a merged override produced from an older base revision', async () => {
+      let resolveQuery: ((configs: []) => void) | undefined;
+      const getApplicableConfigs = jest
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<[]>((resolve) => {
+              resolveQuery = resolve;
+            }),
+        )
+        .mockResolvedValue([]);
+      const deps = createDeps({ getApplicableConfigs });
+      const { getAppConfig, replaceBaseConfig } = createAppConfigService(deps);
+      const initial = await getAppConfig({ baseOnly: true });
+      const staleRead = getAppConfig({ role: 'USER' });
+      await new Promise((resolve) => setImmediate(resolve));
+      const next = { ...initial, interfaceConfig: { modelSelect: false } };
+      await replaceBaseConfig(next);
+      resolveQuery?.([]);
+
+      const result = await staleRead;
+      expect(result.interfaceConfig?.modelSelect).toBe(false);
+      expect(getApplicableConfigs).toHaveBeenCalledTimes(2);
+      expect(deps._cache._store.get('app_config:_OVERRIDE_:__default__:USER')).toBeUndefined();
     });
 
     it('installs a validated base config without re-reading its source', async () => {

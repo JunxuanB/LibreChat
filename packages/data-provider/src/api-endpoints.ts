@@ -494,6 +494,8 @@ export const conversationTraceRecord = (
     { message: messageId, ...(sourceId ? { source: sourceId } : {}) },
   ).toString()}`;
 
+export const adminConfigReload = () => `${BASE_URL}/api/admin/config/reload`;
+
 export const adminSkillsSync = () => `${BASE_URL}/api/admin/skills/sync`;
 export const adminSkillsSyncStatus = () => `${adminSkillsSync()}/status`;
 export const adminSkillsSyncRun = () => `${adminSkillsSync()}/run`;

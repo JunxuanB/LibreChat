@@ -188,6 +188,30 @@ describe('loadCustomConfig', () => {
     expect(mockExit).not.toHaveBeenCalled();
   });
 
+  it('reports custom parameter errors as validation failures on reload', async () => {
+    process.env.CONFIG_PATH = 'parameters.yaml';
+    loadYaml.mockReturnValueOnce({
+      version: '1.0',
+      endpoints: {
+        custom: [
+          {
+            name: 'gateway',
+            apiKey: 'user_provided',
+            baseURL: 'https://gateway.example/v1',
+            models: { default: ['test-model'] },
+            customParams: { defaultParamsEndpoint: 'unsupported' },
+          },
+        ],
+      },
+    });
+
+    await expect(loadCustomConfig(false, { mode: 'reload' })).rejects.toMatchObject({
+      name: 'ConfigReloadError',
+      validationErrors: [{ code: 'custom', path: ['endpoints', 'custom'] }],
+    });
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
   it('rejects a reload when the remote config fetch fails', async () => {
     process.env.CONFIG_PATH = 'https://example.com/config.yaml';
     axios.get.mockRejectedValueOnce(new Error('Network error'));

@@ -5,6 +5,8 @@ const {
   createAppConfigService,
   createConfigReloader,
   createConfigGenerationTracker,
+  createRedisConfigGenerationStore,
+  retainRestartOnlyConfig,
   clearMcpConfigCache,
   createCodeEnvironmentRegistry,
   mergeAccessibleCodeEnvironments,
@@ -46,14 +48,18 @@ const buildBaseConfig = async (config) => {
   return AppService({ config, paths, systemTools });
 };
 
-const loadBaseConfig = async (mode) => {
+const loadBaseConfig = async (mode, previous) => {
   /** @type {TCustomConfig} */
-  const config = (await loadCustomConfig(mode === 'startup', { mode })) ?? {};
-  return buildBaseConfig(config);
+  const config =
+    (await loadCustomConfig(mode === 'startup', {
+      mode,
+      remoteTimeoutMs: previous?.config?.configReload?.remoteTimeoutMs,
+    })) ?? {};
+  return buildBaseConfig(retainRestartOnlyConfig(previous?.config, config));
 };
 
 const configGeneration = createConfigGenerationTracker(
-  cacheConfig.USE_REDIS ? ioredisClient : null,
+  cacheConfig.USE_REDIS && ioredisClient ? createRedisConfigGenerationStore(ioredisClient) : null,
 );
 
 const { getAppConfig, replaceBaseConfig, clearAppConfigCache, clearOverrideCache } =
@@ -82,7 +88,11 @@ const { getAppConfig, replaceBaseConfig, clearAppConfigCache, clearOverrideCache
   });
 
 const reloadCustomConfig = createConfigReloader({
-  loadConfig: () => loadCustomConfig(false, { mode: 'reload' }),
+  loadConfig: (current) =>
+    loadCustomConfig(false, {
+      mode: 'reload',
+      remoteTimeoutMs: current.config?.configReload?.remoteTimeoutMs,
+    }),
   buildBaseConfig,
   getBaseConfig: () => getAppConfig({ baseOnly: true }),
   replaceBaseConfig,

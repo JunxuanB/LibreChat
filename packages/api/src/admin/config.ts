@@ -531,14 +531,18 @@ export function createAdminConfigHandlers(deps: AdminConfigDeps): {
   }
 
   async function reloadConfig(req: ServerRequest, res: Response): Promise<Response> {
-    if (!getCapabilityUser(req)) {
+    const user = getCapabilityUser(req);
+    if (!user) {
       return res.status(401).json({ error: 'Authentication required' });
-    }
-    if (!reloadCustomConfig) {
-      return res.status(501).json({ error: 'Config reload is not configured' });
     }
 
     try {
+      if (!(await hasConfigCapability(user, null, 'manage'))) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+      if (!reloadCustomConfig) {
+        return res.status(501).json({ error: 'Config reload is not configured' });
+      }
       return res.status(200).json(await reloadCustomConfig());
     } catch (error) {
       if (error instanceof ConfigReloadError) {

@@ -1,4 +1,8 @@
-import { PrincipalType, materializeModelSpecEndpoints } from 'librechat-data-provider';
+import {
+  PrincipalType,
+  materializeModelSpecEndpoints,
+  setMaxSubagents,
+} from 'librechat-data-provider';
 import {
   logger,
   getTenantId,
@@ -9,6 +13,7 @@ import type { AppConfig, IConfig } from '@librechat/data-schemas';
 import type { Types } from 'mongoose';
 import type { ConfigGenerationChange } from './reload';
 import type { CustomConfigLoadMode } from './loader';
+import { hashConfig } from './reload';
 
 const BASE_CONFIG_KEY = '_BASE_';
 
@@ -49,7 +54,10 @@ interface CacheStore {
 
 export interface AppConfigServiceDeps {
   /** Load the base AppConfig from YAML + AppService processing. */
-  loadBaseConfig: (mode?: CustomConfigLoadMode) => Promise<AppConfig | undefined>;
+  loadBaseConfig: (
+    mode?: CustomConfigLoadMode,
+    previous?: AppConfig,
+  ) => Promise<AppConfig | undefined>;
   /** Cache tools after base config is loaded. */
   setCachedTools: (tools: Record<string, unknown>) => Promise<void>;
   /** Get a cache store by key. */
@@ -74,7 +82,7 @@ export interface AppConfigServiceDeps {
   /** TTL in ms for per-user/role merged config caches. Defaults to 60 000. */
   overrideCacheTtl?: number;
   /** Returns an acknowledgement for a newer base-config generation. */
-  syncConfigGeneration?: () => Promise<ConfigGenerationChange | undefined>;
+  syncConfigGeneration?: (digest: string) => Promise<ConfigGenerationChange | undefined>;
 }
 
 export interface GetAppConfigOptions {
@@ -206,6 +214,8 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
   let lastGoodBaseConfig: AppConfig | undefined;
   let baseConfigFlight: Promise<AppConfig> | undefined;
   let baseConfigRevision = 0;
+  let generationFlight: Promise<void> | undefined;
+  let lastGoodBaseDigest: string | undefined;
 
   async function buildPrincipals(
     role?: string,
@@ -235,6 +245,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
       throw error;
     }
 
+    setMaxSubagents(lastGood.config?.endpoints?.agents?.maxSubagents);
     logger.error(
       '[ensureBaseConfig] Failed to reload base configuration; keeping the last good configuration.',
       error,
@@ -254,11 +265,13 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
 
   async function cacheBaseConfig(loaded: AppConfig): Promise<AppConfig> {
     const baseConfig = materializeConfigModelSpecs(loaded);
+    const digest = syncConfigGeneration ? hashConfig(baseConfig.config ?? {}) : undefined;
     if (baseConfig.availableTools) {
       await setCachedTools(baseConfig.availableTools);
     }
     await cache.set(BASE_CONFIG_KEY, baseConfig);
     lastGoodBaseConfig = baseConfig;
+    lastGoodBaseDigest = digest;
     baseConfigRevision += 1;
     return baseConfig;
   }
@@ -272,12 +285,18 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     }
   }
 
-  async function loadAndCacheBaseConfig(mode: CustomConfigLoadMode): Promise<AppConfig> {
+  async function loadAndCacheBaseConfig(
+    mode: CustomConfigLoadMode,
+    expectedDigest?: string,
+  ): Promise<AppConfig> {
     try {
       logger.info('[ensureBaseConfig] Loading base configuration...');
-      const loaded = await loadBaseConfig(mode);
+      const loaded = await loadBaseConfig(mode, lastGoodBaseConfig);
       if (!loaded) {
         throw new Error('Failed to initialize app configuration through AppService.');
+      }
+      if (expectedDigest && hashConfig(loaded.config ?? {}) !== expectedDigest) {
+        throw new Error('Config source has not reached the published generation yet.');
       }
       return await cacheBaseConfig(loaded);
     } catch (error) {
@@ -288,42 +307,72 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     }
   }
 
-  async function applyRemoteGeneration(): Promise<ConfigGenerationChange | undefined> {
-    if (!syncConfigGeneration) {
-      return undefined;
+  async function applyRemoteGeneration(): Promise<void> {
+    const current = lastGoodBaseConfig;
+    if (!current || !syncConfigGeneration) {
+      return;
     }
-    let change: ConfigGenerationChange | undefined;
-    try {
-      change = await syncConfigGeneration();
-    } catch (error) {
-      logger.error('[ensureBaseConfig] Failed to check the shared config generation:', error);
-    }
+    const change = await syncConfigGeneration(
+      lastGoodBaseDigest ?? hashConfig(current.config ?? {}),
+    );
     if (!change) {
-      return undefined;
+      return;
     }
     const staleFlight = baseConfigFlight;
     if (staleFlight) {
       await staleFlight.catch(() => undefined);
     }
-    await Promise.all([cache.delete(BASE_CONFIG_KEY), clearOverrideCache()]);
-    return change;
+    const previousRevision = baseConfigRevision;
+    const loaded = await readBaseConfig(true, change.expectedDigest);
+    if (
+      baseConfigRevision === previousRevision ||
+      hashConfig(loaded.config ?? {}) !== change.expectedDigest
+    ) {
+      return;
+    }
+    await clearOverrideCache();
+    change.acknowledge();
   }
 
-  async function readBaseConfig(refresh?: boolean): Promise<AppConfig> {
+  function scheduleGenerationCheck(): void {
+    if (!syncConfigGeneration || generationFlight || !lastGoodBaseConfig) {
+      return;
+    }
+    const flight = applyRemoteGeneration();
+    generationFlight = flight;
+    void flight
+      .catch((error) => {
+        logger.error('[ensureBaseConfig] Failed to apply config generation:', error);
+      })
+      .finally(() => {
+        if (generationFlight === flight) {
+          generationFlight = undefined;
+        }
+      });
+  }
+
+  async function readBaseConfig(refresh?: boolean, expectedDigest?: string): Promise<AppConfig> {
     const cached = (await cache.get(BASE_CONFIG_KEY)) as AppConfig | undefined;
     if (cached) {
-      lastGoodBaseConfig ??= cached;
+      if (!lastGoodBaseConfig) {
+        lastGoodBaseConfig = cached;
+        lastGoodBaseDigest = syncConfigGeneration ? hashConfig(cached.config ?? {}) : undefined;
+      }
       if (!refresh) {
         return cached;
       }
     }
 
     if (baseConfigFlight) {
-      return baseConfigFlight;
+      const inFlight = await baseConfigFlight;
+      if (expectedDigest && hashConfig(inFlight.config ?? {}) !== expectedDigest) {
+        return readBaseConfig(true, expectedDigest);
+      }
+      return inFlight;
     }
 
     const mode: CustomConfigLoadMode = lastGoodBaseConfig ? 'reload' : 'startup';
-    const flight = loadAndCacheBaseConfig(mode);
+    const flight = loadAndCacheBaseConfig(mode, expectedDigest);
     baseConfigFlight = flight;
     try {
       return await flight;
@@ -339,16 +388,8 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
    * Returns the `_BASE_` config (YAML + AppService). No DB queries.
    */
   async function ensureBaseConfig(refresh?: boolean): Promise<AppConfig> {
-    if (!syncConfigGeneration) {
-      return readBaseConfig(refresh);
-    }
-    const generationChange = await applyRemoteGeneration();
-    const previousRevision = baseConfigRevision;
-    const baseConfig = await readBaseConfig(refresh);
-    if (generationChange && baseConfigRevision > previousRevision) {
-      generationChange.acknowledge();
-    }
-    return baseConfig;
+    scheduleGenerationCheck();
+    return readBaseConfig(refresh);
   }
 
   /**
@@ -376,6 +417,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     } = options;
 
     const baseConfig = await ensureBaseConfig(refresh);
+    const baseRevision = baseConfigRevision;
 
     if (baseOnly) {
       return baseConfig;
@@ -420,11 +462,12 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
       }
     };
 
-    const cacheKey = overrideCacheKey(role, userId, tenantId);
+    const key = overrideCacheKey(role, userId, tenantId);
+    const cacheKey = baseRevision > 1 ? `${key}:base:${baseRevision}` : key;
     if (!refresh) {
       const cachedMerged = (await cache.get(cacheKey)) as AppConfig | undefined;
       if (cachedMerged) {
-        return await augment(cachedMerged);
+        return baseConfigRevision === baseRevision ? augment(cachedMerged) : getAppConfig(options);
       }
     }
 
@@ -440,7 +483,13 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
       return baseConfig;
     }
 
+    if (baseRevision !== baseConfigRevision) {
+      return getAppConfig(options);
+    }
     await cache.set(cacheKey, merged, overrideCacheTtl);
+    if (baseRevision !== baseConfigRevision) {
+      return getAppConfig(options);
+    }
     return await augment(merged);
   }
 

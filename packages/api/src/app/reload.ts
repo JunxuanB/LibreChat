@@ -1,4 +1,5 @@
 import isEqual from 'lodash/isEqual';
+import { createHash } from 'node:crypto';
 import isPlainObject from 'lodash/isPlainObject';
 import { logger } from '@librechat/data-schemas';
 import { getMaxSubagents, setMaxSubagents } from 'librechat-data-provider';
@@ -7,6 +8,23 @@ import type { AppConfig } from '@librechat/data-schemas';
 import { ConfigReloadError } from './loader';
 
 const CONFIG_GENERATION_KEY = 'config:generation';
+const GENERATION_READ_TIMEOUT_MS = 250;
+const PUBLISH_GENERATION_SCRIPT = `
+local previous = redis.call('GET', KEYS[1])
+local number = 0
+if previous then
+  local ok, decoded = pcall(cjson.decode, previous)
+  if ok and type(decoded) == 'table' then
+    number = tonumber(decoded.generation) or 0
+  else
+    number = tonumber(previous) or 0
+  end
+end
+number = number + 1
+redis.call('SET', KEYS[1], cjson.encode({generation = number, digest = ARGV[1]}))
+return number
+`;
+
 /** Bootstrap coordination cannot read its own interval from the config it gates. One second bounds Redis reads per replica while keeping propagation responsive. */
 const DEFAULT_GENERATION_POLL_MS = 1_000;
 
@@ -20,9 +38,6 @@ const RESTART_ONLY_PATHS = [
   'endpoints.agents.backgroundTasks',
   'endpoints.agents.eventDriven',
   'endpoints.agents.toolApproval',
-] as const;
-
-const PARTIAL_RESTART_PATHS = [
   'registration.openidDiscovery',
   'registration.oauthStateTtlMs',
   'registration.socialLogins',
@@ -64,17 +79,18 @@ export interface ConfigReloadResult {
 
 export interface ConfigGenerationStore {
   get(key: string): Promise<string | null>;
-  incr(key: string): Promise<number>;
+  publish(key: string, digest: string): Promise<number>;
 }
 
 export interface ConfigGenerationChange {
+  readonly expectedDigest: string;
   acknowledge(): void;
 }
 
 export interface ConfigGenerationTracker {
   readonly distributed: boolean;
-  check(): Promise<ConfigGenerationChange | undefined>;
-  bump(): Promise<number | undefined>;
+  check(currentDigest?: string): Promise<ConfigGenerationChange | undefined>;
+  bump(digest: string): Promise<number | undefined>;
 }
 
 export interface ConfigGenerationTrackerOptions {
@@ -83,7 +99,7 @@ export interface ConfigGenerationTrackerOptions {
 }
 
 export interface ConfigReloaderDeps {
-  loadConfig: () => Promise<TCustomConfig | null>;
+  loadConfig: (current: AppConfig) => Promise<TCustomConfig | null>;
   buildBaseConfig: (config: TCustomConfig) => Promise<AppConfig>;
   getBaseConfig: () => Promise<AppConfig>;
   replaceBaseConfig: (config: AppConfig) => Promise<AppConfig>;
@@ -137,9 +153,8 @@ export function createConfigReloadReport(
       return { section, status: 'unchanged', restartRequired: false };
     }
 
-    const restartRequiredPaths = changedPaths.filter(
-      (path) =>
-        matchesAnyPath(path, RESTART_ONLY_PATHS) || matchesAnyPath(path, PARTIAL_RESTART_PATHS),
+    const restartRequiredPaths = changedPaths.filter((path) =>
+      matchesAnyPath(path, RESTART_ONLY_PATHS),
     );
     const restartOnly = changedPaths.every((path) => matchesAnyPath(path, RESTART_ONLY_PATHS));
     return {
@@ -151,6 +166,107 @@ export function createConfigReloadReport(
   });
 }
 
+function canonicalConfig(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalConfig);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .filter((key) => record[key] !== undefined)
+      .map((key) => [key, canonicalConfig(record[key])]),
+  );
+}
+
+/** Hash the effective configuration, including secrets, without publishing its contents. */
+export function hashConfig(config: TCustomConfig): string {
+  // A replica restarted after publication has the new startup-only values; the
+  // publisher intentionally retains its old ones until restart. Both replicas
+  // must still agree on the version of the live configuration.
+  const liveConfig = retainRestartOnlyConfig({}, config);
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalConfig(liveConfig)))
+    .digest('hex');
+}
+
+function readPath(root: Record<string, unknown>, parts: string[]): unknown {
+  let node: unknown = root;
+  for (const part of parts) {
+    if (!isPlainObject(node)) {
+      return undefined;
+    }
+    node = (node as Record<string, unknown>)[part];
+  }
+  return node;
+}
+
+/** The runtime and its published digest both keep startup-only settings at their original value. */
+export function retainRestartOnlyConfig(
+  previous: TCustomConfig | undefined,
+  candidate: TCustomConfig,
+): TCustomConfig {
+  if (!previous) {
+    return candidate;
+  }
+  const result = { ...candidate } as Record<string, unknown>;
+  for (const path of RESTART_ONLY_PATHS) {
+    const parts = path.split('.');
+    const oldValue = readPath(previous as Record<string, unknown>, parts);
+    let destination: Record<string, unknown> = result;
+    const parents: Array<{ object: Record<string, unknown>; key: string }> = [];
+    let missing = false;
+    for (const part of parts.slice(0, -1)) {
+      const child = destination[part];
+      if (!isPlainObject(child) && oldValue === undefined) {
+        missing = true;
+        break;
+      }
+      const next = isPlainObject(child) ? { ...(child as Record<string, unknown>) } : {};
+      parents.push({ object: destination, key: part });
+      destination[part] = next;
+      destination = next;
+    }
+    if (missing) {
+      continue;
+    }
+    const leaf = parts[parts.length - 1];
+    if (oldValue !== undefined) {
+      destination[leaf] = oldValue;
+      continue;
+    }
+    delete destination[leaf];
+    for (
+      let index = parents.length - 1;
+      index >= 0 && Object.keys(destination).length === 0;
+      index--
+    ) {
+      const { object, key } = parents[index];
+      if (readPath(previous as Record<string, unknown>, parts.slice(0, index + 1)) !== undefined) {
+        break;
+      }
+      delete object[key];
+      destination = object;
+    }
+  }
+  return result as TCustomConfig;
+}
+
+/** One atomic, single-key operation works on Redis and Redis Cluster. */
+export function createRedisConfigGenerationStore(client: {
+  get(key: string): Promise<string | null>;
+  eval(script: string, keys: number, key: string, digest: string): Promise<unknown>;
+}): ConfigGenerationStore {
+  return {
+    get: (key) => client.get(key),
+    publish: async (key, digest) =>
+      Number(await client.eval(PUBLISH_GENERATION_SCRIPT, 1, key, digest)),
+  };
+}
+
 export function createConfigGenerationTracker(
   store?: ConfigGenerationStore | null,
   options: ConfigGenerationTrackerOptions = {},
@@ -160,14 +276,34 @@ export function createConfigGenerationTracker(
   let seenGeneration: string | undefined;
   let nextPollAt = 0;
   let checkFlight: Promise<ConfigGenerationChange | undefined> | undefined;
+  let pendingRead: Promise<string | null> | undefined;
+  let readSequence = 0;
 
-  async function readGeneration(): Promise<ConfigGenerationChange | undefined> {
+  async function readGeneration(
+    currentDigest: string | undefined,
+    sequence: number,
+    read: Promise<string | null>,
+  ): Promise<ConfigGenerationChange | undefined> {
     const generationBeforeRead = seenGeneration;
-    const generation = (await store!.get(CONFIG_GENERATION_KEY)) ?? '0';
-    if (seenGeneration !== generationBeforeRead) {
+    const raw = await read;
+    if (sequence !== readSequence || seenGeneration !== generationBeforeRead || raw == null) {
       return undefined;
     }
-    if (seenGeneration == null) {
+    let payload: { generation: number; digest: string };
+    try {
+      payload = JSON.parse(raw) as { generation: number; digest: string };
+    } catch {
+      return undefined;
+    }
+    if (!Number.isSafeInteger(payload.generation) || typeof payload.digest !== 'string') {
+      return undefined;
+    }
+    const generation = String(payload.generation);
+    if (payload.digest === currentDigest) {
+      seenGeneration = generation;
+      return undefined;
+    }
+    if (seenGeneration == null && currentDigest == null) {
       seenGeneration = generation;
       return undefined;
     }
@@ -176,6 +312,7 @@ export function createConfigGenerationTracker(
     }
     const previousGeneration = seenGeneration;
     return {
+      expectedDigest: payload.digest,
       acknowledge() {
         if (seenGeneration === previousGeneration) {
           seenGeneration = generation;
@@ -184,34 +321,63 @@ export function createConfigGenerationTracker(
     };
   }
 
-  async function check(): Promise<ConfigGenerationChange | undefined> {
+  async function check(currentDigest?: string): Promise<ConfigGenerationChange | undefined> {
     if (!store) {
       return undefined;
     }
     if (checkFlight) {
       return checkFlight;
     }
+    // A timed-out ioredis GET can remain queued through a disconnect. Do not
+    // enqueue one command per interval while the previous physical read waits.
+    if (pendingRead) {
+      return undefined;
+    }
     if (now() < nextPollAt) {
       return undefined;
     }
-
     nextPollAt = now() + pollIntervalMs;
-    const flight = readGeneration();
+    const sequence = ++readSequence;
+    const read = store.get(CONFIG_GENERATION_KEY);
+    pendingRead = read;
+    void read.then(
+      () => {
+        if (pendingRead === read) pendingRead = undefined;
+      },
+      () => {
+        if (pendingRead === read) pendingRead = undefined;
+      },
+    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const flight = Promise.race([
+      readGeneration(currentDigest, sequence, read),
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => {
+          readSequence += 1;
+          resolve(undefined);
+        }, GENERATION_READ_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
     checkFlight = flight;
     try {
       return await flight;
     } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       if (checkFlight === flight) {
         checkFlight = undefined;
       }
     }
   }
 
-  async function bump(): Promise<number | undefined> {
+  async function bump(digest: string): Promise<number | undefined> {
     if (!store) {
       return undefined;
     }
-    const generation = await store.incr(CONFIG_GENERATION_KEY);
+    const generation = await store.publish(CONFIG_GENERATION_KEY, digest);
+    readSequence += 1;
     seenGeneration = String(generation);
     nextPollAt = now() + pollIntervalMs;
     return generation;
@@ -230,8 +396,9 @@ export function createConfigReloader(deps: ConfigReloaderDeps): () => Promise<Co
     let installed = false;
     let candidate: TCustomConfig;
     let report: ConfigSectionReport[];
+    let effectiveDigest: string;
     try {
-      const loaded = await deps.loadConfig();
+      const loaded = await deps.loadConfig(current);
       if (!loaded) {
         throw new ConfigReloadError('The custom configuration could not be loaded.');
       }
@@ -246,8 +413,9 @@ export function createConfigReloader(deps: ConfigReloaderDeps): () => Promise<Co
         };
       }
 
+      effectiveDigest = hashConfig(retainRestartOnlyConfig(current.config, candidate));
       if (configChanged) {
-        const next = await deps.buildBaseConfig(candidate);
+        const next = await deps.buildBaseConfig(retainRestartOnlyConfig(current.config, candidate));
         await deps.replaceBaseConfig(next);
         installed = true;
         await deps.clearOverrideCache();
@@ -268,7 +436,7 @@ export function createConfigReloader(deps: ConfigReloaderDeps): () => Promise<Co
     }
 
     try {
-      const generation = await deps.generation.bump();
+      const generation = await deps.generation.bump(effectiveDigest);
       if (generation == null) {
         return { scope: 'local', distributed: false, sections: report };
       }
