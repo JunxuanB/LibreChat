@@ -3,12 +3,15 @@ import { createHash } from 'node:crypto';
 import isPlainObject from 'lodash/isPlainObject';
 import { logger } from '@librechat/data-schemas';
 import { getMaxSubagents, setMaxSubagents } from 'librechat-data-provider';
-import type { TCustomConfig } from 'librechat-data-provider';
+import type {
+  TCustomConfig,
+  TConfigReloadResult,
+  TConfigReloadSection,
+} from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import { ConfigReloadError } from './loader';
 
 const CONFIG_GENERATION_KEY = 'config:generation';
-const GENERATION_READ_TIMEOUT_MS = 250;
 const PUBLISH_GENERATION_SCRIPT = `
 local previous = redis.call('GET', KEYS[1])
 local number = 0
@@ -32,7 +35,10 @@ const RESTART_ONLY_PATHS = [
   'cloudfront',
   'fileStrategies',
   'fileStrategy',
+  'filteredTools',
+  'includedTools',
   'mcpServers',
+  'memory',
   'rateLimits',
   'secureImageLinks',
   'endpoints.agents.backgroundTasks',
@@ -60,22 +66,9 @@ const RESTART_ONLY_PATHS = [
   'interface.webSearch',
 ] as const;
 
-export type ConfigSectionStatus = 'applied_live' | 'restart_required' | 'unchanged';
-
-export interface ConfigSectionReport {
-  section: string;
-  status: ConfigSectionStatus;
-  restartRequired: boolean;
-  restartRequiredPaths?: string[];
-}
-
-export interface ConfigReloadResult {
-  scope: 'cluster' | 'local' | 'unchanged';
-  distributed: boolean;
-  generation?: number;
-  propagationError?: string;
-  sections: ConfigSectionReport[];
-}
+export type ConfigSectionStatus = TConfigReloadSection['status'];
+export type ConfigSectionReport = TConfigReloadSection;
+export type ConfigReloadResult = TConfigReloadResult;
 
 export interface ConfigGenerationStore {
   get(key: string): Promise<string | null>;
@@ -90,11 +83,14 @@ export interface ConfigGenerationChange {
 export interface ConfigGenerationTracker {
   readonly distributed: boolean;
   check(currentDigest?: string): Promise<ConfigGenerationChange | undefined>;
+  bootstrap(): Promise<void>;
   bump(digest: string): Promise<number | undefined>;
 }
 
 export interface ConfigGenerationTrackerOptions {
   pollIntervalMs?: number;
+  /** Use the deployment's existing Redis connection deadline at startup. */
+  bootstrapTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -276,7 +272,6 @@ export function createConfigGenerationTracker(
   let seenGeneration: string | undefined;
   let nextPollAt = 0;
   let checkFlight: Promise<ConfigGenerationChange | undefined> | undefined;
-  let pendingRead: Promise<string | null> | undefined;
   let readSequence = 0;
 
   async function readGeneration(
@@ -303,7 +298,7 @@ export function createConfigGenerationTracker(
       seenGeneration = generation;
       return undefined;
     }
-    if (seenGeneration == null && currentDigest == null) {
+    if (seenGeneration == null) {
       seenGeneration = generation;
       return undefined;
     }
@@ -328,46 +323,45 @@ export function createConfigGenerationTracker(
     if (checkFlight) {
       return checkFlight;
     }
-    // A timed-out ioredis GET can remain queued through a disconnect. Do not
-    // enqueue one command per interval while the previous physical read waits.
-    if (pendingRead) {
-      return undefined;
-    }
     if (now() < nextPollAt) {
       return undefined;
     }
     nextPollAt = now() + pollIntervalMs;
     const sequence = ++readSequence;
-    const read = store.get(CONFIG_GENERATION_KEY);
-    pendingRead = read;
-    void read.then(
-      () => {
-        if (pendingRead === read) pendingRead = undefined;
-      },
-      () => {
-        if (pendingRead === read) pendingRead = undefined;
-      },
-    );
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const flight = Promise.race([
-      readGeneration(currentDigest, sequence, read),
-      new Promise<undefined>((resolve) => {
-        timeout = setTimeout(() => {
-          readSequence += 1;
-          resolve(undefined);
-        }, GENERATION_READ_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
+    const flight = readGeneration(currentDigest, sequence, store.get(CONFIG_GENERATION_KEY));
     checkFlight = flight;
     try {
       return await flight;
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
       if (checkFlight === flight) {
         checkFlight = undefined;
+      }
+    }
+  }
+
+  async function bootstrap(): Promise<void> {
+    if (!store) {
+      return;
+    }
+    // Capture the persisted generation before startup reads its local source.
+    // A publication during that load remains visible to the next check. If
+    // Redis is offline, startup proceeds and the first recovered read becomes
+    // the baseline rather than treating an old persisted digest as new work.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        check().then(() => undefined),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(() => {
+            readSequence += 1;
+            resolve();
+          }, options.bootstrapTimeoutMs ?? 1_000);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
       }
     }
   }
@@ -383,7 +377,7 @@ export function createConfigGenerationTracker(
     return generation;
   }
 
-  return { distributed: store != null, check, bump };
+  return { distributed: store != null, check, bootstrap, bump };
 }
 
 export function createConfigReloader(deps: ConfigReloaderDeps): () => Promise<ConfigReloadResult> {

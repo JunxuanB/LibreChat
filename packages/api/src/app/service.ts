@@ -83,6 +83,8 @@ export interface AppConfigServiceDeps {
   overrideCacheTtl?: number;
   /** Returns an acknowledgement for a newer base-config generation. */
   syncConfigGeneration?: (digest: string) => Promise<ConfigGenerationChange | undefined>;
+  /** Read the persisted generation before the startup source load. */
+  bootstrapConfigGeneration?: () => Promise<void>;
 }
 
 export interface GetAppConfigOptions {
@@ -208,6 +210,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     augmentConfig,
     overrideCacheTtl = DEFAULT_OVERRIDE_CACHE_TTL,
     syncConfigGeneration,
+    bootstrapConfigGeneration,
   } = deps;
 
   const cache = getCache(cacheKeys.APP_CONFIG);
@@ -250,11 +253,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
       '[ensureBaseConfig] Failed to reload base configuration; keeping the last good configuration.',
       error,
     );
-    const restorations = [cache.set(BASE_CONFIG_KEY, lastGood)];
-    if (lastGood.availableTools) {
-      restorations.push(setCachedTools(lastGood.availableTools));
-    }
-    const results = await Promise.allSettled(restorations);
+    const results = await Promise.allSettled([cache.set(BASE_CONFIG_KEY, lastGood)]);
     for (const result of results) {
       if (result.status === 'rejected') {
         logger.error('[ensureBaseConfig] Failed to restore last-good config state:', result.reason);
@@ -263,10 +262,13 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     return lastGood;
   }
 
-  async function cacheBaseConfig(loaded: AppConfig): Promise<AppConfig> {
+  async function cacheBaseConfig(loaded: AppConfig, startup = false): Promise<AppConfig> {
     const baseConfig = materializeConfigModelSpecs(loaded);
     const digest = syncConfigGeneration ? hashConfig(baseConfig.config ?? {}) : undefined;
-    if (baseConfig.availableTools) {
+    // Deployment tool filters remain at their startup value until restart. The
+    // global TOOL_CACHE may be shared, so a live reload must never publish tools
+    // ahead of source-version verification on the other replicas.
+    if (startup && baseConfig.availableTools) {
       await setCachedTools(baseConfig.availableTools);
     }
     await cache.set(BASE_CONFIG_KEY, baseConfig);
@@ -298,7 +300,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
       if (expectedDigest && hashConfig(loaded.config ?? {}) !== expectedDigest) {
         throw new Error('Config source has not reached the published generation yet.');
       }
-      return await cacheBaseConfig(loaded);
+      return await cacheBaseConfig(loaded, mode === 'startup');
     } catch (error) {
       if (mode === 'startup') {
         throw error;
@@ -372,7 +374,19 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     }
 
     const mode: CustomConfigLoadMode = lastGoodBaseConfig ? 'reload' : 'startup';
-    const flight = loadAndCacheBaseConfig(mode, expectedDigest);
+    const flight = (async () => {
+      if (mode === 'startup' && bootstrapConfigGeneration) {
+        try {
+          await bootstrapConfigGeneration();
+        } catch (error) {
+          logger.warn(
+            '[ensureBaseConfig] Could not baseline the optional Redis generation:',
+            error,
+          );
+        }
+      }
+      return loadAndCacheBaseConfig(mode, expectedDigest);
+    })();
     baseConfigFlight = flight;
     try {
       return await flight;
@@ -512,11 +526,8 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     const namespace = cacheKeys.APP_CONFIG;
     const overrideSegment = tenantId ? `_OVERRIDE_:${tenantId}:` : '_OVERRIDE_:';
 
-    // In-memory store — enumerate keys directly.
-    // APP_CONFIG defaults to FORCED_IN_MEMORY_CACHE_NAMESPACES, so this is the
-    // standard path. Redis SCAN is intentionally avoided here — it can cause 60s+
-    // stalls under concurrent load (see #12410). When APP_CONFIG is Redis-backed
-    // and store.keys() is unavailable, overrides expire naturally via TTL.
+    // APP_CONFIG is process-local even with Redis. Enumerate its keys directly;
+    // non-enumerable test stores fall back to the override TTL.
     const store = (cache as CacheStore).opts?.store;
     if (store && typeof store.keys === 'function') {
       // Keyv stores keys with a namespace prefix (e.g. "APP_CONFIG:_OVERRIDE_:...").
@@ -541,9 +552,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
 
     logger.warn(
       '[clearOverrideCache] Cache store does not support key enumeration. ' +
-        'Override caches will expire naturally via TTL (%dms). ' +
-        'This is expected when APP_CONFIG is Redis-backed — Redis SCAN is avoided ' +
-        'for performance reasons (see #12410).',
+        'Override caches will expire naturally via TTL (%dms).',
       overrideCacheTtl,
     );
   }

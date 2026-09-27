@@ -1,6 +1,7 @@
 export * from './service';
 export * from './reload';
 export * from './loader';
+export * from './lifecycle';
 export * from './config';
 export * from './metrics';
 export * from './permissions';

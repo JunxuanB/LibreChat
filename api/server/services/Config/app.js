@@ -2,11 +2,9 @@ const mongoose = require('mongoose');
 const { CacheKeys } = require('librechat-data-provider');
 const { AppService, logger } = require('@librechat/data-schemas');
 const {
-  createAppConfigService,
-  createConfigReloader,
+  createDeploymentConfigService,
   createConfigGenerationTracker,
   createRedisConfigGenerationStore,
-  retainRestartOnlyConfig,
   clearMcpConfigCache,
   createCodeEnvironmentRegistry,
   mergeAccessibleCodeEnvironments,
@@ -14,7 +12,7 @@ const {
   ioredisClient,
   standardCache,
 } = require('@librechat/api');
-const { setCachedTools, invalidateCachedTools } = require('./getCachedTools');
+const { setCachedTools } = require('./getCachedTools');
 const { loadAndFormatTools } = require('~/server/services/start/tools');
 const loadCustomConfig = require('./loadCustomConfig');
 const getLogStores = require('~/cache/getLogStores');
@@ -48,80 +46,56 @@ const buildBaseConfig = async (config) => {
   return AppService({ config, paths, systemTools });
 };
 
-const loadBaseConfig = async (mode, previous) => {
-  /** @type {TCustomConfig} */
-  const config =
-    (await loadCustomConfig(mode === 'startup', {
-      mode,
-      remoteTimeoutMs: previous?.config?.configReload?.remoteTimeoutMs,
-    })) ?? {};
-  return buildBaseConfig(retainRestartOnlyConfig(previous?.config, config));
-};
-
 const configGeneration = createConfigGenerationTracker(
   cacheConfig.USE_REDIS && ioredisClient ? createRedisConfigGenerationStore(ioredisClient) : null,
+  { bootstrapTimeoutMs: cacheConfig.REDIS_CONNECT_TIMEOUT },
 );
 
-const { getAppConfig, replaceBaseConfig, clearAppConfigCache, clearOverrideCache } =
-  createAppConfigService({
-    loadBaseConfig,
-    setCachedTools,
-    getCache: getLogStores,
-    cacheKeys: CacheKeys,
-    getApplicableConfigs: db.getApplicableConfigs,
-    getUserPrincipals: db.getUserPrincipals,
-    ...(configGeneration.distributed ? { syncConfigGeneration: configGeneration.check } : {}),
-    augmentConfig: ({ appConfig, baseConfig, principals, options }) => {
-      if (!options.userId) return appConfig;
-      return mergeAccessibleCodeEnvironments({
-        appConfig,
-        deploymentConfig: baseConfig,
-        actor: {
-          userId: options.userId,
-          role: options.role ?? null,
-          idOnTheSource: options.idOnTheSource ?? null,
-          principals,
-        },
-        registry: getCodeEnvironmentRegistry(),
-      });
+const { getAppConfig, clearAppConfigCache, clearOverrideCache, reloadCustomConfig } =
+  createDeploymentConfigService({
+    loadCustomConfig,
+    buildBaseConfig,
+    generation: configGeneration,
+    configService: {
+      setCachedTools,
+      getCache: getLogStores,
+      cacheKeys: CacheKeys,
+      getApplicableConfigs: db.getApplicableConfigs,
+      getUserPrincipals: db.getUserPrincipals,
+      augmentConfig: ({ appConfig, baseConfig, principals, options }) => {
+        if (!options.userId) return appConfig;
+        return mergeAccessibleCodeEnvironments({
+          appConfig,
+          deploymentConfig: baseConfig,
+          actor: {
+            userId: options.userId,
+            role: options.role ?? null,
+            idOnTheSource: options.idOnTheSource ?? null,
+            principals,
+          },
+          registry: getCodeEnvironmentRegistry(),
+        });
+      },
     },
   });
-
-const reloadCustomConfig = createConfigReloader({
-  loadConfig: (current) =>
-    loadCustomConfig(false, {
-      mode: 'reload',
-      remoteTimeoutMs: current.config?.configReload?.remoteTimeoutMs,
-    }),
-  buildBaseConfig,
-  getBaseConfig: () => getAppConfig({ baseOnly: true }),
-  replaceBaseConfig,
-  clearOverrideCache,
-  generation: configGeneration,
-});
 
 // Config owns the reader; models never import this module to obtain it.
 db.initializeMessageBudget(getAppConfig);
 
 /**
  * Invalidate all config-related caches after an admin config mutation.
- * Clears the base config, per-principal override caches, tool caches,
- * and the MCP config-source server cache.
+ * Clears the base config, per-principal overrides and MCP config-source cache.
+ * Global static tools remain startup-owned; clearing them here would leave them
+ * absent until a restart while live reload intentionally pins tool filters.
  * @param {string} [tenantId] - Optional tenant ID to scope override cache clearing.
  */
 async function invalidateConfigCaches(tenantId) {
   const results = await Promise.allSettled([
     clearAppConfigCache(),
     clearOverrideCache(tenantId),
-    invalidateCachedTools({ invalidateGlobal: true }),
     clearMcpConfigCache(),
   ]);
-  const labels = [
-    'clearAppConfigCache',
-    'clearOverrideCache',
-    'invalidateCachedTools',
-    'clearMcpConfigCache',
-  ];
+  const labels = ['clearAppConfigCache', 'clearOverrideCache', 'clearMcpConfigCache'];
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === 'rejected') {
       logger.error(`[invalidateConfigCaches] ${labels[i]} failed:`, results[i].reason);

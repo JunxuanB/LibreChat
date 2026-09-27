@@ -71,6 +71,45 @@ describe('createAppConfigService', () => {
       expect(config).toEqual(deps._baseConfig);
     });
 
+    it('reads the persisted generation before the startup source', async () => {
+      const beforeInitialLoad = jest.fn().mockResolvedValue(undefined);
+      const deps = createDeps({ bootstrapConfigGeneration: beforeInitialLoad });
+      const { getAppConfig } = createAppConfigService(deps);
+      await getAppConfig({ baseOnly: true });
+
+      expect(beforeInitialLoad).toHaveBeenCalledTimes(1);
+      expect(beforeInitialLoad.mock.invocationCallOrder[0]).toBeLessThan(
+        deps.loadBaseConfig.mock.invocationCallOrder[0],
+      );
+      await getAppConfig({ baseOnly: true });
+      expect(beforeInitialLoad).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps startup config available when the optional Redis baseline fails', async () => {
+      const deps = createDeps({
+        bootstrapConfigGeneration: jest.fn().mockRejectedValue(new Error('Redis reconnecting')),
+      });
+      const { getAppConfig } = createAppConfigService(deps);
+
+      await expect(getAppConfig({ baseOnly: true })).resolves.toEqual(deps._baseConfig);
+      expect(deps.loadBaseConfig).toHaveBeenCalledWith('startup', undefined);
+    });
+
+    it('does not publish startup-only tool definitions from live reloads', async () => {
+      const tools = { calculator: { type: 'function' } };
+      const deps = createDeps({
+        loadBaseConfig: jest
+          .fn()
+          .mockResolvedValue({ availableTools: tools, config: { version: '1' } }),
+      });
+      const { getAppConfig, clearAppConfigCache } = createAppConfigService(deps);
+      await getAppConfig({ baseOnly: true });
+      expect(deps.setCachedTools).toHaveBeenCalledTimes(1);
+      await clearAppConfigCache();
+      await getAppConfig({ baseOnly: true });
+      expect(deps.setCachedTools).toHaveBeenCalledTimes(1);
+    });
+
     it('caches base config — does not reload on second call', async () => {
       const deps = createDeps();
       const { getAppConfig } = createAppConfigService(deps);

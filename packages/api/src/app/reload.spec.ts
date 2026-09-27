@@ -52,6 +52,7 @@ function createReplica(
     getApplicableConfigs: async () => [],
     getUserPrincipals: async () => [],
     syncConfigGeneration: generation.check,
+    bootstrapConfigGeneration: generation.bootstrap,
   });
 }
 
@@ -143,12 +144,16 @@ describe('config reload', () => {
     ).toEqual(['old-model']);
 
     sourceB.current = customConfig('new-model');
-    await replicaB.getAppConfig({ baseOnly: true });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(
-      (await replicaB.getAppConfig({ baseOnly: true })).config.endpoints?.custom?.[0].models
-        ?.default,
-    ).toEqual(['new-model']);
+    let observed = await replicaB.getAppConfig({ baseOnly: true });
+    for (
+      let attempt = 0;
+      attempt < 8 && observed.config.endpoints?.custom?.[0].models?.default?.[0] !== 'new-model';
+      attempt++
+    ) {
+      await new Promise((resolve) => setImmediate(resolve));
+      observed = await replicaB.getAppConfig({ baseOnly: true });
+    }
+    expect(observed.config.endpoints?.custom?.[0].models?.default).toEqual(['new-model']);
   });
 
   it('waits for a lagging replica source while ignoring differences in restart-only settings', async () => {
@@ -185,9 +190,15 @@ describe('config reload', () => {
         ?.default,
     ).toEqual(['old-model']);
     followerSource.current = { ...customConfig('new-model'), fileStrategy: FileSources.s3 };
-    await follower.getAppConfig({ baseOnly: true });
-    await new Promise((resolve) => setImmediate(resolve));
-    const config = await follower.getAppConfig({ baseOnly: true });
+    let config = await follower.getAppConfig({ baseOnly: true });
+    for (
+      let attempt = 0;
+      attempt < 8 && config.config?.endpoints?.custom?.[0].models?.default?.[0] !== 'new-model';
+      attempt++
+    ) {
+      await new Promise((resolve) => setImmediate(resolve));
+      config = await follower.getAppConfig({ baseOnly: true });
+    }
     expect(config.config?.endpoints?.custom?.[0].models?.default).toEqual(['new-model']);
     expect(config.config?.fileStrategy).toBe(FileSources.s3);
   });
@@ -198,6 +209,7 @@ describe('config reload', () => {
     const generation = {
       distributed: true,
       check: jest.fn().mockResolvedValue(undefined),
+      bootstrap: jest.fn().mockResolvedValue(undefined),
       bump: jest.fn(),
     };
     const reload = createConfigReloader({
@@ -234,6 +246,7 @@ describe('config reload', () => {
     const generation = {
       distributed: true,
       check: jest.fn().mockResolvedValue(undefined),
+      bootstrap: jest.fn().mockResolvedValue(undefined),
       bump: jest
         .fn()
         .mockRejectedValueOnce(new Error('Redis unavailable'))
@@ -281,6 +294,7 @@ describe('config reload', () => {
     const generation = {
       distributed: true,
       check: jest.fn().mockResolvedValue(undefined),
+      bootstrap: jest.fn().mockResolvedValue(undefined),
       bump: jest.fn(),
     };
     const reload = createConfigReloader({
@@ -371,6 +385,31 @@ describe('config reload', () => {
     expect(next.registration?.socialLogins).toEqual(['openid']);
   });
 
+  it('pins memory policy and global static tool filters until restart', () => {
+    const previous: TCustomConfig = {
+      version: '1.0',
+      memory: { disabled: false },
+      includedTools: ['Calculator'],
+      filteredTools: ['OpenWeather'],
+    };
+    const candidate: TCustomConfig = {
+      version: '1.0',
+      memory: { disabled: true },
+      includedTools: ['OpenWeather'],
+      filteredTools: ['Calculator'],
+    };
+    expect(retainRestartOnlyConfig(previous, candidate)).toEqual(previous);
+    for (const section of ['memory', 'includedTools', 'filteredTools']) {
+      expect(createConfigReloadReport(previous, candidate)).toContainEqual({
+        section,
+        status: 'restart_required',
+        restartRequired: true,
+        restartRequiredPaths: [section === 'memory' ? 'memory.disabled' : section],
+      });
+    }
+    expect(hashConfig(candidate)).toBe(hashConfig(previous));
+  });
+
   it('flags an MCP server edit as restart-required', () => {
     const previous: TCustomConfig = {
       version: '1.2.1',
@@ -386,6 +425,70 @@ describe('config reload', () => {
       status: 'restart_required',
       restartRequired: true,
       restartRequiredPaths: ['mcpServers.docs.url'],
+    });
+  });
+
+  it('baselines a persisted generation before startup and detects later publications', async () => {
+    const store = new MemoryGenerationStore();
+    const previous = hashConfig(customConfig('older-file'));
+    const next = hashConfig(customConfig('newer-file'));
+    await store.publish('config:generation', previous);
+    const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+
+    await tracker.bootstrap();
+    expect(await tracker.check(next)).toBeUndefined();
+    await store.publish('config:generation', next);
+    const change = await tracker.check(previous);
+    expect(change?.expectedDigest).toBe(next);
+  });
+
+  it('bounds startup baselining when Redis is offline and baselines after recovery', async () => {
+    jest.useFakeTimers();
+    try {
+      const store = new MemoryGenerationStore();
+      let resolveRead: ((value: string) => void) | undefined;
+      store.get.mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveRead = resolve;
+          }),
+      );
+      const tracker = createConfigGenerationTracker(store, {
+        pollIntervalMs: 0,
+        bootstrapTimeoutMs: 250,
+      });
+      const startup = tracker.bootstrap();
+      await jest.advanceTimersByTimeAsync(250);
+      await expect(startup).resolves.toBeUndefined();
+      resolveRead?.(JSON.stringify({ generation: 1, digest: 'stale' }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await expect(tracker.check('current')).resolves.toBeUndefined();
+      await store.publish('config:generation', 'next');
+      await expect(tracker.check('current')).resolves.toMatchObject({ expectedDigest: 'next' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('accepts Redis reads slower than 250 ms without losing the next generation', async () => {
+    const store = new MemoryGenerationStore();
+    const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+    await tracker.bootstrap();
+    await store.publish('config:generation', hashConfig(customConfig('new-model')));
+    let resolveRead: ((value: string) => void) | undefined;
+    store.get.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const delayedCheck = tracker.check(hashConfig(customConfig('old-model')));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(store.get).toHaveBeenCalledTimes(2);
+    resolveRead?.(await store.get());
+    await expect(delayedCheck).resolves.toMatchObject({
+      expectedDigest: hashConfig(customConfig('new-model')),
     });
   });
 
@@ -433,32 +536,26 @@ describe('config reload', () => {
     expect(store.get).toHaveBeenCalledTimes(1);
   });
 
-  it('does not enqueue repeated Redis reads after a physical GET times out', async () => {
-    jest.useFakeTimers();
-    try {
-      let resolveRead: ((value: string) => void) | undefined;
-      const store = new MemoryGenerationStore();
-      store.get.mockImplementationOnce(
-        () =>
-          new Promise<string>((resolve) => {
-            resolveRead = resolve;
-          }),
-      );
-      const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
-      const timedOut = tracker.check('old');
-      await jest.advanceTimersByTimeAsync(250);
-      await expect(timedOut).resolves.toBeUndefined();
-      for (let index = 0; index < 5; index++) {
-        await tracker.check('old');
-      }
-      expect(store.get).toHaveBeenCalledTimes(1);
-      resolveRead?.(JSON.stringify({ generation: 0, digest: 'old' }));
-      await Promise.resolve();
-      await tracker.check('old');
-      expect(store.get).toHaveBeenCalledTimes(2);
-    } finally {
-      jest.useRealTimers();
-    }
+  it('keeps an offline Redis read single-flight and accepts it after recovery', async () => {
+    let resolveRead: ((value: string) => void) | undefined;
+    const store = new MemoryGenerationStore();
+    const tracker = createConfigGenerationTracker(store, { pollIntervalMs: 0 });
+    await tracker.bootstrap();
+    store.get.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    const pending = tracker.check('old');
+    const joined = tracker.check('old');
+    expect(store.get).toHaveBeenCalledTimes(2);
+    resolveRead?.(JSON.stringify({ generation: 1, digest: 'new' }));
+    await expect(Promise.all([pending, joined])).resolves.toEqual([
+      expect.objectContaining({ expectedDigest: 'new' }),
+      expect.objectContaining({ expectedDigest: 'new' }),
+    ]);
+    expect(store.get).toHaveBeenCalledTimes(2);
   });
 
   it('limits generation reads to one per poll interval', async () => {
