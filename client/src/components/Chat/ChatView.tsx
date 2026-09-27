@@ -17,11 +17,18 @@ import {
   useQueuedTurnReveal,
   useLocalize,
 } from '~/hooks';
-import { ChatContext, AddedChatContext, ChatFormProvider, useFileMapContext } from '~/Providers';
-import { QueuedTurnPortalProvider } from './Steering/QueuedTurnPortal';
+import {
+  ChatContext,
+  AddedChatContext,
+  ChatFormProvider,
+  useFileMapContext,
+  ComposerRestoreProvider,
+} from '~/Providers';
 import ApprovalProvider from './Messages/Content/ApprovalContext';
 import ConversationStarters from './Input/ConversationStarters';
 import { pendingApprovalActionFamily } from './approval/state';
+import { composerLiftFamily } from './Input/Composer/state';
+import { showComposerTipsAtom } from '~/store/composerTips';
 import { useGetMessagesByConvoId } from '~/data-provider';
 import Footer, { useConfiguredFooter } from './Footer';
 import { AskAnswerHostProvider } from './ask/state';
@@ -50,6 +57,10 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
   const rootSubmission = useRecoilValue(store.submissionByIndex(index));
   const isSubmitting = useRecoilValue(store.isSubmittingFamily(index));
   const saveDrafts = useRecoilValue(store.saveDrafts);
+  const showComposerTips = useAtomValue(showComposerTipsAtom);
+  const enterToSend = useRecoilValue(store.enterToSend);
+  const autoSendText = useRecoilValue(store.autoSendText);
+  const speechSettingsInitialized = useRecoilValue(store.speechSettingsInitialized);
   const centerFormOnLanding = useRecoilValue(store.centerFormOnLanding);
   const pendingAction = useAtomValue(
     pendingApprovalActionFamily(conversationId ?? Constants.NEW_CONVO),
@@ -63,6 +74,9 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
    *  composer's clearance has to account for the bar when it does — including
    *  before the config answers, so a cold load does not jump. */
   const configuredFooter = useConfiguredFooter();
+
+  /** Room an open composer popover needs below the composer; see the atom. */
+  const composerLift = useAtomValue(composerLiftFamily(index));
 
   const methods = useForm<ChatFormValues>({
     defaultValues: { text: '' },
@@ -159,19 +173,29 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
   return (
     <AskAnswerHostProvider saveDrafts={saveDrafts}>
       <ChatFormProvider {...methods}>
-        <ChatContext.Provider value={chatHelpers}>
-          <AddedChatContext.Provider value={addedChatHelpers}>
-            <ApprovalProvider pendingAction={pendingAction}>
-              <QueuedTurnPortalProvider>
+        <ComposerRestoreProvider>
+          <ChatContext.Provider value={chatHelpers}>
+            <AddedChatContext.Provider value={addedChatHelpers}>
+              <ApprovalProvider pendingAction={pendingAction}>
                 <Presentation>
                   <TraceSurface conversationId={conversationId}>
                     <h1 className="sr-only">{pageHeading}</h1>
-                    <Header
-                      parentConversationId={parentConversationId}
-                      readOnly={isSubagentThreadReadOnly}
-                    />
+                    {/* Marks the header's controls as this pane's, so a pane-scoped
+                        shortcut pressed from them acts here, not on the first pane. */}
+                    <div data-chat-pane-portal={index} className="contents">
+                      <Header
+                        parentConversationId={parentConversationId}
+                        readOnly={isSubagentThreadReadOnly}
+                      />
+                    </div>
                     <>
                       <div
+                        data-chat-pane={index}
+                        style={
+                          isLandingPage && composerLift > 0
+                            ? { transform: `translateY(-${composerLift}px)` }
+                            : undefined
+                        }
                         className={cn(
                           'flex flex-col',
                           isLandingPage
@@ -192,12 +216,10 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                         popover ⇄ chat-card morph) paints the whole composer band
                         over the travelling card instead of letting it show
                         through below the composer. The background matches the
-                        page, so normal rendering is unchanged. The named surface
-                        is a stacking context; keep it above positioned tool glyphs
-                        so they cannot paint through the approval preview. */}
+                        page, so normal rendering is unchanged. */}
                         <div
                           className={cn(
-                            'bg-surface-primary-alt relative z-10 w-full [view-transition-name:chat-form]',
+                            'bg-surface-primary-alt w-full [view-transition-name:chat-form]',
                             !isLandingPage && 'scrollbar-gutter-spacer',
                             isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
                           )}
@@ -216,13 +238,17 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                               placeholder={chatFormPlaceholder}
                               project={isProjectLandingPage ? project : undefined}
                               isLandingPage={isLandingPage}
+                              showComposerTips={showComposerTips}
+                              enterToSend={enterToSend}
+                              autoSendText={autoSendText}
+                              speechSettingsInitialized={speechSettingsInitialized}
                               footerBelow={footerBelow}
                               centerFormOnLanding={centerFormOnLanding}
                             />
                           )}
-                          {/* The generic disclaimer is the welcome screen's; a
-                            deployment's own footer, privacy policy and terms
-                            stay with the conversation that always showed them. */}
+                          {/* The generic disclaimer and the policy links are the
+                              welcome screen's; a deployment's own footer stays
+                              with the conversation that always showed it. */}
                           {!isLandingPage && configuredFooter && <Footer configuredOnly />}
                         </div>
                       </div>
@@ -230,10 +256,10 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                     </>
                   </TraceSurface>
                 </Presentation>
-              </QueuedTurnPortalProvider>
-            </ApprovalProvider>
-          </AddedChatContext.Provider>
-        </ChatContext.Provider>
+              </ApprovalProvider>
+            </AddedChatContext.Provider>
+          </ChatContext.Provider>
+        </ComposerRestoreProvider>
       </ChatFormProvider>
     </AskAnswerHostProvider>
   );

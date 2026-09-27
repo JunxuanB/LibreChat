@@ -36,28 +36,69 @@ describe('loadDefaultInterface', () => {
     expect(interfaceConfig?.codeHighlightThrottleMs).toBe(100);
   });
 
-  it('uses the schema default for the agent selector list cap when not configured', async () => {
-    const interfaceConfig = await loadDefaultInterface({
+  it('uses and preserves the schema default for queued-turn reconciliation', async () => {
+    const configDefaults = getConfigDefaults();
+    const defaultInterface = await loadDefaultInterface({
       config: {},
-      configDefaults: getConfigDefaults(),
+      configDefaults,
     });
+    expect(defaultInterface?.queuedTurnReconciliationTimeoutMs).toBe(60_000);
 
-    expect(interfaceConfig?.agentSelectorLimit).toBe(10);
+    const configuredInterface = await loadDefaultInterface({
+      config: { interface: { queuedTurnReconciliationTimeoutMs: 180_000 } },
+      configDefaults,
+    });
+    expect(configuredInterface?.queuedTurnReconciliationTimeoutMs).toBe(180_000);
   });
 
-  it('forwards a configured agent selector list cap to the served interface', async () => {
-    const config: Partial<TCustomConfig> = {
-      interface: {
-        agentSelectorLimit: 4,
-      },
-    };
-
-    const interfaceConfig = await loadDefaultInterface({
-      config,
-      configDefaults: getConfigDefaults(),
+  it('uses and preserves the schema default for the queued-send lock expiry', async () => {
+    const configDefaults = getConfigDefaults();
+    const defaultInterface = await loadDefaultInterface({
+      config: {},
+      configDefaults,
     });
+    expect(defaultInterface?.queuedSendLockTimeoutMs).toBe(60_000);
 
-    expect(interfaceConfig?.agentSelectorLimit).toBe(4);
+    const configuredInterface = await loadDefaultInterface({
+      config: { interface: { queuedSendLockTimeoutMs: 15_000 } },
+      configDefaults,
+    });
+    expect(configuredInterface?.queuedSendLockTimeoutMs).toBe(15_000);
+  });
+
+  it('uses and preserves the schema default for the composer recent-files limit', async () => {
+    const configDefaults = getConfigDefaults();
+    const defaultInterface = await loadDefaultInterface({
+      config: {},
+      configDefaults,
+    });
+    expect(defaultInterface?.composerRecentFiles).toBe(5);
+
+    const configuredInterface = await loadDefaultInterface({
+      config: { interface: { composerRecentFiles: 10 } },
+      configDefaults,
+    });
+    expect(configuredInterface?.composerRecentFiles).toBe(10);
+  });
+
+  it('uses and preserves the schema default for steer arm confirmation', async () => {
+    const configDefaults = getConfigDefaults();
+    const interfaceDefaults = {
+      ...configDefaults.interface,
+      steerArmConfirmationTimeoutMs: 10_000,
+    };
+    const defaults = { ...configDefaults, interface: interfaceDefaults };
+    const defaultInterface = await loadDefaultInterface({
+      config: {},
+      configDefaults: defaults,
+    });
+    expect(defaultInterface?.steerArmConfirmationTimeoutMs).toBe(10_000);
+
+    const configuredInterface = await loadDefaultInterface({
+      config: { interface: { steerArmConfirmationTimeoutMs: 30_000 } },
+      configDefaults: defaults,
+    });
+    expect(configuredInterface?.steerArmConfirmationTimeoutMs).toBe(30_000);
   });
 
   it('preserves disabled URL auto-submit config', async () => {

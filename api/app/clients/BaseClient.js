@@ -32,6 +32,7 @@ const {
   announceReply,
   needsRetentionConversation,
   getConversationWriteContext,
+  persistedReasoningOverrideFields,
 } = require('@librechat/api');
 const {
   Constants,
@@ -610,6 +611,15 @@ class BaseClient {
         userMessage.quotes = referencedQuotes;
       }
     }
+
+    Object.assign(
+      userMessage,
+      persistedReasoningOverrideFields({
+        rawReasoningOverride: this.options.req?.body?.reasoningOverride,
+        isEdited: opts.isEdited,
+        isCompaction: opts.isCompaction,
+      }),
+    );
 
     if (typeof opts?.getReqData === 'function') {
       opts.getReqData({

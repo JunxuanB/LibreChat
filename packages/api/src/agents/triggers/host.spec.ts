@@ -1,5 +1,5 @@
-import { Constants, EModelEndpoint } from 'librechat-data-provider';
 import { getRequestId, getTenantId, getUserId } from '@librechat/data-schemas';
+import { Constants, EModelEndpoint, ReasoningEffort } from 'librechat-data-provider';
 import type { AgentTriggerExecutionHostDeps, AgentTriggerFetch } from './host';
 import {
   EVENT_ACTOR_DETACHED_COMPLETION_SOURCE,
@@ -645,7 +645,7 @@ describe('createAgentTriggerExecutionHost continue adapter', () => {
       files: [{ file_id: 'file-1' }],
       quotes: ['quoted context'],
       manualSkills: ['research'],
-      codeApprovalMode: 'acceptEdits' as const,
+      reasoningOverride: { key: 'reasoning_effort' as const, value: ReasoningEffort.high },
       admissionSource,
       settleOnAdmission,
     }));
@@ -667,7 +667,7 @@ describe('createAgentTriggerExecutionHost continue adapter', () => {
       files: [{ file_id: 'file-1' }],
       quotes: ['quoted context'],
       manualSkills: ['research'],
-      codeApprovalMode: 'acceptEdits',
+      reasoningOverride: { key: 'reasoning_effort', value: ReasoningEffort.high },
       agentContinuationAdmission: admissionSource,
     });
     expect(getBaseUrl).toHaveBeenCalledWith({ localOnly: true });
