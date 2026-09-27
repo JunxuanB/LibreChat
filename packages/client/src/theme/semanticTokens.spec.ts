@@ -129,7 +129,8 @@ describe('shared field and dropdown interaction styles', () => {
      *  assert the primitives still compose it rather than restating the classes. */
     const field = readFileSync(join(__dirname, '..', 'components', 'Field.ts'), 'utf8');
 
-    expect(field).toMatch(/focus-visible:border-border-medium/);
+    expect(field).toMatch(/\bborder-border-control\b/);
+    expect(field).not.toMatch(/\bborder-border-(?:light|medium)\b/);
     expect(field).toMatch(/focus-visible:ring-2/);
     expect(field).toMatch(/focus-visible:ring-text-primary/);
 
@@ -608,5 +609,42 @@ describe('syntax highlighting palette', () => {
 
     expect(hljsRules.length).toBeGreaterThan(0);
     expect(hljsRules.filter((body) => /#[0-9a-f]{3,8}|hsla?\(/i.test(body))).toEqual([]);
+  });
+});
+
+/** `border-control` is the only edge a form control has (`Field`, `Select`,
+ *  `InputOTP`, the dropdown and combobox triggers). The stock light and dark
+ *  palettes keep it at their quiet `border-light` value by design; the high
+ *  contrast and ClickHouse palettes hold it to the WCAG 1.4.11 3:1 floor. */
+const controlCanvases: Array<keyof IThemeRGB> = [...canvasSurfaces, 'rgb-surface-tertiary'];
+
+describe.each([
+  ['high contrast light', highContrastLightTheme],
+  ['high contrast dark', highContrastDarkTheme],
+  ['clickhouse light', clickHouseLightTheme],
+  ['clickhouse dark', clickHouseDarkTheme],
+])('%s control border', (_name, theme: IThemeRGB) => {
+  it('keeps the form-control outline at the 3:1 floor on every canvas', () => {
+    const outline = toRgb(theme, 'rgb-border-control');
+    const failures = controlCanvases.flatMap((surface) => {
+      const ratio = contrast(outline, toRgb(theme, surface));
+      return ratio < WCAG_MARK_MIN ? [`${surface}: ${ratio.toFixed(2)}:1`] : [];
+    });
+
+    expect(failures).toEqual([]);
+  });
+});
+
+describe('control border defaults', () => {
+  /** The app stylesheet does not declare this role; the package does, so the
+   *  stock palette has an outline before and without a theme definition. */
+  it('keeps the package CSS in step with the runtime themes', () => {
+    const controls = readFileSync(join(__dirname, 'controls.css'), 'utf8');
+    const declared = [...controls.matchAll(/--border-control:\s*([^;]+);/g)].map((match) =>
+      match[1].trim(),
+    );
+
+    /** One declaration for `html`, one for `.dark`, and both must match. */
+    expect(declared).toEqual([defaultTheme['rgb-border-control'], darkTheme['rgb-border-control']]);
   });
 });

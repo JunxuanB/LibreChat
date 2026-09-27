@@ -46,6 +46,21 @@ export const MARK_NEIGHBOURHOOD: readonly (keyof IThemeRGB)[] = Object.freeze([
   'rgb-surface-tertiary',
 ]);
 
+/**
+ * The control outline for a stored or environment theme that predates
+ * `rgb-border-control`. Fields, dropdowns and comboboxes drew `border-light`
+ * and selects and OTP slots drew `border-medium` before the role existed, so a
+ * theme that painted either keeps that edge on its controls, the light border
+ * first. A theme that painted neither keeps the bundled role, and one that
+ * names the role keeps it as written.
+ */
+export function controlBorderFallback(colors: IThemeRGB): string | undefined {
+  if (colors['rgb-border-control'] !== undefined) {
+    return undefined;
+  }
+  return colors['rgb-border-light'] ?? colors['rgb-border-medium'];
+}
+
 export const themeAppearanceProperties: Readonly<
   Record<keyof IThemeAppearance, `--theme-${string}`>
 > = Object.freeze({
@@ -331,6 +346,36 @@ const appearanceValidators: Record<keyof IThemeAppearance, (value: unknown) => b
   motionNormal: isDuration,
 };
 
+const isAppearanceKey = (key: string): key is keyof IThemeAppearance =>
+  Object.prototype.hasOwnProperty.call(appearanceValidators, key);
+
+/**
+ * A token added after this reader shipped is ignored rather than rejected, so a newer definition
+ * degrades to the defaults for what this version cannot paint instead of losing every value it
+ * can. It never reaches the DOM, but it must still look like a token: a camelCase name and a
+ * plain CSS value, never a declaration or rule break.
+ */
+const isFutureAppearance = (key: string, value: unknown): boolean =>
+  /^[a-z][a-zA-Z0-9]*$/.test(key) && typeof value === 'string' && !/[;{}<>]|url\s*\(/i.test(value);
+
+/** The appearance tokens this reader does not know, which `resolveTheme` leaves out. */
+export function collectThemeWarnings(theme: ThemeDefinition): string[] {
+  if (!isPlainRecord(theme) || !isPlainRecord(theme.modes)) {
+    return [];
+  }
+  return (['light', 'dark'] as const).flatMap((mode) => {
+    const appearance: unknown = isPlainRecord(theme.modes[mode])
+      ? theme.modes[mode]?.appearance
+      : undefined;
+    if (!isPlainRecord(appearance)) {
+      return [];
+    }
+    return Object.keys(appearance)
+      .filter((key) => !isAppearanceKey(key))
+      .map((key) => `Unknown ${mode} appearance token ignored: ${key}`);
+  });
+}
+
 /** Shared by the theme-wide `brands` and each mode's override block. */
 function collectBrandErrors(brands: unknown): string[] {
   if (!isPlainRecord(brands)) {
@@ -417,13 +462,9 @@ export function validateThemeDefinition(theme: ThemeDefinition): string[] {
       errors.push(`Theme appearance for ${mode} must be an object`);
     } else {
       Object.entries(definition.appearance ?? {}).forEach(([key, value]) => {
-        const appearanceKey = key as keyof IThemeAppearance;
-        const validator = appearanceValidators[appearanceKey];
-        if (!validator) {
-          errors.push(`Unknown appearance token: ${key}`);
-          return;
-        }
-        if (value !== undefined && !validator(value)) {
+        const isKnown = isAppearanceKey(key);
+        const isValid = isKnown ? appearanceValidators[key](value) : isFutureAppearance(key, value);
+        if (value !== undefined && !isValid) {
           errors.push(`Invalid appearance value for ${key}: ${value}`);
         }
       });
@@ -458,6 +499,12 @@ function definedEntries<T extends object>(values?: Partial<T>): Partial<T> {
   return Object.fromEntries(
     Object.entries(values).filter(([, value]) => value !== undefined),
   ) as Partial<T>;
+}
+
+function knownAppearance(appearance?: Partial<IThemeAppearance>): Partial<IThemeAppearance> {
+  return Object.fromEntries(
+    Object.entries(definedEntries(appearance)).filter(([key]) => isAppearanceKey(key)),
+  );
 }
 
 const shadowAppearanceKeys: ReadonlyArray<keyof IThemeAppearance> = [
@@ -548,6 +595,10 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors?.['rgb-border-light'] !== undefined
       ? { 'rgb-chart-widget-stroke': customColors['rgb-border-light'] }
       : {};
+  const borderControlSource =
+    customColors != null ? controlBorderFallback(customColors) : undefined;
+  const borderControlFallback =
+    borderControlSource !== undefined ? { 'rgb-border-control': borderControlSource } : {};
   /**
    * Slot 8 arrived after the seven-slot scale shipped, so a stored or
    * environment theme that paints its own scale cannot name it. Filling the
@@ -607,12 +658,13 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...textMutedFallback,
       ...chartWidgetSurfaceFallback,
       ...chartWidgetStrokeFallback,
+      ...borderControlFallback,
       ...seriesEightFallback,
       ...verifiedFallback,
     } as Required<IThemeRGB>,
     appearance: withComposableShadows({
       ...defaultAppearance,
-      ...definedEntries(definition?.appearance),
+      ...knownAppearance(definition?.appearance),
     }),
     /** Mode last: a mode override is more specific than the theme-wide set. */
     brands: {

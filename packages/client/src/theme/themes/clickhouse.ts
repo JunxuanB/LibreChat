@@ -47,7 +47,7 @@ export const clickHouseLightTheme: IThemeRGB = {
   'rgb-accent-primary-hover': '50 50 50', // #323232 (palette.neutral.712)
 
   // Ring colors
-  'rgb-ring-primary': '21 21 21', // #151515 (accent.default)
+  'rgb-ring-primary': '67 126 239', // #437eef (outline.default)
 
   // Header colors
   'rgb-header-primary': '255 255 255', // #ffffff (background.default)
@@ -70,7 +70,7 @@ export const clickHouseLightTheme: IThemeRGB = {
   'rgb-surface-tertiary': '246 247 250', // #f6f7fa (background.muted)
   'rgb-surface-tertiary-alt': '255 255 255', // #ffffff (background.default)
   'rgb-surface-dialog': '255 255 255', // #ffffff (background.default)
-  'rgb-surface-overlay': '83 87 95', // #53575f (palette.slate.700)
+  'rgb-surface-overlay': '21 21 21', // #151515 (dialog.color.opaqueBackground, lch(6.7738 0 none))
   'rgb-surface-submit': '21 21 21', // #151515 (accent.default)
   'rgb-surface-submit-hover': '50 50 50', // #323232 (palette.neutral.712)
   'rgb-surface-destructive': '193 0 0', // #c10000 (palette.danger.600)
@@ -92,6 +92,7 @@ export const clickHouseLightTheme: IThemeRGB = {
   'rgb-border-heavy': '179 182 189', // #b3b6bd (stroke.intense)
   'rgb-border-xheavy': '128 134 145', // #808691 (palette.slate.500, two steps past stroke.intense #b3b6bd (2.03:1 on white))
   'rgb-border-destructive': '193 0 0', // #c10000 (palette.danger.600)
+  'rgb-border-control': '128 134 145', // #808691 (palette.slate.500, 3.42:1 on background.muted)
 
   // Status colors
   'rgb-status-success': '0 97 8', // #006108 (palette.success.800, one step past feedback.success.foreground #008a0b (4.27:1 on its fill))
@@ -197,9 +198,9 @@ export const clickHouseDarkTheme: IThemeRGB = {
   'rgb-surface-chat': '31 31 28', // #1f1f1c (background.default)
   'rgb-surface-code': '40 40 40', // #282828 (codeblock.darkMode.background.default)
   'rgb-surface-code-body': '40 40 40', // #282828 (codeblock.darkMode.background.default)
-  'rgb-surface-inverted': '255 255 255', // #ffffff (palette.neutral.0)
-  'rgb-surface-inverted-hover': '223 223 223', // #dfdfdf (palette.neutral.200)
-  'rgb-text-inverted': '21 21 21', // #151515 (palette.neutral.900)
+  'rgb-surface-inverted': '250 255 105', // #faff69 (button.basic.color.primary.background.default)
+  'rgb-surface-inverted-hover': '252 255 150', // #fcff96 (button.basic.color.primary.background.hover)
+  'rgb-text-inverted': '31 31 28', // #1f1f1c (button.basic.color.primary.text.default)
   'rgb-surface-fixed': '255 255 255', // #ffffff (palette.neutral.0, same in light and dark)
   'rgb-surface-fixed-hover': '230 231 233', // #e6e7e9 (palette.slate.100, same in light and dark)
   'rgb-text-fixed': '22 21 23', // #161517 (palette.slate.900, same in light and dark)
@@ -211,6 +212,7 @@ export const clickHouseDarkTheme: IThemeRGB = {
   'rgb-border-heavy': '65 65 65', // #414141 (stroke.intense)
   'rgb-border-xheavy': '128 128 128', // #808080 (palette.neutral.500, three steps past stroke.intense #414141 (1.62:1 on the canvas))
   'rgb-border-destructive': '255 117 117', // #ff7575 (palette.danger.300)
+  'rgb-border-control': '128 128 128', // #808080 (palette.neutral.500, 3.73:1 on background.muted)
 
   // Status colors
   'rgb-status-success': '204 255 208', // #ccffd0 (feedback.success.foreground)
@@ -273,9 +275,9 @@ export const clickHouseDarkTheme: IThemeRGB = {
  * the dialog-sized steps onto `radii.2`, and the largest onto `radii.3`. `rounded-sm` takes
  * `radii.1`, which LibreChat's `sm` also renders at on a 16px root; every larger step tightens.
  *
- * Click UI's mono family is Inconsolata. The app does not bundle it, so the tail is the same
- * metric-matched stack the default theme uses (Click UI's own tail names `"SFMono Regular"`,
- * which no platform installs).
+ * Click UI's mono family is Inconsolata, which the client self-hosts in `client/src/fonts.css`
+ * (latin 400 and 700). The tail is the same metric-matched stack the default theme uses (Click
+ * UI's own tail names `"SFMono Regular"`, which no platform installs).
  *
  * Click UI raises every elevated surface (card, dialog, menu, panel, popover, toast) with
  * `shadow.1`, and its only lighter step is the hairline `shadow.5`. Steps 2 to 4 are the flyout's
@@ -300,6 +302,8 @@ const clickHouseShape = {
     '"Inconsolata", ui-monospace, SFMono-Regular, Menlo, "Cascadia Mono", "Liberation Mono", Consolas, monospace',
   shadowXs: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
   shadowSm: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
+  controlHeight: '2rem', // genericMenu.panel.size.height
+  motionFast: '100ms', // transition.default
 };
 
 const elevation = (alpha: number): string =>

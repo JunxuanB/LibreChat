@@ -12,6 +12,7 @@ import type { IThemeRGB, ThemeDefinition, ThemeMode } from '../types';
 import {
   fromLegacyTheme,
   highContrastTheme,
+  collectThemeWarnings,
   resolveTheme,
   validateThemeDefinition,
 } from '../registry';
@@ -20,6 +21,7 @@ import { defaultTheme } from '../themes/default';
 import { darkTheme } from '../themes/dark';
 import '../highContrast.css';
 import '../preflight.css';
+import '../controls.css';
 
 const THEME_KEY = 'color-theme';
 const THEME_COLORS_KEY = 'theme-colors';
@@ -591,6 +593,14 @@ export function ThemeProvider({
     setThemeName,
     setThemeRGB,
   ]);
+
+  /** Stored, controlled and deployment definitions all arrive here, so each is reported once. */
+  useEffect(() => {
+    const warnings = themeDefinition ? collectThemeWarnings(themeDefinition) : [];
+    if (warnings.length > 0) {
+      console.warn(`[ThemeProvider] ${warnings.join('; ')}`);
+    }
+  }, [themeDefinition]);
 
   const applyThemeMode = useCallback(
     (currentTheme: AppearanceMode) => {
