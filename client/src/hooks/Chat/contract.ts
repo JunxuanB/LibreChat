@@ -45,6 +45,12 @@ export type ChatMessagesContract = {
    * AI SDK: `messages`, read on demand instead of subscribed.
    */
   getMessages: (targetConversationId?: string | null) => TMessage[] | undefined;
+  /**
+   * The conversation key `getMessages()` reads when called without one: the route's id, which
+   * can run ahead of `conversation` while navigation settles, or `''` before the pane has either.
+   * AI SDK: the chat `id`.
+   */
+  messagesKey: string;
   /** Writes the full message list to every cache key this pane reads. AI SDK: `setMessages`. */
   setMessages: (messages: TMessage[]) => void;
   /** Selects the visible sibling under the latest message's parent. */
