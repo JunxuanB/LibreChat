@@ -77,6 +77,7 @@ export interface ConfigGenerationStore {
 
 export interface ConfigGenerationChange {
   readonly expectedDigest: string;
+  isCurrent(): boolean;
   acknowledge(): void;
 }
 
@@ -313,6 +314,7 @@ export function createConfigGenerationTracker(
     const previousGeneration = seenGeneration;
     return {
       expectedDigest: payload.digest,
+      isCurrent: () => seenGeneration === previousGeneration && readSequence === sequence,
       acknowledge() {
         if (seenGeneration === previousGeneration) {
           seenGeneration = generation;

@@ -321,15 +321,10 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     }
   }
 
-  async function applyRemoteGeneration(): Promise<void> {
-    const current = lastGoodBaseConfig;
-    if (!current || !syncConfigGeneration) {
-      return;
-    }
-    const change = await syncConfigGeneration(
-      lastGoodBaseDigest ?? hashConfig(current.config ?? {}),
-    );
-    if (!change) {
+  async function applyRemoteGeneration(change: ConfigGenerationChange): Promise<void> {
+    // A local reload may have published a newer generation while the Redis GET
+    // was in flight or waiting for this process-local install slot.
+    if (!change.isCurrent()) {
       return;
     }
     const staleFlight = baseConfigFlight;
@@ -349,10 +344,20 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
   }
 
   function scheduleGenerationCheck(): void {
-    if (!syncConfigGeneration || generationFlight || !lastGoodBaseConfig) {
+    const sync = syncConfigGeneration;
+    if (!sync || generationFlight || !lastGoodBaseConfig) {
       return;
     }
-    const flight = withConfigUpdate(applyRemoteGeneration);
+    const flight = (async () => {
+      const current = lastGoodBaseConfig;
+      if (!current) {
+        return;
+      }
+      const change = await sync(lastGoodBaseDigest ?? hashConfig(current.config ?? {}));
+      if (change) {
+        await withConfigUpdate(() => applyRemoteGeneration(change));
+      }
+    })();
     generationFlight = flight;
     void flight
       .catch((error) => {

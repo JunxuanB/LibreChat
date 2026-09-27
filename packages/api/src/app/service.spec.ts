@@ -1,5 +1,6 @@
 import { getMaxSubagents, setMaxSubagents } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
+import type { ConfigGenerationChange } from './reload';
 import {
   createAppConfigService,
   createMessageBudgetReader,
@@ -243,6 +244,7 @@ describe('createAppConfigService', () => {
       const acknowledge = jest.fn();
       syncConfigGeneration.mockResolvedValueOnce({
         expectedDigest: hashConfig(next.config),
+        isCurrent: () => true,
         acknowledge,
       });
 
@@ -254,6 +256,97 @@ describe('createAppConfigService', () => {
       expect(acknowledge).toHaveBeenCalledTimes(1);
       expect(deps.loadBaseConfig).toHaveBeenLastCalledWith('reload', expect.any(Object));
       expect(deps.getApplicableConfigs).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not block an admin reload behind an offline generation read', async () => {
+      const original = { config: { version: '0' } } as AppConfig;
+      const syncConfigGeneration = jest.fn().mockResolvedValue(undefined);
+      let releaseRead: ((change: undefined) => void) | undefined;
+      const deps = createDeps({
+        loadBaseConfig: jest.fn().mockResolvedValue(original),
+        syncConfigGeneration,
+      });
+      const service = createAppConfigService(deps);
+      await service.getAppConfig({ baseOnly: true });
+      syncConfigGeneration.mockImplementationOnce(
+        () =>
+          new Promise<undefined>((resolve) => {
+            releaseRead = resolve;
+          }),
+      );
+      await service.getAppConfig({ baseOnly: true });
+
+      const reload = createConfigReloader({
+        loadConfig: async () => ({ version: '1' }),
+        buildBaseConfig: async (source) => ({ ...original, config: source }),
+        getBaseConfig: () => service.getAppConfig({ baseOnly: true }),
+        replaceBaseConfig: service.replaceBaseConfig,
+        clearOverrideCache: () => service.clearOverrideCache(),
+        withConfigUpdate: service.withConfigUpdate,
+        generation: {
+          ...createConfigGenerationTracker(),
+          distributed: true,
+          bump: jest.fn().mockRejectedValue(new Error('Redis unavailable')),
+        },
+      });
+      try {
+        await expect(
+          Promise.race([
+            reload(),
+            new Promise((resolve) => setTimeout(() => resolve('blocked'), 100)),
+          ]),
+        ).resolves.toMatchObject({
+          scope: 'local',
+          propagationError: 'Redis generation update failed',
+        });
+        expect((await service.getAppConfig({ baseOnly: true })).config.version).toBe('1');
+      } finally {
+        releaseRead?.(undefined);
+      }
+    });
+
+    it('ignores an older generation after an admin publishes a newer local base', async () => {
+      const original = { config: { version: '0' } } as AppConfig;
+      const syncConfigGeneration = jest.fn().mockResolvedValue(undefined);
+      const deps = createDeps({
+        loadBaseConfig: jest.fn().mockResolvedValue(original),
+        syncConfigGeneration,
+      });
+      const service = createAppConfigService(deps);
+      await service.getAppConfig({ baseOnly: true });
+      let releaseRead: ((change: ConfigGenerationChange) => void) | undefined;
+      let current = true;
+      syncConfigGeneration.mockImplementationOnce(
+        () =>
+          new Promise<ConfigGenerationChange>((resolve) => {
+            releaseRead = resolve;
+          }),
+      );
+      await service.getAppConfig({ baseOnly: true });
+      const acknowledge = jest.fn();
+      const bump = jest.fn().mockImplementation(async () => {
+        current = false;
+        return 2;
+      });
+      const reload = createConfigReloader({
+        loadConfig: async () => ({ version: '2' }),
+        buildBaseConfig: async (source) => ({ ...original, config: source }),
+        getBaseConfig: () => service.getAppConfig({ baseOnly: true }),
+        replaceBaseConfig: service.replaceBaseConfig,
+        clearOverrideCache: () => service.clearOverrideCache(),
+        withConfigUpdate: service.withConfigUpdate,
+        generation: { ...createConfigGenerationTracker(), distributed: true, bump },
+      });
+      await reload();
+      releaseRead?.({
+        expectedDigest: hashConfig({ version: '1' }),
+        isCurrent: () => current,
+        acknowledge,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect((await service.getAppConfig({ baseOnly: true })).config.version).toBe('2');
+      expect(deps.loadBaseConfig).toHaveBeenCalledTimes(1);
+      expect(acknowledge).not.toHaveBeenCalled();
     });
 
     it('serializes a background generation with a concurrent admin reload', async () => {
@@ -278,6 +371,7 @@ describe('createAppConfigService', () => {
       await service.getAppConfig({ baseOnly: true });
       syncConfigGeneration.mockResolvedValueOnce({
         expectedDigest: hashConfig(remote.config),
+        isCurrent: () => true,
         acknowledge: jest.fn(),
       });
       await service.getAppConfig({ baseOnly: true });
@@ -311,7 +405,11 @@ describe('createAppConfigService', () => {
       const initial = await getAppConfig({ baseOnly: true });
       const acknowledge = jest.fn();
       const next = { ...initial, config: { version: '2.0' } };
-      const change = { expectedDigest: hashConfig(next.config), acknowledge };
+      const change = {
+        expectedDigest: hashConfig(next.config),
+        isCurrent: () => true,
+        acknowledge,
+      };
       let published = true;
       syncConfigGeneration.mockImplementation(async () => (published ? change : undefined));
       deps.loadBaseConfig.mockRejectedValueOnce(new Error('remote unavailable'));
