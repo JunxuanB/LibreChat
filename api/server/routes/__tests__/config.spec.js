@@ -1101,3 +1101,52 @@ describe('passkey enrollment cap', () => {
     expect(anonymous.body).not.toHaveProperty('maxPasskeysPerUser');
   });
 });
+
+describe('chat list endpoint filter limit', () => {
+  it('publishes the base config limits only after authentication', async () => {
+    const { AppService } = require('@librechat/data-schemas');
+    const baseConfig = await AppService({
+      config: { conversationList: { maxEndpointFilters: 3, maxEndpointNameLength: 40 } },
+    });
+    mockGetAppConfig.mockResolvedValue(baseConfig);
+
+    const authenticated = await request(createApp(mockUser)).get('/api/config');
+    expect(authenticated.status).toBe(200);
+    expect(authenticated.body.conversationListLimits).toEqual({
+      maxEndpointFilters: 3,
+      maxEndpointNameLength: 40,
+    });
+    expect(mockGetAppConfig).toHaveBeenCalledWith({ baseOnly: true });
+
+    const anonymous = await request(createApp()).get('/api/config');
+    expect(anonymous.status).toBe(200);
+    expect(anonymous.body).not.toHaveProperty('conversationListLimits');
+  });
+
+  it('publishes the limits the list route enforces, not a principal override', async () => {
+    const { AppService } = require('@librechat/data-schemas');
+    const baseConfig = await AppService({
+      config: { conversationList: { maxEndpointFilters: 2 } },
+    });
+    const mergedConfig = await AppService({
+      config: { conversationList: { maxEndpointFilters: 9 } },
+    });
+    mockGetAppConfig.mockImplementation(async (options) =>
+      options?.baseOnly === true ? baseConfig : mergedConfig,
+    );
+
+    const response = await request(createApp(mockUser)).get('/api/config');
+    expect(response.body.conversationListLimits.maxEndpointFilters).toBe(2);
+  });
+
+  it('publishes the schema defaults for a deployment that sets none', async () => {
+    const { AppService } = require('@librechat/data-schemas');
+    mockGetAppConfig.mockResolvedValue(await AppService({ config: {} }));
+
+    const response = await request(createApp(mockUser)).get('/api/config');
+    expect(response.body.conversationListLimits).toEqual({
+      maxEndpointFilters: 50,
+      maxEndpointNameLength: 128,
+    });
+  });
+});
