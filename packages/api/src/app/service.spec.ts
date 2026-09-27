@@ -1,3 +1,4 @@
+import { getMaxSubagents, setMaxSubagents } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import {
   createAppConfigService,
@@ -5,7 +6,7 @@ import {
   _resetOverrideStrictCache,
   getAppConfigOptionsFromUser,
 } from './service';
-import { hashConfig } from './reload';
+import { createConfigReloader, createConfigGenerationTracker, hashConfig } from './reload';
 
 /** Extends AppConfig with mock fields used by merge behavior tests. */
 interface TestConfig extends AppConfig {
@@ -108,6 +109,36 @@ describe('createAppConfigService', () => {
       await clearAppConfigCache();
       await getAppConfig({ baseOnly: true });
       expect(deps.setCachedTools).toHaveBeenCalledTimes(1);
+    });
+
+    it('publishes a validated subagent cap only after the new base is committed', async () => {
+      const oldCap = getMaxSubagents();
+      try {
+        const deps = createDeps({
+          loadBaseConfig: jest
+            .fn()
+            .mockResolvedValueOnce({ config: { endpoints: { agents: { maxSubagents: 7 } } } })
+            .mockResolvedValueOnce({ config: { endpoints: { agents: { maxSubagents: 20 } } } }),
+        });
+        const service = createAppConfigService(deps);
+        await service.getAppConfig({ baseOnly: true });
+        expect(getMaxSubagents()).toBe(7);
+        let commit: (() => void) | undefined;
+        deps._cache.set.mockImplementationOnce(
+          () =>
+            new Promise<undefined>((resolve) => {
+              commit = () => resolve(undefined);
+            }),
+        );
+        const pending = service.getAppConfig({ baseOnly: true, refresh: true });
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(getMaxSubagents()).toBe(7);
+        commit?.();
+        await pending;
+        expect(getMaxSubagents()).toBe(20);
+      } finally {
+        setMaxSubagents(oldCap);
+      }
     });
 
     it('caches base config — does not reload on second call', async () => {
@@ -225,6 +256,54 @@ describe('createAppConfigService', () => {
       expect(deps.getApplicableConfigs).toHaveBeenCalledTimes(2);
     });
 
+    it('serializes a background generation with a concurrent admin reload', async () => {
+      const original = {
+        config: { version: '0' },
+        interfaceConfig: { modelSelect: true },
+      } as AppConfig;
+      const remote = { ...original, config: { version: '1' } };
+      let resolveRemote: ((config: AppConfig) => void) | undefined;
+      const loadBaseConfig = jest
+        .fn()
+        .mockResolvedValueOnce(original)
+        .mockImplementationOnce(
+          () =>
+            new Promise<AppConfig>((resolve) => {
+              resolveRemote = resolve;
+            }),
+        );
+      const syncConfigGeneration = jest.fn().mockResolvedValue(undefined);
+      const deps = createDeps({ loadBaseConfig, syncConfigGeneration });
+      const service = createAppConfigService(deps);
+      await service.getAppConfig({ baseOnly: true });
+      syncConfigGeneration.mockResolvedValueOnce({
+        expectedDigest: hashConfig(remote.config),
+        acknowledge: jest.fn(),
+      });
+      await service.getAppConfig({ baseOnly: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(resolveRemote).toBeDefined();
+
+      const loadConfig = jest.fn().mockResolvedValue({ version: '2' });
+      const bump = jest.fn().mockResolvedValue(2);
+      const adminReload = createConfigReloader({
+        loadConfig,
+        buildBaseConfig: async (source) => ({ ...original, config: source }),
+        getBaseConfig: () => service.getAppConfig({ baseOnly: true }),
+        replaceBaseConfig: service.replaceBaseConfig,
+        clearOverrideCache: () => service.clearOverrideCache(),
+        withConfigUpdate: service.withConfigUpdate,
+        generation: { ...createConfigGenerationTracker(), distributed: true, bump },
+      });
+      const pendingAdmin = adminReload();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(loadConfig).not.toHaveBeenCalled();
+      resolveRemote?.(remote);
+      await expect(pendingAdmin).resolves.toMatchObject({ scope: 'cluster', generation: 2 });
+      expect((await service.getAppConfig({ baseOnly: true })).config.version).toBe('2');
+      expect(bump).toHaveBeenCalledTimes(1);
+    });
+
     it('does not acknowledge a generation until its source reload succeeds', async () => {
       const syncConfigGeneration = jest.fn().mockResolvedValue(undefined);
       const deps = createDeps({ syncConfigGeneration });
@@ -233,19 +312,23 @@ describe('createAppConfigService', () => {
       const acknowledge = jest.fn();
       const next = { ...initial, config: { version: '2.0' } };
       const change = { expectedDigest: hashConfig(next.config), acknowledge };
-      syncConfigGeneration.mockResolvedValueOnce(change);
+      let published = true;
+      syncConfigGeneration.mockImplementation(async () => (published ? change : undefined));
       deps.loadBaseConfig.mockRejectedValueOnce(new Error('remote unavailable'));
       await getAppConfig({ baseOnly: true });
       await new Promise((resolve) => setImmediate(resolve));
       expect(acknowledge).not.toHaveBeenCalled();
       expect((await getAppConfig({ baseOnly: true })).config).toBe(initial.config);
 
-      syncConfigGeneration.mockResolvedValueOnce(change);
-      deps.loadBaseConfig.mockResolvedValueOnce(next);
-      await getAppConfig({ baseOnly: true });
-      await new Promise((resolve) => setImmediate(resolve));
-      expect((await getAppConfig({ baseOnly: true })).config).toEqual(next.config);
-      expect(acknowledge).toHaveBeenCalledTimes(1);
+      deps.loadBaseConfig.mockResolvedValue(next);
+      let recovered = await getAppConfig({ baseOnly: true });
+      for (let attempt = 0; attempt < 10 && recovered.config?.version !== '2.0'; attempt++) {
+        await new Promise((resolve) => setImmediate(resolve));
+        recovered = await getAppConfig({ baseOnly: true });
+      }
+      expect(recovered.config).toEqual(next.config);
+      expect(acknowledge).toHaveBeenCalled();
+      published = false;
     });
 
     it('serves a cached base without waiting for an unavailable Redis generation check', async () => {

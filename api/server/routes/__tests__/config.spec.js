@@ -178,6 +178,7 @@ describe('GET /api/config', () => {
       expect(response.body).not.toHaveProperty('sharePointPickerSharePointScope');
       expect(response.body).not.toHaveProperty('conversationImportMaxFileSize');
       expect(response.body).not.toHaveProperty('insightsEnabled');
+      expect(response.body).not.toHaveProperty('configReloadAccess');
       expect(response.body).not.toHaveProperty('mcpApps');
     });
 
@@ -357,6 +358,32 @@ describe('GET /api/config', () => {
   });
 
   describe('authenticated (req.user exists)', () => {
+    it('advertises config reload only when both administrator and broad config-management grants are held', async () => {
+      mockGetAppConfig.mockResolvedValue(baseAppConfig);
+      const app = createApp({ ...mockUser, role: 'DELEGATED_ADMIN' });
+      mockHasCapability.mockResolvedValue(true);
+      mockHasConfigCapability.mockImplementation(
+        async (_user, section, verb) => section === null && verb === 'manage',
+      );
+
+      const allowed = await request(app).get('/api/config');
+      expect(allowed.status).toBe(200);
+      expect(allowed.body.configReloadAccess).toBe(true);
+      expect(mockHasConfigCapability).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'DELEGATED_ADMIN' }),
+        null,
+        'manage',
+      );
+
+      mockHasConfigCapability.mockResolvedValue(false);
+      const revoked = await request(app).get('/api/config');
+      expect(revoked.body.configReloadAccess).toBe(false);
+
+      mockHasCapability.mockResolvedValue(false);
+      const noAdmin = await request(app).get('/api/config');
+      expect(noAdmin.body.configReloadAccess).toBe(false);
+    });
+
     it('should call getAppConfig with role, userId, and tenantId', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
       mockGetTenantId.mockReturnValue('fallback-tenant');
@@ -616,8 +643,9 @@ describe('GET /api/config', () => {
 
       expect(response.body.langfuseFanoutEnabled).toBe(true);
       expect(response.body.langfuseConnectionAccess).toBe(false);
-      expect(mockHasCapability).not.toHaveBeenCalled();
-      expect(mockHasConfigCapability).not.toHaveBeenCalled();
+      expect(response.body.configReloadAccess).toBe(true);
+      expect(mockHasConfigCapability).toHaveBeenCalledWith(expect.any(Object), null, 'manage');
+      expect(mockHasConfigCapability).not.toHaveBeenCalledWith(expect.any(Object), 'langfuse');
     });
 
     it('advertises Langfuse connection access from capabilities rather than the user role', async () => {
@@ -674,8 +702,9 @@ describe('GET /api/config', () => {
       const response = await request(app).get('/api/config');
 
       expect(response.body.langfuseConnectionAccess).toBe(false);
-      expect(mockHasCapability).not.toHaveBeenCalled();
-      expect(mockHasConfigCapability).not.toHaveBeenCalled();
+      expect(response.body.configReloadAccess).toBe(true);
+      expect(mockHasConfigCapability).toHaveBeenCalledWith(expect.any(Object), null, 'manage');
+      expect(mockHasConfigCapability).not.toHaveBeenCalledWith(expect.any(Object), 'langfuse');
     });
 
     it.each([
@@ -691,7 +720,9 @@ describe('GET /api/config', () => {
       const response = await request(app).get('/api/config');
 
       expect(response.body.langfuseConnectionAccess).toBe(false);
-      expect(mockHasCapability).not.toHaveBeenCalled();
+      expect(response.body.configReloadAccess).toBe(true);
+      expect(mockHasConfigCapability).toHaveBeenCalledWith(expect.any(Object), null, 'manage');
+      expect(mockHasConfigCapability).not.toHaveBeenCalledWith(expect.any(Object), 'langfuse');
     });
 
     it('should include post-login informational fields', async () => {
@@ -821,7 +852,7 @@ describe('GET /api/config', () => {
       expect(mockHasCapability).toHaveBeenCalled();
     });
 
-    it('should not call hasCapability when allowAccountDeletion is already true', async () => {
+    it('checks admin capability once when account deletion is already enabled', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
       process.env.LANGFUSE_TRACING_ENABLED = 'false';
       const app = createApp(mockUser);
@@ -829,7 +860,7 @@ describe('GET /api/config', () => {
       const response = await request(app).get('/api/config');
 
       expect(response.body.allowAccountDeletion).toBe(true);
-      expect(mockHasCapability).not.toHaveBeenCalled();
+      expect(mockHasCapability).toHaveBeenCalledTimes(1); // Config reload checks admin access.
     });
 
     it('should include adminPanelURL for users with ACCESS_ADMIN capability', async () => {

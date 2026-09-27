@@ -59,7 +59,12 @@ jest.mock('@librechat/data-schemas', () => {
 const axios = require('axios');
 const { loadYaml } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
-const { ReasoningParameterFormat, ReasoningResponseKey } = require('librechat-data-provider');
+const {
+  ReasoningParameterFormat,
+  ReasoningResponseKey,
+  getMaxSubagents,
+  setMaxSubagents,
+} = require('librechat-data-provider');
 const loadCustomConfig = require('./loadCustomConfig');
 
 describe('loadCustomConfig', () => {
@@ -156,6 +161,20 @@ describe('loadCustomConfig', () => {
       validationErrors: expect.any(Array),
     });
     expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it('does not commit a validated subagent limit until the base cache accepts it', async () => {
+    const previous = getMaxSubagents();
+    try {
+      setMaxSubagents(7);
+      process.env.CONFIG_PATH = 'valid-agents.yaml';
+      loadYaml.mockReturnValueOnce({ version: '1.0', endpoints: { agents: { maxSubagents: 20 } } });
+      const candidate = await loadCustomConfig(false, { mode: 'reload' });
+      expect(candidate.endpoints.agents.maxSubagents).toBe(20);
+      expect(getMaxSubagents()).toBe(7);
+    } finally {
+      setMaxSubagents(previous);
+    }
   });
 
   it('rejects a reload when the local config file is missing', async () => {

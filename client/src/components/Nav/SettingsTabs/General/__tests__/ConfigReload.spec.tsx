@@ -3,24 +3,26 @@ import { render, screen } from '@testing-library/react';
 import ConfigReload from '../ConfigReload';
 
 const mockMutate = jest.fn();
-const mockUseAuthContext = jest.fn();
+const mockStartupConfig = jest.fn();
 const mockMutation = jest.fn();
 
-jest.mock('~/data-provider', () => ({ useReloadCustomConfigMutation: () => mockMutation() }));
+jest.mock('~/data-provider', () => ({
+  useReloadCustomConfigMutation: () => mockMutation(),
+  useGetStartupConfig: () => mockStartupConfig(),
+}));
 jest.mock('~/hooks', () => ({
-  useAuthContext: () => mockUseAuthContext(),
   useLocalize: () => (key: string) => key,
 }));
 
 beforeEach(() => {
   mockMutate.mockReset();
-  mockUseAuthContext.mockReturnValue({ user: { role: 'ADMIN' } });
+  mockStartupConfig.mockReturnValue({ data: { configReloadAccess: true } });
   mockMutation.mockReturnValue({ mutate: mockMutate, isLoading: false });
 });
 
 describe('ConfigReload', () => {
-  it('hides the control from non-admins', () => {
-    mockUseAuthContext.mockReturnValue({ user: { role: 'USER' } });
+  it('hides the control without config-management capability', () => {
+    mockStartupConfig.mockReturnValue({ data: { configReloadAccess: false } });
     render(<ConfigReload />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });

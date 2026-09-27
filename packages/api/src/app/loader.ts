@@ -363,7 +363,7 @@ export function createCustomConfigLoader({
       }
       throw error;
     } finally {
-      if (!loadedSuccessfully) {
+      if (mode === 'reload' || !loadedSuccessfully) {
         setMaxSubagents(previousMaxSubagents);
       }
     }

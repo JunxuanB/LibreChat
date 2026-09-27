@@ -197,6 +197,7 @@ export function createMessageBudgetReader(): {
 export function createAppConfigService(deps: AppConfigServiceDeps): {
   getAppConfig: (options?: GetAppConfigOptions) => Promise<AppConfig>;
   replaceBaseConfig: (config: AppConfig) => Promise<AppConfig>;
+  withConfigUpdate: <T>(work: () => Promise<T>) => Promise<T>;
   clearAppConfigCache: () => Promise<void>;
   clearOverrideCache: (tenantId?: string) => Promise<void>;
 } {
@@ -219,6 +220,16 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
   let baseConfigRevision = 0;
   let generationFlight: Promise<void> | undefined;
   let lastGoodBaseDigest: string | undefined;
+  let configUpdateTail: Promise<void> = Promise.resolve();
+
+  function withConfigUpdate<T>(work: () => Promise<T>): Promise<T> {
+    const next = configUpdateTail.then(work, work);
+    configUpdateTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
 
   async function buildPrincipals(
     role?: string,
@@ -275,6 +286,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     lastGoodBaseConfig = baseConfig;
     lastGoodBaseDigest = digest;
     baseConfigRevision += 1;
+    setMaxSubagents(baseConfig.config?.endpoints?.agents?.maxSubagents);
     return baseConfig;
   }
 
@@ -340,7 +352,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     if (!syncConfigGeneration || generationFlight || !lastGoodBaseConfig) {
       return;
     }
-    const flight = applyRemoteGeneration();
+    const flight = withConfigUpdate(applyRemoteGeneration);
     generationFlight = flight;
     void flight
       .catch((error) => {
@@ -560,6 +572,7 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
   return {
     getAppConfig,
     replaceBaseConfig,
+    withConfigUpdate,
     clearAppConfigCache,
     clearOverrideCache,
   };

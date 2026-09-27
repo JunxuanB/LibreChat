@@ -26,7 +26,7 @@ const settingsContext: SettingsContextValue = {
   engineTTS: 'browser',
   langfuseConnectionAccess: false,
   adminPanelURL: '',
-  isAdmin: false,
+  configReloadAccess: false,
   replyTabBadgeAllowed: true,
   replyNotificationsAllowed: true,
   replyNotificationSoundAllowed: true,
@@ -60,7 +60,9 @@ describe('settings registry', () => {
 
   it('shows config reload only to admins, even without an external admin panel', () => {
     const reload = registry.find((entry) => entry.id === 'configReload');
-    expect(reload?.show?.({ ...settingsContext, isAdmin: true, adminPanelURL: '' })).toBe(true);
+    expect(
+      reload?.show?.({ ...settingsContext, configReloadAccess: true, adminPanelURL: '' }),
+    ).toBe(true);
     expect(reload?.show?.(settingsContext)).toBe(false);
   });
 

@@ -262,7 +262,7 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_ui_config_reload_title',
     keywords: ['admin', 'yaml', 'remote', 'config', 'reload'],
     Component: ConfigReload,
-    show: (ctx) => ctx.isAdmin,
+    show: (ctx) => ctx.configReloadAccess,
   },
 
   // Chat · Sending

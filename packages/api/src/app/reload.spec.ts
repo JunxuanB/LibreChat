@@ -410,6 +410,33 @@ describe('config reload', () => {
     expect(hashConfig(candidate)).toBe(hashConfig(previous));
   });
 
+  it('treats a missing versus empty config section as a live change', async () => {
+    const previous: TCustomConfig = { version: '1.0' };
+    const candidate: TCustomConfig = { version: '1.0', ocr: {} };
+    expect(createConfigReloadReport(previous, candidate)).toContainEqual({
+      section: 'ocr',
+      status: 'applied_live',
+      restartRequired: false,
+    });
+    expect(createConfigReloadReport(candidate, previous)).toContainEqual({
+      section: 'ocr',
+      status: 'applied_live',
+      restartRequired: false,
+    });
+
+    const buildBaseConfig = jest.fn(async (source: TCustomConfig) => appConfig(source));
+    const reload = createConfigReloader({
+      loadConfig: async () => candidate,
+      buildBaseConfig,
+      getBaseConfig: async () => appConfig(previous),
+      replaceBaseConfig: async (next) => next,
+      clearOverrideCache: async () => undefined,
+      generation: createConfigGenerationTracker(),
+    });
+    await expect(reload()).resolves.toMatchObject({ scope: 'local' });
+    expect(buildBaseConfig).toHaveBeenCalledWith(candidate);
+  });
+
   it('flags an MCP server edit as restart-required', () => {
     const previous: TCustomConfig = {
       version: '1.2.1',
@@ -446,6 +473,7 @@ describe('config reload', () => {
     jest.useFakeTimers();
     try {
       const store = new MemoryGenerationStore();
+      await store.publish('config:generation', 'stale');
       let resolveRead: ((value: string) => void) | undefined;
       store.get.mockImplementationOnce(
         () =>
@@ -463,9 +491,42 @@ describe('config reload', () => {
       resolveRead?.(JSON.stringify({ generation: 1, digest: 'stale' }));
       await Promise.resolve();
       await Promise.resolve();
-      await expect(tracker.check('current')).resolves.toBeUndefined();
+      await expect(tracker.check('current')).resolves.toMatchObject({ expectedDigest: 'stale' });
       await store.publish('config:generation', 'next');
       await expect(tracker.check('current')).resolves.toMatchObject({ expectedDigest: 'next' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not baseline a new publication after startup when the bootstrap read timed out', async () => {
+    jest.useFakeTimers();
+    try {
+      const store = new MemoryGenerationStore();
+      let resolveBootstrap: ((value: string) => void) | undefined;
+      store.get.mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveBootstrap = resolve;
+          }),
+      );
+      const tracker = createConfigGenerationTracker(store, {
+        pollIntervalMs: 0,
+        bootstrapTimeoutMs: 100,
+      });
+      const startup = tracker.bootstrap();
+      await jest.advanceTimersByTimeAsync(100);
+      await startup;
+      await store.publish('config:generation', 'new-digest');
+      resolveBootstrap?.(JSON.stringify({ generation: 0, digest: 'stale' }));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const changed = await tracker.check('startup-digest');
+      expect(changed?.expectedDigest).toBe('new-digest');
+      expect((await tracker.check('startup-digest'))?.expectedDigest).toBe('new-digest');
+      changed?.acknowledge();
+      await expect(tracker.check('new-digest')).resolves.toBeUndefined();
     } finally {
       jest.useRealTimers();
     }

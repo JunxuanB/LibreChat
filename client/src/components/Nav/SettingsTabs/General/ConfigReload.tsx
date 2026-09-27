@@ -2,10 +2,10 @@ import { useState } from 'react';
 import axios from 'axios';
 import { RefreshCw } from 'lucide-react';
 import { Button, Label } from '@librechat/client';
-import { SystemRoles } from 'librechat-data-provider';
 import type { TConfigReloadError, TConfigReloadResult } from 'librechat-data-provider';
 import { useReloadCustomConfigMutation } from '~/data-provider';
-import { useAuthContext, useLocalize } from '~/hooks';
+import { useGetStartupConfig } from '~/data-provider';
+import { useLocalize } from '~/hooks';
 
 const SCOPE_LABELS = {
   cluster: 'com_ui_config_reload_cluster',
@@ -21,7 +21,7 @@ const SECTION_LABELS = {
 
 export default function ConfigReload() {
   const localize = useLocalize();
-  const { user } = useAuthContext();
+  const { data: startupConfig } = useGetStartupConfig();
   const mutation = useReloadCustomConfigMutation();
   const [report, setReport] = useState<TConfigReloadResult>();
   const [errorKey, setErrorKey] = useState<
@@ -32,7 +32,7 @@ export default function ConfigReload() {
   const [validationErrors, setValidationErrors] =
     useState<TConfigReloadError['validationErrors']>();
 
-  if (user?.role !== SystemRoles.ADMIN) {
+  if (startupConfig?.configReloadAccess !== true) {
     return null;
   }
 

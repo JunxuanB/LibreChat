@@ -61,6 +61,7 @@ export function createDeploymentConfigService({
     getBaseConfig: () => service.getAppConfig({ baseOnly: true }),
     replaceBaseConfig: service.replaceBaseConfig,
     clearOverrideCache: service.clearOverrideCache,
+    withConfigUpdate: service.withConfigUpdate,
     generation,
   });
 

@@ -19,6 +19,7 @@ const {
   isPasskeyEnabled,
   buildPreLoginInterface,
   resolveMaxPasskeysPerUser,
+  resolveConfigManagementAccess,
 } = require('@librechat/api');
 const {
   DEFAULT_MCP_APP_CSP_LIMITS,
@@ -26,7 +27,7 @@ const {
   defaultSocialLogins,
   resolveMCPAppsPolicy,
 } = require('librechat-data-provider');
-const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-schemas');
+const { logger, getTenantId } = require('@librechat/data-schemas');
 const { hasCapability, hasConfigCapability } = require('~/server/middleware/roles/capabilities');
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getRumConfig } = require('~/server/services/Config/rum');
@@ -265,30 +266,13 @@ router.get('/', async function (req, res) {
     const cloudFront = buildCloudFrontStartupConfig();
     const langfuseFanoutEnabled = isLangfuseFanoutEnabled();
     const langfuseConnectionAvailable = isLangfuseConnectionAvailable();
-    let langfuseConnectionAccess = false;
-
-    if (langfuseConnectionAvailable) {
-      try {
-        const userId = req.user.id ?? req.user._id?.toString();
-        if (userId) {
-          const capabilityUser = {
-            id: userId,
-            role: req.user.role ?? '',
-            tenantId: req.user.tenantId,
-            idOnTheSource: req.user.idOnTheSource ?? null,
-          };
-          const hasAdminAccess = await hasCapability(
-            capabilityUser,
-            SystemCapabilities.ACCESS_ADMIN,
-          );
-          if (hasAdminAccess) {
-            langfuseConnectionAccess = await hasConfigCapability(capabilityUser, 'langfuse');
-          }
-        }
-      } catch (err) {
-        logger.warn(`[config] Langfuse capability check failed: ${err.message}`);
-      }
-    }
+    const { adminAccess, langfuseConnectionAccess, configReloadAccess } =
+      await resolveConfigManagementAccess({
+        user: req.user,
+        langfuseConnectionAvailable,
+        hasCapability,
+        hasConfigCapability,
+      });
 
     /** @type {TStartupConfig} */
     const payload = {
@@ -316,6 +300,7 @@ router.get('/', async function (req, res) {
         : 0,
       langfuseFanoutEnabled,
       langfuseConnectionAccess,
+      configReloadAccess,
       insightsEnabled: isEnabled(process.env.ENABLE_INSIGHTS),
       compactionEnabled: appConfig?.summarization?.enabled !== false,
       ...(codeEnvironmentDecisionVersion != null ? { codeEnvironmentDecisionVersion } : {}),
@@ -346,24 +331,11 @@ router.get('/', async function (req, res) {
     }
 
     const adminPanelURL = process.env.ADMIN_PANEL_URL;
-    if (adminPanelURL || !payload.allowAccountDeletion) {
-      try {
-        const userId = req.user.id ?? req.user._id?.toString();
-        if (userId) {
-          const hasAdminAccess = await hasCapability(
-            { id: userId, role: req.user.role ?? '', tenantId: req.user.tenantId },
-            SystemCapabilities.ACCESS_ADMIN,
-          );
-          if (hasAdminAccess && adminPanelURL) {
-            payload.adminPanelURL = adminPanelURL;
-          }
-          if (hasAdminAccess && !payload.allowAccountDeletion) {
-            payload.allowAccountDeletion = true;
-          }
-        }
-      } catch (err) {
-        logger.warn(`[config] ACCESS_ADMIN capability check failed: ${err.message}`);
-      }
+    if (adminAccess && adminPanelURL) {
+      payload.adminPanelURL = adminPanelURL;
+    }
+    if (adminAccess && !payload.allowAccountDeletion) {
+      payload.allowAccountDeletion = true;
     }
 
     return res.status(200).send(payload);

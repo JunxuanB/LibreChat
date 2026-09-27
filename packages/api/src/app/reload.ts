@@ -100,6 +100,7 @@ export interface ConfigReloaderDeps {
   getBaseConfig: () => Promise<AppConfig>;
   replaceBaseConfig: (config: AppConfig) => Promise<AppConfig>;
   clearOverrideCache: () => Promise<void>;
+  withConfigUpdate?: <T>(work: () => Promise<T>) => Promise<T>;
   generation: ConfigGenerationTracker;
 }
 
@@ -127,6 +128,9 @@ function collectChangedPaths(previous: unknown, next: unknown, path: string): st
   const previousObject = previousIsObject ? (previous as Record<string, unknown>) : {};
   const nextObject = nextIsObject ? (next as Record<string, unknown>) : {};
   const keys = new Set([...Object.keys(previousObject), ...Object.keys(nextObject)]);
+  if (keys.size === 0) {
+    return [path];
+  }
   return [...keys]
     .sort()
     .flatMap((key) =>
@@ -270,6 +274,7 @@ export function createConfigGenerationTracker(
   const pollIntervalMs = Math.max(0, options.pollIntervalMs ?? DEFAULT_GENERATION_POLL_MS);
   const now = options.now ?? Date.now;
   let seenGeneration: string | undefined;
+  let bootstrapComplete = false;
   let nextPollAt = 0;
   let checkFlight: Promise<ConfigGenerationChange | undefined> | undefined;
   let readSequence = 0;
@@ -298,7 +303,7 @@ export function createConfigGenerationTracker(
       seenGeneration = generation;
       return undefined;
     }
-    if (seenGeneration == null) {
+    if (seenGeneration == null && (!bootstrapComplete || payload.digest === currentDigest)) {
       seenGeneration = generation;
       return undefined;
     }
@@ -360,6 +365,7 @@ export function createConfigGenerationTracker(
         }),
       ]);
     } finally {
+      bootstrapComplete = true;
       if (timeout) {
         clearTimeout(timeout);
       }
@@ -452,7 +458,7 @@ export function createConfigReloader(deps: ConfigReloaderDeps): () => Promise<Co
     if (reloadFlight) {
       return reloadFlight;
     }
-    const flight = reload();
+    const flight = deps.withConfigUpdate ? deps.withConfigUpdate(reload) : reload();
     reloadFlight = flight;
     try {
       return await flight;
