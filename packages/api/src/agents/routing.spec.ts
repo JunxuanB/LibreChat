@@ -1,6 +1,10 @@
 import { EModelEndpoint } from 'librechat-data-provider';
 import type { ConversationMethods } from '@librechat/data-schemas';
-import { createAgentRoutingMiddleware, resolveAgentRoutingSelection } from './routing';
+import {
+  createAgentRoutingMiddleware,
+  resolveAgentRoutingSelection,
+  shouldLoadAgentRoutingConversation,
+} from './routing';
 
 const identity = { user: 'owner', tenantId: null, conversationId: 'conversation-1' };
 const stored = {
@@ -18,6 +22,26 @@ const read = jest.fn<
 }));
 
 beforeEach(() => read.mockClear());
+
+describe('shouldLoadAgentRoutingConversation', () => {
+  const ordinary = { baseUrl: '/api/agents/chat', path: '/', body: { endpoint: 'agents' } };
+
+  it('loads the owned row once on an ordinary agent turn, including after the rollout is disabled', () => {
+    expect(shouldLoadAgentRoutingConversation(ordinary)).toBe(true);
+  });
+
+  it.each([
+    { baseUrl: '/api/assistants/chat' },
+    { path: '/resume' },
+    { body: { endpoint: 'openAI' } },
+    { body: { endpoint: 'agents', isRegenerate: true } },
+    { body: { endpoint: 'agents', addedConvo: {} } },
+    { _isAgentTrigger: true },
+    { config: { modelSpecs: { enforce: true } } },
+  ])('does not force an unrelated or snapshot-owned turn to reload: %o', (change) => {
+    expect(shouldLoadAgentRoutingConversation({ ...ordinary, ...change })).toBe(false);
+  });
+});
 
 describe('createAgentRoutingMiddleware', () => {
   it('replaces stale request agent before the downstream VIEW permission check', async () => {

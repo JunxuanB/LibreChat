@@ -96,20 +96,55 @@ export async function resolveAgentRoutingSelection(
   return { status: 'selected', agentId: decision.agentId, decision };
 }
 
+interface AgentRoutingTurnBody {
+  endpoint?: string;
+  isRegenerate?: boolean;
+  isContinued?: boolean;
+  compact?: boolean;
+  editedContent?: string | null;
+  overrideParentMessageId?: string | null;
+  overrideConvoId?: string;
+  addedConvo?: object;
+}
+
 type RoutingHttpRequest = ServerRequest & {
-  body: ServerRequest['body'] & {
-    agent_id?: string;
-    isRegenerate?: boolean;
-    isContinued?: boolean;
-    compact?: boolean;
-    editedContent?: string | null;
-    overrideParentMessageId?: string | null;
-    overrideConvoId?: string;
-    addedConvo?: object;
-  };
+  body: ServerRequest['body'] & AgentRoutingTurnBody & { agent_id?: string };
   _isAgentTrigger?: boolean;
   _agentHandoffSelection?: { agentId: string; revision: number };
 };
+
+function isOrdinaryAgentRoutingTurn(
+  body: AgentRoutingTurnBody | undefined,
+  isAgentTrigger: boolean | undefined,
+): boolean {
+  return (
+    body?.endpoint === EModelEndpoint.agents &&
+    isAgentTrigger !== true &&
+    body.isRegenerate !== true &&
+    body.isContinued !== true &&
+    body.compact !== true &&
+    body.editedContent == null &&
+    body.overrideParentMessageId == null &&
+    body.overrideConvoId == null &&
+    body.addedConvo == null
+  );
+}
+
+/** An access marker cannot supply the current route; load the row once and reuse it downstream. */
+export function shouldLoadAgentRoutingConversation(req: {
+  baseUrl?: string;
+  path?: string;
+  body?: AgentRoutingTurnBody;
+  config?: { modelSpecs?: { enforce?: boolean } };
+  _isAgentTrigger?: boolean;
+}): boolean {
+  return (
+    req.baseUrl === '/api/agents/chat' &&
+    req.path !== '/resume' &&
+    req.config?.modelSpecs?.enforce !== true &&
+    isOrdinaryAgentRoutingTurn(req.body, req._isAgentTrigger)
+  );
+}
 
 /** Runs after conversation access and before agent VIEW checks and endpoint option building. */
 export function createAgentRoutingMiddleware(
@@ -123,16 +158,7 @@ export function createAgentRoutingMiddleware(
       next();
       return;
     }
-    const ordinaryUserTurn =
-      body.endpoint === EModelEndpoint.agents &&
-      request._isAgentTrigger !== true &&
-      body.isRegenerate !== true &&
-      body.isContinued !== true &&
-      body.compact !== true &&
-      body.editedContent == null &&
-      body.overrideParentMessageId == null &&
-      body.overrideConvoId == null &&
-      body.addedConvo == null;
+    const ordinaryUserTurn = isOrdinaryAgentRoutingTurn(body, request._isAgentTrigger);
     const loaded = request.resolvedConversation;
     let conversation: ResolvedAgentRoutingConversation | null | undefined;
     if (loaded === null) {
