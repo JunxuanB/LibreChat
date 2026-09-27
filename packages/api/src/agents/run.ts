@@ -2117,6 +2117,8 @@ export async function createRun({
   activityPhase,
   eventActorCheckpointing = false,
   hitlCapable = false,
+  handoffEntryAgentId,
+  handoffMaxHandoffs,
   resolvedToolApprovalHooks,
   toolInputValidationErrors,
   sessionStartSource,
@@ -2254,6 +2256,10 @@ export async function createRun({
    * final response / `[DONE]` with the tool call left unresolved).
    */
   hitlCapable?: boolean;
+  /** Server-admitted entry, never taken from a posted agent id alone. */
+  handoffEntryAgentId?: string;
+  /** Resume uses the original turn's budget, not a changed deployment default. */
+  handoffMaxHandoffs?: number;
   /**
    * Request-scoped approval hooks already resolved by the scheduled-run admission guard.
    * Reuse them here so a context-aware factory is evaluated exactly once for the run.
@@ -2662,7 +2668,27 @@ export async function createRun({
   };
 
   if (agentInputs.length > 1 || ((graphConfig as MultiAgentGraphConfig).edges?.length ?? 0) > 0) {
-    (graphConfig as unknown as MultiAgentGraphConfig).type = 'multi-agent';
+    const multiConfig = graphConfig as MultiAgentGraphConfig;
+    multiConfig.type = 'multi-agent';
+    if (handoffMaxHandoffs != null) {
+      if (!hitlCapable) {
+        throw new Error('Conversation handoff budget requires a resumable agent run');
+      }
+      if (
+        !Number.isSafeInteger(handoffMaxHandoffs) ||
+        handoffMaxHandoffs < 1 ||
+        handoffMaxHandoffs > 100
+      ) {
+        throw new Error('Invalid conversation handoff budget');
+      }
+      multiConfig.maxHandoffs = handoffMaxHandoffs;
+      if (handoffEntryAgentId != null) {
+        if (handoffEntryAgentId !== agentInputs[0]?.agentId) {
+          throw new Error('Handoff entry must be the admitted primary agent');
+        }
+        multiConfig.entryAgentId = handoffEntryAgentId;
+      }
+    }
   } else {
     (graphConfig as StandardGraphConfig).type = 'standard';
   }

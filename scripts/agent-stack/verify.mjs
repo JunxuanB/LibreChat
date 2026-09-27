@@ -84,7 +84,9 @@ export function verifyEvidence(directory, metadata) {
   const stats = JSON.parse(
     fs.readFileSync(path.join(directory, 'browser-results.json'), 'utf8'),
   ).stats;
-  assert.equal(stats.expected, 4, 'Browser selected too few or too many scenarios');
+  const selectedScenarios =
+    metadata.focusedHandoff === true ? 1 : 4 + Number(metadata.persistentHandoffs === true);
+  assert.equal(stats.expected, selectedScenarios, 'Browser selected too few or too many scenarios');
   assert.equal(stats.unexpected, 0, 'Browser failures');
   assert.equal(stats.skipped, 0, 'Browser skipped scenarios');
   assert.equal(stats.flaky, 0, 'Browser retries must not mask failures');

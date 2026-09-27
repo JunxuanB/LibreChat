@@ -7724,12 +7724,13 @@ describe('Conversation Operations', () => {
 });
 
 describe('agent routing decisions', () => {
-  const owner = { user: 'routing-owner', conversationId: 'routing-conversation' };
+  const owner = { user: 'routing-owner', conversationId: 'routing-conversation', tenantId: null };
 
   beforeEach(async () => {
     await Conversation.deleteMany({});
     await Conversation.create({
-      ...owner,
+      user: owner.user,
+      conversationId: owner.conversationId,
       endpoint: EModelEndpoint.agents,
       agent_id: 'agent_a',
       title: 'Routing chat',
@@ -7746,6 +7747,7 @@ describe('agent routing decisions', () => {
       await methods.admitConvoAgentRoutingGeneration({
         ...owner,
         expectedAgentId: 'agent_other',
+        expectedRevision: 0,
         generation: 100,
       }),
     ).toBeNull();
@@ -7754,6 +7756,7 @@ describe('agent routing decisions', () => {
         ...owner,
         user: 'another-user',
         expectedAgentId: 'agent_a',
+        expectedRevision: 0,
         generation: 100,
       }),
     ).toBeNull();
@@ -7761,15 +7764,71 @@ describe('agent routing decisions', () => {
       await methods.admitConvoAgentRoutingGeneration({
         ...owner,
         expectedAgentId: 'agent_a',
+        expectedRevision: 0,
         generation: 100,
       }),
     ).toMatchObject({ agentId: 'agent_a', revision: 1, generation: 100 });
+  });
+
+  it('rejects an old run after a same-agent manual selection advanced the revision', async () => {
+    expect(
+      await methods.selectConvoAgentRoutingDecision({
+        ...owner,
+        agentId: 'agent_a',
+        expectedRevision: 0,
+      }),
+    ).toMatchObject({ agentId: 'agent_a', revision: 1 });
+    expect(
+      await methods.admitConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_a',
+        expectedRevision: 0,
+        generation: 100,
+      }),
+    ).toBeNull();
+    expect(await methods.getConvoAgentRoutingDecision(owner)).toMatchObject({ revision: 1 });
+  });
+
+  it('distinguishes missing, other-endpoint, child, and eligible chats in one scoped read', async () => {
+    expect(await methods.getConvoAgentRoutingLookup(owner)).toMatchObject({
+      kind: 'eligible',
+      decision: { agentId: 'agent_a', revision: 0 },
+    });
+    await Conversation.create({
+      user: owner.user,
+      conversationId: 'another-endpoint',
+      endpoint: EModelEndpoint.openAI,
+    });
+    expect(
+      await methods.getConvoAgentRoutingLookup({ ...owner, conversationId: 'another-endpoint' }),
+    ).toEqual({ kind: 'passthrough' });
+    expect(
+      await methods.getConvoAgentRoutingLookup({ ...owner, conversationId: 'missing' }),
+    ).toBeNull();
+    await Conversation.updateOne(
+      { user: owner.user, conversationId: owner.conversationId },
+      {
+        $set: {
+          subagentThread: {
+            rootConversationId: 'root',
+            parentConversationId: 'root',
+            parentMessageId: 'message',
+            parentToolCallId: 'tool',
+            subagentType: 'child',
+            subagentKind: 'agent',
+            depth: 1,
+          },
+        },
+      },
+    );
+    expect(await methods.getConvoAgentRoutingLookup(owner)).toEqual({ kind: 'passthrough' });
   });
 
   it('commits once after admission and recognizes the exact retried transition', async () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     const input = {
@@ -7796,11 +7855,13 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 1,
       generation: 200,
     });
     expect(
@@ -7817,6 +7878,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     expect(
@@ -7847,6 +7909,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     expect(
@@ -7870,6 +7933,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     await saveConvo(ctx, {
@@ -7900,6 +7964,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     const writes = jest.spyOn(Conversation, 'findOneAndUpdate');
@@ -7922,6 +7987,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     const [manual, automatic] = await Promise.all([
@@ -7961,6 +8027,7 @@ describe('agent routing decisions', () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     await methods.commitConvoAgentHandoff({
@@ -8013,10 +8080,190 @@ describe('agent routing decisions', () => {
     ).toBe('agent_e');
   });
 
+  it('consumes an unused generation at completion without changing agent or revision', async () => {
+    await methods.admitConvoAgentRoutingGeneration({
+      ...owner,
+      expectedAgentId: 'agent_a',
+      expectedRevision: 0,
+      generation: 100,
+    });
+    expect(
+      await methods.finishConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_a',
+        expectedRevision: 1,
+        generation: 100,
+      }),
+    ).toMatchObject({ agentId: 'agent_a', revision: 1 });
+    expect(await methods.getConvoAgentRoutingDecision(owner)).not.toHaveProperty('generation');
+    expect(
+      await methods.commitConvoAgentHandoff({
+        ...owner,
+        expected: { agentId: 'agent_a', revision: 1, generation: 100 },
+        agentId: 'agent_b',
+        transitionId: 'unadmitted',
+      }),
+    ).toMatchObject({ status: 'conflict', decision: { agentId: 'agent_a', revision: 1 } });
+  });
+
+  it('cannot release another generation or a manually changed route', async () => {
+    await methods.admitConvoAgentRoutingGeneration({
+      ...owner,
+      expectedAgentId: 'agent_a',
+      expectedRevision: 0,
+      generation: 100,
+    });
+    expect(
+      await methods.finishConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_a',
+        expectedRevision: 1,
+        generation: 200,
+      }),
+    ).toBeNull();
+    await methods.selectConvoAgentRoutingDecision({
+      ...owner,
+      expectedRevision: 1,
+      agentId: 'agent_c',
+    });
+    expect(
+      await methods.finishConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_a',
+        expectedRevision: 1,
+        generation: 100,
+      }),
+    ).toBeNull();
+    expect(await methods.getConvoAgentRoutingDecision(owner)).toMatchObject({
+      agentId: 'agent_c',
+      revision: 2,
+    });
+  });
+
+  it('consumes a terminal admission so a later switch needs a new generation', async () => {
+    await methods.admitConvoAgentRoutingGeneration({
+      ...owner,
+      expectedAgentId: 'agent_a',
+      expectedRevision: 0,
+      generation: 100,
+    });
+    const input = {
+      ...owner,
+      expected: { agentId: 'agent_a', revision: 1, generation: 100 },
+      agentId: 'agent_b',
+      transitionId: 'handoff-100',
+    };
+    expect((await methods.commitConvoAgentHandoff(input)).status).toBe('committed');
+    expect(await methods.getConvoAgentRoutingDecision(owner)).not.toHaveProperty('generation');
+    expect(
+      await methods.commitConvoAgentHandoff({
+        ...input,
+        expected: { agentId: 'agent_b', revision: 2, generation: 100 },
+        agentId: 'agent_d',
+        transitionId: 'unadmitted',
+      }),
+    ).toMatchObject({ status: 'conflict', decision: { agentId: 'agent_b', revision: 2 } });
+  });
+
+  it('manual selection and preference changes invalidate an old admission', async () => {
+    await methods.admitConvoAgentRoutingGeneration({
+      ...owner,
+      expectedAgentId: 'agent_a',
+      expectedRevision: 0,
+      generation: 100,
+    });
+    expect(
+      await methods.selectConvoAgentRoutingDecision({
+        ...owner,
+        expectedRevision: 1,
+        agentId: 'agent_c',
+      }),
+    ).not.toHaveProperty('generation');
+    expect(
+      await methods.commitConvoAgentHandoff({
+        ...owner,
+        expected: { agentId: 'agent_c', revision: 2, generation: 100 },
+        agentId: 'agent_d',
+        transitionId: 'unadmitted',
+      }),
+    ).toMatchObject({ status: 'conflict', decision: { agentId: 'agent_c' } });
+    expect(
+      await methods.admitConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_c',
+        expectedRevision: 2,
+        generation: 200,
+      }),
+    ).toMatchObject({ generation: 200 });
+    expect(
+      await methods.setConvoAutomaticHandoffs({ ...owner, expectedRevision: 3, enabled: false }),
+    ).not.toHaveProperty('generation');
+    expect(
+      await methods.admitConvoAgentRoutingGeneration({
+        ...owner,
+        expectedAgentId: 'agent_c',
+        expectedRevision: 4,
+        generation: 300,
+      }),
+    ).toBeNull();
+  });
+
+  it('requires an explicit tenant decision, including for un-tenanted rows', async () => {
+    await Conversation.create({
+      user: owner.user,
+      conversationId: 'routing-tenant-chat',
+      tenantId: 'tenant-a',
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent_t',
+    });
+    expect(
+      await methods.getConvoAgentRoutingDecision({
+        ...owner,
+        conversationId: 'routing-tenant-chat',
+        tenantId: null,
+      }),
+    ).toBeNull();
+    expect(
+      await methods.getConvoAgentRoutingDecision({
+        ...owner,
+        conversationId: 'routing-tenant-chat',
+        tenantId: 'tenant-a',
+      }),
+    ).toMatchObject({ agentId: 'agent_t' });
+    expect(
+      await methods.getConvoAgentRoutingDecision({ ...owner, tenantId: 'tenant-a' }),
+    ).toBeNull();
+  });
+
+  it('rejects malformed terminal fence inputs before querying the database', async () => {
+    await methods.admitConvoAgentRoutingGeneration({
+      ...owner,
+      expectedAgentId: 'agent_a',
+      expectedRevision: 0,
+      generation: 100,
+    });
+    for (const expected of [
+      { agentId: '', revision: 1, generation: 100 },
+      { agentId: 'agent_a', revision: 0, generation: 100 },
+      { agentId: 'agent_a', revision: 1.5, generation: 100 },
+      { agentId: 'agent_a', revision: 1, generation: -1 },
+    ]) {
+      await expect(
+        methods.commitConvoAgentHandoff({
+          ...owner,
+          expected,
+          agentId: 'agent_b',
+          transitionId: 'bad',
+        }),
+      ).rejects.toThrow('Invalid terminal agent handoff');
+    }
+  });
+
   it('never recreates a deleted conversation from terminal completion', async () => {
     await methods.admitConvoAgentRoutingGeneration({
       ...owner,
       expectedAgentId: 'agent_a',
+      expectedRevision: 0,
       generation: 100,
     });
     await Conversation.deleteOne(owner);

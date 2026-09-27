@@ -91,7 +91,12 @@ const test = spawnSync(
     'test',
     '--config=e2e/playwright.config.stack.cjs',
     '--grep',
-    'renders and persists every LLM chunk|routes to the chosen agent, renders passthrough|rehydrates a paused approval and its completed result|executes simultaneous handoffs',
+    process.env.E2E_FOCUSED_HANDOFF === 'true'
+      ? 'commits a permanent handoff and routes the next user message to its destination'
+      : 'renders and persists every LLM chunk|routes to the chosen agent, renders passthrough|rehydrates a paused approval and its completed result|executes simultaneous handoffs' +
+        (process.env.E2E_CONVERSATION_HANDOFFS === 'true'
+          ? '|commits a permanent handoff and routes the next user message to its destination'
+          : ''),
   ],
   { stdio: 'inherit', env: process.env, timeout: 170000 },
 );

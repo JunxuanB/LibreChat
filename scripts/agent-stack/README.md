@@ -52,7 +52,7 @@ The four existing browser scenarios cover:
 3. Simultaneous handoffs keep recipient output separate.
 4. Tool approval pauses and completed results rehydrate across reloads.
 
-Zero retries. A passing report must contain exactly four expected tests with no failures, flakes, or skips. The pilot then checks real MongoDB collection counts, request/database trace correlation, agent SDK spans, application logs, and Redis instrumentation plus retained Redis keys in Redis mode. The memory lane creates **no Redis container**, disables both cache/stream Redis settings, and must contain no Redis spans. Redis mode uses the existing E2E startup guard to fail instead of silently falling back to memory.
+Zero retries. By default a passing report must contain exactly four expected tests with no failures, flakes, or skips. For the optional permanent-handoff candidate, rebuild this worktree and run `PILOT_PERSISTENT_HANDOFFS=true node scripts/agent-stack/run.mjs memory` and then the same with `redis`. Both lanes must select exactly five scenarios, including a committed next-turn switch, reload, actual destination reply, Switch back, per-conversation opt-out, and recovery from a deleted destination using the in-chat picker. Compare only two runs with the same revision and scenario selection; do not compare this five-scenario candidate to the historical four-scenario baseline through `compare.mjs`. The pilot then checks real MongoDB collection counts, request/database trace correlation, agent SDK spans, application logs, and Redis instrumentation plus retained Redis keys in Redis mode. The memory lane creates **no Redis container**, disables both cache/stream Redis settings, and must contain no Redis spans. Redis mode uses the existing E2E startup guard to fail instead of silently falling back to memory.
 
 The readiness guard normally imports Redis before app telemetry initializes. Only the pilot's app command preloads the existing telemetry bootstrap, so instrumentation sees that client. Production runtime code is unchanged.
 
@@ -75,7 +75,7 @@ These are **synthetic-data tests**, not a general-purpose data-loss-prevention g
 - Agent SDK and application HTTP spans use **different trace IDs**. They can be grouped by test run and commit, but this is not a single correlated agent-to-database trace. A future correlation change must preserve the SDK's deterministic trace IDs and add explicit links or safe identifiers rather than replacing them.
 - One app replica only. Multi-replica delivery, Redis failover/restart, process death, and shared-backend races are not proven by this pilot.
 - Metrics export is disabled. Span durations/counters are diagnostic observations, not a performance regression threshold. One pass per mode cannot establish a latency improvement.
-- The four scenarios exercise existing turn-scoped handoffs, not the planned permanent-handoff persistence and UI.
+- The four default scenarios exercise existing turn-scoped handoffs. Set `PILOT_PERSISTENT_HANDOFFS=true` to add the fifth opt-in browser scenario; it does not prove multi-replica or failover safety.
 
 ## ClickStack and the future skill
 

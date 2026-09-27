@@ -66,6 +66,38 @@ test('accepts real Mongoose-backed persistence without claiming native MongoDB i
   assert.equal(result.mongooseSpans, 1);
   assert.equal(result.browserPassed, 4);
 });
+test('requires exactly five scenarios when permanent handoffs are selected', (t) => {
+  const dir = fixture(t);
+  const report = path.join(dir, 'browser-results.json');
+  assert.throws(
+    () => verifyEvidence(dir, { ...metadata, persistentHandoffs: true }),
+    /too few or too many/,
+  );
+  fs.writeFileSync(
+    report,
+    JSON.stringify({ stats: { expected: 5, skipped: 0, unexpected: 0, flaky: 0 } }),
+  );
+  assert.equal(verifyEvidence(dir, { ...metadata, persistentHandoffs: true }).browserPassed, 5);
+});
+
+test('focused diagnostic runs require exactly one browser scenario', (t) => {
+  const dir = fixture(t);
+  const report = path.join(dir, 'browser-results.json');
+  assert.throws(
+    () => verifyEvidence(dir, { ...metadata, persistentHandoffs: true, focusedHandoff: true }),
+    /too few or too many/,
+  );
+  fs.writeFileSync(
+    report,
+    JSON.stringify({ stats: { expected: 1, skipped: 0, unexpected: 0, flaky: 0 } }),
+  );
+  assert.equal(
+    verifyEvidence(dir, { ...metadata, persistentHandoffs: true, focusedHandoff: true })
+      .browserPassed,
+    1,
+  );
+});
+
 test('requires actual Redis instrumentation in the Redis lane', (t) => {
   const dir = fixture(t, 'redis');
   assert.equal(verifyEvidence(dir, { ...metadata, mode: 'redis' }).redisSpans, 1);

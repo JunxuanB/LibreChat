@@ -279,8 +279,13 @@ export interface AgentRoutingDecision {
 export interface AgentRoutingIdentity {
   user: string;
   conversationId: string;
-  tenantId?: string;
+  tenantId: string | null;
 }
+
+export type AgentRoutingLookup =
+  | { kind: 'eligible'; decision: AgentRoutingDecision }
+  | { kind: 'passthrough' }
+  | null;
 
 export interface AgentRoutingCommitResult {
   status: 'committed' | 'already_committed' | 'conflict' | 'missing';
@@ -288,11 +293,23 @@ export interface AgentRoutingCommitResult {
 }
 
 export interface ConversationMethods {
+  getConvoAgentRoutingLookup(identity: AgentRoutingIdentity): Promise<AgentRoutingLookup>;
   getConvoAgentRoutingDecision(
     identity: AgentRoutingIdentity,
   ): Promise<AgentRoutingDecision | null>;
   admitConvoAgentRoutingGeneration(
-    identity: AgentRoutingIdentity & { expectedAgentId: string; generation: number },
+    identity: AgentRoutingIdentity & {
+      expectedAgentId: string;
+      expectedRevision: number;
+      generation: number;
+    },
+  ): Promise<AgentRoutingDecision | null>;
+  finishConvoAgentRoutingGeneration(
+    identity: AgentRoutingIdentity & {
+      expectedAgentId: string;
+      expectedRevision: number;
+      generation: number;
+    },
   ): Promise<AgentRoutingDecision | null>;
   commitConvoAgentHandoff(
     identity: AgentRoutingIdentity & {
@@ -2772,12 +2789,15 @@ export function createConversationMethods(
 
   const routingFields =
     'agent_id agentRoutingRevision automaticHandoffsEnabled +agentRoutingGeneration +agentRoutingTransitionId +agentRoutingPreviousAgentId';
-  const routingFilter = ({ user, conversationId, tenantId }: AgentRoutingIdentity) => ({
+  const routingOwnerFilter = ({ user, conversationId, tenantId }: AgentRoutingIdentity) => ({
     user,
     conversationId,
+    tenantId: tenantId == null ? { $exists: false } : tenantId,
+  });
+  const routingFilter = (identity: AgentRoutingIdentity) => ({
+    ...routingOwnerFilter(identity),
     endpoint: EModelEndpoint.agents,
     subagentThread: { $exists: false },
-    ...(tenantId == null ? {} : { tenantId }),
   });
   const routingDecision = (row: IConversation | null): AgentRoutingDecision | null =>
     row == null
@@ -2805,19 +2825,88 @@ export function createConversationMethods(
     return routingDecision(row);
   }
 
+  async function getConvoAgentRoutingLookup(
+    identity: AgentRoutingIdentity,
+  ): Promise<AgentRoutingLookup> {
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await Conversation.findOne(routingOwnerFilter(identity))
+      .select(`endpoint subagentThread ${routingFields}`)
+      .lean<IConversation>();
+    if (row == null) {
+      return null;
+    }
+    if (row.endpoint !== EModelEndpoint.agents || row.subagentThread != null) {
+      return { kind: 'passthrough' };
+    }
+    return { kind: 'eligible', decision: routingDecision(row)! };
+  }
+
   async function admitConvoAgentRoutingGeneration({
     expectedAgentId,
+    expectedRevision,
     generation,
     ...identity
-  }: AgentRoutingIdentity & { expectedAgentId: string; generation: number }) {
-    if (!Number.isSafeInteger(generation) || generation < 0 || !expectedAgentId) {
+  }: AgentRoutingIdentity & {
+    expectedAgentId: string;
+    expectedRevision: number;
+    generation: number;
+  }) {
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation < 0 ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0 ||
+      !expectedAgentId
+    ) {
       throw new Error('Invalid agent routing generation');
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const row = await withoutMeiliIndexing(
       Conversation.findOneAndUpdate(
-        { ...routingFilter(identity), agent_id: expectedAgentId },
+        {
+          ...routingFilter(identity),
+          agent_id: expectedAgentId,
+          agentRoutingRevision: routingRevisionFilter(expectedRevision),
+          automaticHandoffsEnabled: { $ne: false },
+        },
         { $set: { agentRoutingGeneration: generation }, $inc: { agentRoutingRevision: 1 } },
+        { new: true, timestamps: false },
+      ),
+    )
+      .select(routingFields)
+      .lean<IConversation>();
+    return routingDecision(row);
+  }
+
+  async function finishConvoAgentRoutingGeneration({
+    expectedAgentId,
+    expectedRevision,
+    generation,
+    ...identity
+  }: AgentRoutingIdentity & {
+    expectedAgentId: string;
+    expectedRevision: number;
+    generation: number;
+  }): Promise<AgentRoutingDecision | null> {
+    if (
+      !expectedAgentId ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 1 ||
+      !Number.isSafeInteger(generation) ||
+      generation < 0
+    ) {
+      throw new Error('Invalid agent routing terminal admission');
+    }
+    const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const row = await withoutMeiliIndexing(
+      Conversation.findOneAndUpdate(
+        {
+          ...routingFilter(identity),
+          agent_id: expectedAgentId,
+          agentRoutingRevision: expectedRevision,
+          agentRoutingGeneration: generation,
+        },
+        { $unset: { agentRoutingGeneration: 1 } },
         { new: true, timestamps: false },
       ),
     )
@@ -2836,7 +2925,15 @@ export function createConversationMethods(
     agentId: string;
     transitionId: string;
   }): Promise<AgentRoutingCommitResult> {
-    if (!agentId || !transitionId || !Number.isSafeInteger(expected.generation)) {
+    if (
+      !agentId ||
+      !transitionId ||
+      !expected.agentId ||
+      !Number.isSafeInteger(expected.revision) ||
+      expected.revision < 1 ||
+      !Number.isSafeInteger(expected.generation) ||
+      expected.generation < 0
+    ) {
       throw new Error('Invalid terminal agent handoff');
     }
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
@@ -2854,6 +2951,7 @@ export function createConversationMethods(
           agentRoutingTransitionId: transitionId,
           agentRoutingPreviousAgentId: expected.agentId,
         },
+        $unset: { agentRoutingGeneration: 1 },
         $inc: { agentRoutingRevision: 1 },
       },
       { new: true, timestamps: false },
@@ -2886,7 +2984,11 @@ export function createConversationMethods(
       { ...routingFilter(identity), agentRoutingRevision: routingRevisionFilter(expectedRevision) },
       {
         $set: { agent_id: agentId },
-        $unset: { agentRoutingTransitionId: 1, agentRoutingPreviousAgentId: 1 },
+        $unset: {
+          agentRoutingTransitionId: 1,
+          agentRoutingPreviousAgentId: 1,
+          agentRoutingGeneration: 1,
+        },
         $inc: { agentRoutingRevision: 1 },
       },
       { new: true, timestamps: false },
@@ -2917,6 +3019,7 @@ export function createConversationMethods(
         },
         {
           $set: { automaticHandoffsEnabled: enabled },
+          $unset: { agentRoutingGeneration: 1 },
           $inc: { agentRoutingRevision: 1 },
         },
         { new: true, timestamps: false },
@@ -3882,7 +3985,9 @@ export function createConversationMethods(
     setConvoPinned,
     appendConvoMessageReference,
     getConvoAgentRoutingDecision,
+    getConvoAgentRoutingLookup,
     admitConvoAgentRoutingGeneration,
+    finishConvoAgentRoutingGeneration,
     commitConvoAgentHandoff,
     selectConvoAgentRoutingDecision,
     setConvoAutomaticHandoffs,

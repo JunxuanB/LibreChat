@@ -23,6 +23,16 @@ assert.equal(
   'Source changed between cache-mode runs',
 );
 assert.notEqual(memory.runId, redis.runId, 'Runs must have isolated data and identity');
+assert.equal(
+  memory.persistentHandoffs === true,
+  redis.persistentHandoffs === true,
+  'Memory and Redis lanes must exercise the same handoff scenarios',
+);
+assert.equal(
+  memory.focusedHandoff === true,
+  redis.focusedHandoff === true,
+  'Memory and Redis lanes must use the same focused/full browser selection',
+);
 for (const name of ['mongo', 'collector', 'browser'])
   assert.equal(memory.images[name], redis.images[name]);
 const results = {

@@ -10,6 +10,10 @@ import { verifyEvidence } from './verify.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const mode = process.argv[2];
 assert(['memory', 'redis'].includes(mode), 'Usage: node scripts/agent-stack/run.mjs memory|redis');
+assert(
+  process.env.PILOT_FOCUSED_HANDOFF !== 'true' || process.env.PILOT_PERSISTENT_HANDOFFS === 'true',
+  'Focused handoff tests require PILOT_PERSISTENT_HANDOFFS=true',
+);
 process.chdir(root);
 assert(
   !fs.existsSync('.env'),
@@ -40,6 +44,8 @@ const metadata = {
   mongo: 'real-mongod',
   redis: mode === 'redis' ? 'real-redis' : 'absent',
   remoteExport: false,
+  persistentHandoffs: process.env.PILOT_PERSISTENT_HANDOFFS === 'true',
+  focusedHandoff: process.env.PILOT_FOCUSED_HANDOFF === 'true',
   images: {},
 };
 const source = createHash('sha256');
@@ -190,6 +196,8 @@ try {
     HOME: '/tmp',
     E2E_REPLICAS: '1',
     E2E_STREAM_STORE: mode,
+    E2E_CONVERSATION_HANDOFFS: metadata.persistentHandoffs ? 'true' : 'false',
+    E2E_FOCUSED_HANDOFF: metadata.focusedHandoff ? 'true' : 'false',
     E2E_USE_MEMORY_MONGO: 'false',
     MONGO_URI: `mongodb://mongo:27017/LibreChat-pilot-${runId}`,
     REDIS_URI: redis ? 'redis://redis:6379/0' : 'redis://127.0.0.1:6379/0',

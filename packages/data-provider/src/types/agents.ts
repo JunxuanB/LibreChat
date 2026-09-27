@@ -804,6 +804,26 @@ export interface BaseGraphState {
   [key: string]: unknown;
 }
 
+export interface AgentRoutingDecisionView {
+  agentId: string | null;
+  revision: number;
+  automaticHandoffsEnabled: boolean;
+  previousAgentId?: string;
+  transitionId?: string;
+}
+
+export type AgentRoutingAction =
+  | { action: 'select'; agentId: string; expectedRevision: number }
+  | { action: 'switch_back'; transitionId: string; expectedRevision: number }
+  | { action: 'automatic'; enabled: boolean; expectedRevision: number };
+
+export interface CommittedAgentHandoff {
+  fromAgentId: string;
+  toAgentId: string;
+  transitionId: string;
+  revision: number;
+}
+
 export type GraphEdge = {
   /** Agent ID, use a list for multiple sources */
   from: string | string[];

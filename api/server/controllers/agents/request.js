@@ -6,6 +6,7 @@ const {
   ErrorTypes,
   ViolationTypes,
   isEphemeralAgentId,
+  DEFAULT_CONVERSATION_HANDOFF_BUDGET,
 } = require('librechat-data-provider');
 const {
   toPendingSteer,
@@ -52,6 +53,13 @@ const {
   resolvePersistableCodeEnvironmentDecision,
   getFailedTurnTraceFields,
   resolveFailedTurnContent,
+  resolveInitialHandoffRunSnapshot,
+  beginAgentHandoffAdmission,
+  admitAgentHandoffRun,
+  recordAgentHandoffSnapshot,
+  resolveRequestTenantId,
+  createAgentHandoffAuthorization,
+  reconcileTerminalAgentHandoff,
 } = require('@librechat/api');
 const { disposeClient } = require('~/server/cleanup');
 const {
@@ -59,6 +67,7 @@ const {
   cleanupMCPRequestContextForReq,
 } = require('~/server/services/MCPRequestContext');
 const { logViolation } = require('~/cache');
+const { checkPermission } = require('~/server/services/PermissionService');
 const { recordScheduleOutcome, isScheduleLive } = require('~/server/services/Schedules');
 const {
   saveMessage,
@@ -86,6 +95,11 @@ const {
   isAgentTriggerPrincipalActive,
   isSubagentOwnerAdmissible,
   appendConvoMessageReference,
+  admitConvoAgentRoutingGeneration,
+  getConvoAgentRoutingDecision,
+  commitConvoAgentHandoff,
+  finishConvoAgentRoutingGeneration,
+  getAgent,
 } = require('~/models');
 const {
   acquireEventChildGenerationLease,
@@ -1588,6 +1602,27 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
     const endpointIconURL = getEndpointIconURL(req, endpointOption);
     const responseModel = getAgentResponseModel(req, endpointOption);
+    const initialAgentId = endpointOption?.agent_id ?? req.body?.agent_id;
+    const handoffConfig = req.config?.endpoints?.[EModelEndpoint.agents]?.conversationHandoffs;
+    const handoffRun = resolveInitialHandoffRunSnapshot({
+      enabled: handoffConfig?.enabled === true,
+      maxHandoffs: handoffConfig?.maxHandoffs ?? DEFAULT_CONVERSATION_HANDOFF_BUDGET,
+      expectedRevision: req._agentHandoffSelection?.revision ?? 0,
+      endpoint: endpointOption?.endpoint,
+      persistedAgent: typeof initialAgentId === 'string' && !isEphemeralAgentId(initialAgentId),
+      isAutomated: isScheduledFire || req._isAgentTrigger === true || isRecoveredSteerRequest,
+      isTemporary: req.resolvedConversation?.isTemporary ?? req.body?.isTemporary,
+      isRegenerate,
+      isContinued,
+      isEdited:
+        editedContent != null ||
+        overrideParentMessageId != null ||
+        editedResponseMessageId != null ||
+        req.body?.overrideConvoId != null,
+      isCompaction,
+      hasAddedConversation: req.body?.addedConvo != null,
+      modelSpecEnforced: req.config?.modelSpecs?.enforce === true,
+    });
     const preliminaryUserMessage = isCompaction
       ? projectCompactionAnchor({ messageId: parentMessageId, conversationId })
       : getPreliminaryUserMessage(
@@ -1622,6 +1657,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // Persist the originating agent so a HITL resume can refuse to rebuild this
         // paused run on a different agent (see resume.js).
         agent_id: endpointOption.agent_id ?? req.body?.agent_id,
+        ...(handoffRun == null ? {} : { agentHandoffRun: handoffRun }),
         // Persist temporary-chat state so a HITL resume keeps the resumed response
         // non-persisted instead of trusting the resume request to re-send the flag.
         isTemporary:
@@ -1682,6 +1718,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     startupTelemetry?.mark('job_created');
     generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
     jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
+    req._agentHandoffRun = handoffRun;
     req.turnStartedAt = jobCreatedAt;
     providerExecutionId = job.metadata?.providerExecutionId;
 
@@ -2110,6 +2147,32 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
        *  instead leaves the database on "New Chat" for the whole run, and every
        *  reader without the live stream reads that. */
       convoSignal.observeMessageWrite(data.userMessagePromise);
+      req._agentHandoffReady = beginAgentHandoffAdmission(
+        {
+          snapshot: handoffRun,
+          write: data.userMessagePromise,
+          deferred: client?.shouldDeferUserMessagePersistence?.() === true,
+          identity: { user: userId, conversationId, tenantId: resolveRequestTenantId(req) ?? null },
+          agentId: client?.options?.agent?.id,
+          expectedAgentId: initialAgentId,
+          selectedAgentId: req._agentHandoffSelection?.agentId,
+          generation: jobCreatedAt,
+        },
+        {
+          admit: admitConvoAgentRoutingGeneration,
+          read: getConvoAgentRoutingDecision,
+          record: (snapshot) =>
+            recordAgentHandoffSnapshot(snapshot, jobCreatedAt, {
+              write: (value) =>
+                GenerationJobManager.updateMetadata(
+                  streamId,
+                  { agentHandoffRun: value },
+                  jobCreatedAt,
+                ),
+              read: () => GenerationJobManager.getJob(streamId),
+            }),
+        },
+      );
       // conversationId is pre-generated, no need to update from callback
     };
 
@@ -3100,6 +3163,71 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         let terminalPublicationStarted = false;
         try {
+          req._agentHandoffRun = (await req._agentHandoffReady) ?? req._agentHandoffRun;
+          if (
+            handoffRun != null &&
+            req._agentHandoffRun?.admission == null &&
+            handoffConfig?.enabled === true &&
+            terminalClaim.status === 'complete' &&
+            !responseIsUnfinished &&
+            response?.error !== true
+          ) {
+            req._agentHandoffRun = await admitAgentHandoffRun(
+              {
+                identity: {
+                  user: userId,
+                  conversationId,
+                  tenantId: resolveRequestTenantId(req) ?? null,
+                },
+                agentId: initialAgentId,
+                generation: jobCreatedAt,
+                snapshot: handoffRun,
+              },
+              {
+                admit: admitConvoAgentRoutingGeneration,
+                read: getConvoAgentRoutingDecision,
+                record: (snapshot) =>
+                  recordAgentHandoffSnapshot(snapshot, jobCreatedAt, {
+                    write: (value) =>
+                      GenerationJobManager.updateMetadata(
+                        streamId,
+                        { agentHandoffRun: value },
+                        jobCreatedAt,
+                      ),
+                    read: () => GenerationJobManager.getJob(streamId),
+                  }),
+              },
+            );
+          }
+          const terminalHandoff = await reconcileTerminalAgentHandoff(
+            {
+              identity: {
+                user: userId,
+                conversationId,
+                tenantId: resolveRequestTenantId(req) ?? null,
+              },
+              admission: req._agentHandoffRun?.admission ?? null,
+              run: client?.run,
+              enabled: handoffConfig?.enabled === true,
+              completed:
+                terminalClaim.status === 'complete' &&
+                !responseIsUnfinished &&
+                response?.error !== true,
+              responseContent: response?.content,
+              conversation,
+            },
+            {
+              canAccessDestination: createAgentHandoffAuthorization({
+                userId,
+                role: req.user.role,
+                getAgent,
+                checkPermission,
+              }),
+              commit: commitConvoAgentHandoff,
+              finish: finishConvoAgentRoutingGeneration,
+              read: getConvoAgentRoutingDecision,
+            },
+          );
           const pendingSteers = terminalClaim.drainedSteers.map(toPendingSteer);
           const finalEvent = {
             final: true,
@@ -3114,6 +3242,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
               }),
             },
             ...(pendingSteers.length > 0 && { pendingSteers }),
+            ...(terminalHandoff == null ? {} : { handoffSwitch: terminalHandoff }),
           };
 
           logger.debug(

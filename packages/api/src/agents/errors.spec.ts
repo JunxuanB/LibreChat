@@ -1,4 +1,5 @@
 import { ErrorTypes } from 'librechat-data-provider';
+import { HandoffLimitError } from '@librechat/agents';
 import { GraphRecursionError } from '@langchain/langgraph';
 import {
   GENERIC_PROVIDER_ERROR,
@@ -208,6 +209,10 @@ describe('isStepLimitError', () => {
     );
 
     expect(isStepLimitError(thrown)).toBe(true);
+  });
+
+  it('keeps a real handoff budget stop on the incomplete-turn path', () => {
+    expect(isStepLimitError(new HandoffLimitError(10))).toBe(true);
   });
 
   it('matches on `lc_error_code` alone, so a minified class name cannot break detection', () => {
