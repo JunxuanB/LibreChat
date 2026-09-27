@@ -15,6 +15,7 @@ import { useToolCallIntent } from './intent';
 import ToolCallInfo from '../ToolCallInfo';
 import { TOOL_ROW_CLASSES } from '../rows';
 import { cn } from '~/utils';
+import './BackgroundTaskCall.css';
 
 export default function BackgroundTaskCall({
   args,
@@ -65,7 +66,7 @@ export default function BackgroundTaskCall({
     () => (display?.kind === 'list' ? backgroundListGuidanceKeys(display) : []),
     [display],
   );
-  const { showCode, toggleCode, expandStyle, expandRef, phase, hasContent } = useToolCallState({
+  const { showCode, toggleCode, expandRef, phase, hasContent } = useToolCallState({
     initialProgress,
     isSubmitting,
     output,
@@ -125,7 +126,8 @@ export default function BackgroundTaskCall({
         />
       </div>
       <div
-        style={expandStyle}
+        data-background-task-fold
+        data-expanded={showCode}
         onTransitionEnd={handleTransitionEnd}
         data-tool-call-output-id={toolCallId}
       >

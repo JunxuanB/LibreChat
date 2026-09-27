@@ -39,7 +39,6 @@ const {
   isStopConfirmed,
 } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
-const { getAppConfig } = require('~/server/services/Config/app');
 const { CacheKeys, EModelEndpoint } = require('librechat-data-provider');
 const {
   createImportLimiters,
