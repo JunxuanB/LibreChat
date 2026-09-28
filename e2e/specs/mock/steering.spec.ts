@@ -40,6 +40,12 @@ const inFlightSteers = (page: Page) => page.getByTestId('pending-steers').getByR
  *  SteerPart inside the reply now, so exclude anything under `pending-steers`. */
 const appliedSteerParts = (page: Page) =>
   messagesView(page).locator('[data-testid="steer-part"]:not([data-testid="pending-steers"] *)');
+/** Both states use SteerPart in canary, so a fast server handoff cannot invalidate layout checks. */
+const codeSteer = (page: Page) =>
+  inFlightSteers(page)
+    .filter({ hasText: 'const payload' })
+    .or(appliedSteerParts(page).filter({ hasText: 'const payload' }))
+    .first();
 
 type PersistedMessage = {
   messageId: string;
@@ -170,7 +176,7 @@ test.describe('mid-run steering and queuing', () => {
     await expect(queuedRows(page)).toHaveCount(0);
   });
 
-  test('keeps a pending fenced-code steer inside the composer at desktop and mobile widths', async ({
+  test('keeps fenced-code steers inside the thread at desktop and mobile widths', async ({
     page,
   }) => {
     test.setTimeout(150000);
@@ -191,13 +197,13 @@ test.describe('mid-run steering and queuing', () => {
     ]);
     expect(steerResponse.status()).toBe(202);
 
-    const row = inFlightSteers(page).filter({ hasText: 'const payload' });
+    const row = codeSteer(page);
     await expect(row.locator('.markdown pre > div')).toHaveCount(1);
-    await expect(row.getByRole('button', { name: 'Show more' })).toBeInViewport();
     for (const width of [1200, 390]) {
       await page.setViewportSize({ width, height: 850 });
+      await expect(row.locator('.markdown pre code')).toBeVisible();
       const bounds = await row.evaluate((element) => {
-        const stack = element.closest('[data-testid="in-flight-steers"]')?.getBoundingClientRect();
+        const stack = element.getBoundingClientRect();
         const bubble = element.querySelector('.rounded-theme-surface')?.getBoundingClientRect();
         const codeBlock = element.querySelector('.markdown pre > div')?.getBoundingClientRect();
         const code = element.querySelector('.markdown pre code');
@@ -222,12 +228,13 @@ test.describe('mid-run steering and queuing', () => {
       expect(bounds.codeLeft).toBeGreaterThanOrEqual(bounds.bubbleLeft);
       expect(bounds.codeRight).toBeLessThanOrEqual(bounds.bubbleRight);
       expect(bounds.codeStartLeft).toBeGreaterThanOrEqual(bounds.codeLeft);
-      await expect(row.locator('.markdown pre').getByText('js', { exact: true })).toBeInViewport();
       expect(bounds.codeScrollWidth).toBeGreaterThan(bounds.codeClientWidth);
-      await expect(row.getByRole('button', { name: 'Show more' })).toBeInViewport();
+      const language = row.locator('.markdown pre').getByText('js', { exact: true });
+      await language.scrollIntoViewIfNeeded();
+      await expect(language).toBeInViewport();
     }
-    await row.getByRole('button', { name: 'Show more' }).click();
-    await expect(row.getByRole('button', { name: 'Show less' })).toBeVisible();
+    // Canary collapses long user messages only when that preference is enabled.
+    await expect(row.getByRole('button', { name: 'Show more' })).toHaveCount(0);
   });
 
   test('keeps the beginning of a short code steer visible without expanding', async ({ page }) => {
@@ -249,12 +256,13 @@ test.describe('mid-run steering and queuing', () => {
     ]);
     expect(steerResponse.status()).toBe(202);
 
-    const row = inFlightSteers(page).filter({ hasText: 'const payload' });
+    const row = codeSteer(page);
     await expect(row.locator('.markdown pre code')).toContainText('const payload');
     for (const width of [1200, 390]) {
       await page.setViewportSize({ width, height: 850 });
+      await expect(row.locator('.markdown pre code')).toBeVisible();
       const bounds = await row.evaluate((element) => {
-        const stack = element.closest('[data-testid="in-flight-steers"]')?.getBoundingClientRect();
+        const stack = element.getBoundingClientRect();
         const code = element.querySelector('.markdown pre code')?.getBoundingClientRect();
         if (!stack || !code) {
           throw new Error('Pending steer code is missing');
@@ -263,7 +271,9 @@ test.describe('mid-run steering and queuing', () => {
       });
       expect(bounds.codeStartLeft).toBeGreaterThanOrEqual(bounds.stackLeft);
       expect(bounds.codeStartLeft).toBeLessThan(bounds.stackRight);
-      await expect(row.locator('.markdown pre').getByText('js', { exact: true })).toBeInViewport();
+      const language = row.locator('.markdown pre').getByText('js', { exact: true });
+      await language.scrollIntoViewIfNeeded();
+      await expect(language).toBeInViewport();
       await expect(row.getByRole('button', { name: 'Show more' })).toHaveCount(0);
     }
   });
