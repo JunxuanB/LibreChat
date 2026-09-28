@@ -31,6 +31,35 @@ function resolvesToSameOrigin(url: string): boolean {
   }
 }
 
+/** Session storage is blocked outright in embedded and private contexts, where it throws on
+ * access rather than returning null. The destination is a convenience, never a credential, so a
+ * blocked store must cost the deep link, never the sign-in that carries it: every access
+ * degrades to "no destination stored". Every other session-storage consumer in the client is
+ * already guarded this way; the redirect flow was the one reaching for the store bare-handed. */
+export const readStoredRedirect = (): string | null => {
+  try {
+    return sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+};
+
+export const dropStoredRedirect = (): void => {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // A blocked store holds nothing to drop.
+  }
+};
+
+const writeStoredRedirect = (value: string): void => {
+  try {
+    sessionStorage.setItem(SESSION_KEY, value);
+  } catch {
+    // The destination cannot cross a document swap in this context; the sign-in continues.
+  }
+};
+
 /** Validates that a redirect target is a safe relative path (not an absolute or protocol-relative URL) */
 export function isSafeRedirect(url: string): boolean {
   if (hasControlChar(url)) {
@@ -46,18 +75,21 @@ export function isSafeRedirect(url: string): boolean {
   return resolvesToSameOrigin(url);
 }
 
+/** Whether a destination is waiting to be consumed; storage that refuses to answer counts as none. */
+export const hasStoredRedirect = (): boolean => readStoredRedirect() != null;
+
 /**
  * Resolves the post-login redirect from URL params and sessionStorage,
  * cleans up both sources, and returns the validated target (or null).
  */
 export function getPostLoginRedirect(searchParams: URLSearchParams): string | null {
   const urlRedirect = searchParams.get(REDIRECT_PARAM);
-  const storedRedirect = sessionStorage.getItem(SESSION_KEY);
+  const storedRedirect = readStoredRedirect();
 
   const target = urlRedirect ?? storedRedirect;
 
   if (storedRedirect) {
-    sessionStorage.removeItem(SESSION_KEY);
+    dropStoredRedirect();
   }
 
   if (target == null || !isSafeRedirect(target)) {
@@ -91,6 +123,6 @@ export function withBasePath(path: string): string {
 
 export function persistRedirectToSession(value: string): void {
   if (isSafeRedirect(value)) {
-    sessionStorage.setItem(SESSION_KEY, value);
+    writeStoredRedirect(value);
   }
 }

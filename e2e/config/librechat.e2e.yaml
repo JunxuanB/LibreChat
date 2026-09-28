@@ -32,6 +32,15 @@ memory:
   personalize: true
   tokenLimit: 10000
 
+# Budgets that exist only here, not in the environment, so
+# yaml-rate-limits.spec.ts proves librechat.yaml reaches the limiters that route
+# modules build while loading. No other spec calls the speech routes.
+rateLimits:
+  stt:
+    userMax: 2
+  tts:
+    userMax: 2
+
 # __E2E_MCP_APP_SANDBOX__
 
 mcpSettings:
