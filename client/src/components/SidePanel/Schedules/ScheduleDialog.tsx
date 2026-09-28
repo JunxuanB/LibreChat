@@ -753,10 +753,14 @@ export default function ScheduleDialog({
               </p>
             </div>
 
-            {workIqServer != null && (
+            {(workIqServer != null || schedule?.workIqOAuthServer != null) && (
               <label className="flex items-start gap-2 text-sm text-text-primary">
                 <input type="checkbox" className="mt-1" {...register('workIqOAuthServer')} />
-                <span>{localize('com_ui_schedule_workiq_consent', { server: workIqServer })}</span>
+                <span>
+                  {localize('com_ui_schedule_workiq_consent', {
+                    server: workIqServer ?? schedule?.workIqOAuthServer ?? '',
+                  })}
+                </span>
               </label>
             )}
 

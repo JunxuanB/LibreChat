@@ -1665,6 +1665,14 @@ it('requires per-schedule consent and a renewable grant for the configured Work 
   ).rejects.toMatchObject({
     code: 'mcp_unavailable',
   });
+  // Removing the operator mapping must not silently revert a new schedule to
+  // the old unconsented direct-OAuth behavior.
+  await expect(
+    check('agent', principal, { scheduleId: 'schedule', workIqOAuthServer: null }),
+  ).rejects.toMatchObject({ code: 'mcp_configuration_missing' });
+  await expect(
+    check('agent', principal, { scheduleId: 'schedule', workIqOAuthServer: 'WorkIQ' }),
+  ).rejects.toMatchObject({ code: 'mcp_configuration_missing' });
   // A pre-upgrade schedule without this field keeps its current direct OAuth behavior.
   await expect(check('agent', principal, options)).resolves.toEqual([
     { server: 'WorkIQ', status: 'ready' },

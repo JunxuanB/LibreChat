@@ -45,10 +45,10 @@ import {
   findShadowedServerNames,
   createDeadlineAbortSignal,
 } from '../mcp/utils';
+import { MCPOAuthHandler, MCPTokenStorage, MCPTokenStorageUnavailableError } from '../mcp/oauth';
 import { MCPConfigInitializationCanceledError } from '../mcp/registry/MCPServersRegistry';
 import { createMCPRequestContext, cleanupMCPRequestContext } from '../mcp/request';
 import { isScheduleFireRequest, readScheduleFireContext } from './trigger';
-import { MCPOAuthHandler, MCPTokenStorage, MCPTokenStorageUnavailableError } from '../mcp/oauth';
 import { getAppConfigOptionsFromUser } from '../app/service';
 import { createConcurrencyLimiter } from '../utils/promise';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
@@ -804,9 +804,15 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
                 ) {
                   return outcomesForOwners(server, 'mcp_configuration_missing');
                 }
-                if (server === options.workIqServer && options.workIqOAuthServer !== undefined) {
+                if (
+                  options.workIqOAuthServer !== undefined &&
+                  (server === options.workIqServer ||
+                    server === options.workIqOAuthServer ||
+                    serverConfig.url === WORK_IQ_MCP_URL)
+                ) {
                   if (
                     options.workIqOAuthServer !== server ||
+                    options.workIqServer !== server ||
                     !rawConfig[server] ||
                     !isScheduledWorkIqOAuthConfig(serverConfig)
                   ) {
