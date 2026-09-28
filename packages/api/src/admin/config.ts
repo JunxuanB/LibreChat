@@ -1,4 +1,4 @@
-import { logger, BASE_CONFIG_PRINCIPAL_ID } from '@librechat/data-schemas';
+import { logger, BASE_CONFIG_PRINCIPAL_ID, SystemCapabilities } from '@librechat/data-schemas';
 import {
   BASE_PRINCIPAL_CONFIG_SECTIONS,
   BASE_ONLY_CONFIG_SECTIONS,
@@ -16,6 +16,7 @@ import type { TCustomConfig } from 'librechat-data-provider';
 import type { Types, ClientSession } from 'mongoose';
 import type { Response } from 'express';
 import type { CapabilityUser } from '~/middleware/capabilities';
+import type { ConfigReloadResult } from '~/app/reload';
 import type { ServerRequest } from '~/types/http';
 import {
   encryptConfigSecretFields,
@@ -29,6 +30,8 @@ import {
   preserveConfigSecrets,
   redactConfigSecrets,
 } from './secrets';
+import { ConfigGenerationConflictError } from '~/app/reload';
+import { ConfigReloadError } from '~/app/loader';
 
 const UNSAFE_SEGMENTS = /(?:^|\.)(__[\w]*|constructor|prototype)(?:\.|$)/;
 const MAX_PATCH_ENTRIES = 100;
@@ -230,7 +233,11 @@ export interface AdminConfigDeps {
     user: CapabilityUser,
     sections: ConfigSection[],
   ) => Promise<{ broad: boolean; sections: Set<string> }>;
-  hasCapability?: (user: CapabilityUser, capability: SystemCapability) => Promise<boolean>;
+  hasCapability?: (
+    user: CapabilityUser,
+    capability: SystemCapability,
+    options?: { platformOnly?: boolean },
+  ) => Promise<boolean>;
   getAppConfig?: (options?: {
     role?: string;
     userId?: string;
@@ -239,6 +246,8 @@ export interface AdminConfigDeps {
   }) => Promise<AppConfig>;
   /** Invalidate all config-related caches after a mutation. */
   invalidateConfigCaches?: (tenantId?: string) => Promise<void>;
+  /** Validate, install, and publish a new deployment config generation. */
+  reloadCustomConfig?: () => Promise<ConfigReloadResult>;
 }
 
 // ── Validation helpers ───────────────────────────────────────────────
@@ -429,6 +438,7 @@ function preservePatchedConfigSecretFields(
 export function createAdminConfigHandlers(deps: AdminConfigDeps): {
   listConfigs: (req: ServerRequest, res: Response) => Promise<Response>;
   getBaseConfig: (req: ServerRequest, res: Response) => Promise<Response>;
+  reloadConfig: (req: ServerRequest, res: Response) => Promise<Response>;
   getConfig: (req: ServerRequest, res: Response) => Promise<Response>;
   upsertConfigOverrides: (req: ServerRequest, res: Response) => Promise<Response>;
   patchConfigField: (req: ServerRequest, res: Response) => Promise<Response>;
@@ -460,6 +470,7 @@ export function createAdminConfigHandlers(deps: AdminConfigDeps): {
     hasCapability = async () => false,
     getAppConfig,
     invalidateConfigCaches,
+    reloadCustomConfig,
   } = deps;
 
   /**
@@ -521,6 +532,39 @@ export function createAdminConfigHandlers(deps: AdminConfigDeps): {
     } catch (error) {
       logger.error('[adminConfig] getBaseConfig error:', error);
       return res.status(500).json({ error: 'Failed to get base config' });
+    }
+  }
+
+  async function reloadConfig(req: ServerRequest, res: Response): Promise<Response> {
+    const user = getCapabilityUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    try {
+      if (!(await hasCapability(user, SystemCapabilities.MANAGE_CONFIGS, { platformOnly: true }))) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+      if (!reloadCustomConfig) {
+        return res.status(501).json({ error: 'Config reload is not configured' });
+      }
+      return res.status(200).json(await reloadCustomConfig());
+    } catch (error) {
+      if (error instanceof ConfigGenerationConflictError) {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof ConfigReloadError) {
+        const validationErrors = error.validationErrors ?? [];
+        return res.status(400).json({
+          error:
+            validationErrors.length > 0
+              ? 'Custom config validation failed'
+              : 'Custom config source could not be loaded',
+          validationErrors,
+        });
+      }
+      logger.error('[adminConfig] reloadConfig error:', error);
+      return res.status(500).json({ error: 'Failed to reload config' });
     }
   }
 
@@ -1260,6 +1304,7 @@ export function createAdminConfigHandlers(deps: AdminConfigDeps): {
   return {
     listConfigs,
     getBaseConfig,
+    reloadConfig,
     getConfig,
     upsertConfigOverrides,
     patchConfigField,

@@ -34,9 +34,9 @@ import {
   CodeHighlightThrottleContext,
   normalizeCodeHighlightThrottleMs,
 } from '~/components/Chat/Messages/Content/Parts/useLazyHighlight';
+import { useUserTermsQuery, useGetStartupConfig, useModelCatalogRefresh } from '~/data-provider';
 import KeyboardShortcutsDialog from '~/components/Nav/KeyboardShortcutsDialog';
 import KeyboardDeleteDialog from '~/components/Nav/KeyboardDeleteDialog';
-import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
 import { MobileDrawerScrim } from '~/components/UnifiedSidebar/mobile';
 import useKeyboardShortcuts from '~/hooks/useKeyboardShortcuts';
 import useDrawerDismiss from '~/hooks/Nav/useDrawerDismiss';
@@ -123,6 +123,7 @@ export default function Root() {
   });
 
   useHealthCheck(isAuthenticated);
+  useModelCatalogRefresh(isAuthenticated, user?.id);
 
   const assistantsMap = useAssistantsMap({ isAuthenticated });
   const agentsMap = useAgentsMap({ isAuthenticated });

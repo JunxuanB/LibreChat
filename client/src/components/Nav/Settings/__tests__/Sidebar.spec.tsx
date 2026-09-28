@@ -24,6 +24,7 @@ const ctx: SettingsContextValue = {
   engineTTS: 'browser',
   langfuseConnectionAccess: false,
   adminPanelURL: '',
+  configReloadAccess: false,
   replyTabBadgeAllowed: true,
   replyNotificationsAllowed: true,
   replyNotificationSoundAllowed: true,

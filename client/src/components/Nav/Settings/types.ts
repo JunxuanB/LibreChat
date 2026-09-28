@@ -57,6 +57,7 @@ export interface SettingsContextValue {
   engineTTS: string;
   langfuseConnectionAccess: boolean;
   adminPanelURL: string;
+  configReloadAccess: boolean;
   replyTabBadgeAllowed: boolean;
   replyNotificationsAllowed: boolean;
   replyNotificationSoundAllowed: boolean;

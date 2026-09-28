@@ -21,6 +21,7 @@ const {
   resolveCodeEnvironmentMoveCapabilities,
   resolveCodeEnvironmentTransitionVersion,
   loadConversationListLimits,
+  createConfigRevisionHandler,
 } = require('@librechat/api');
 const {
   DEFAULT_MCP_APP_CSP_LIMITS,
@@ -32,7 +33,7 @@ const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-sch
 const { hasCapability, hasConfigCapability } = require('~/server/middleware/roles/capabilities');
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getRumConfig } = require('~/server/services/Config/rum');
-const { getAppConfig } = require('~/server/services/Config/app');
+const { getAppConfig, getConfigRefreshStatus } = require('~/server/services/Config/app');
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -219,6 +220,8 @@ function buildCloudFrontStartupConfig() {
     },
   };
 }
+
+router.get('/revision', createConfigRevisionHandler(getConfigRefreshStatus));
 
 router.get('/', async function (req, res) {
   try {
