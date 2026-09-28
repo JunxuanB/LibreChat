@@ -1,8 +1,9 @@
 import { Keyv } from 'keyv';
 import jwt from 'jsonwebtoken';
-import { Permissions, PermissionTypes } from 'librechat-data-provider';
+import { AgentCapabilities, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type { AppConfig, IUser } from '@librechat/data-schemas';
 import type { Response } from 'express';
+import type { MCPOAuthTokens } from '../mcp/oauth/types';
 import type { ParsedServerConfig } from '../mcp/types';
 import type { ServerRequest } from '../types/http';
 import {
@@ -12,7 +13,9 @@ import {
 } from '../mcp/__tests__/helpers/oauthTestServer';
 import { createScheduledOboGrantService, createLazyScheduledOboGrantService } from './obo';
 import { OboTokenResolutionError, resolveOboToken } from '../mcp/oauth/obo';
+import { createScheduleMCPPreflight, ScheduleMCPError } from './mcp';
 import { MCPConnectionFactory } from '../mcp/MCPConnectionFactory';
+import { MCPTokenStorage } from '../mcp/oauth/tokens';
 import { FlowStateManager } from '../flow/manager';
 
 jest.mock('@librechat/data-schemas', () => ({
@@ -46,9 +49,16 @@ const context = {
 };
 const target = { mcpServer: 'Files', scopes: config.obo!.scopes };
 
-function harness() {
+function harness(
+  tokenStorage: Parameters<
+    typeof createScheduledOboGrantService
+  >[0]['tokenStorage'] = MCPTokenStorage,
+) {
   const tokenStore = new InMemoryTokenStore();
-  const flow = new FlowStateManager(new MockKeyv() as unknown as Keyv, { ttl: 30000, ci: true });
+  const flow = new FlowStateManager<MCPOAuthTokens | null>(new MockKeyv() as unknown as Keyv, {
+    ttl: 30000,
+    ci: true,
+  });
   const row = {
     id: 'sched-1',
     user: 'owner',
@@ -79,10 +89,12 @@ function harness() {
   const inspect = jest.fn(async (_agent, _user, _id, _server, onSelected) => onSelected(server));
   const pauseSchedule = jest.fn(async () => {
     row.enabled = false;
+    row.configRevision += 1;
     return row;
   });
   const service = createScheduledOboGrantService({
     tokens: tokenStore,
+    tokenStorage,
     flowManager: flow,
     getUser: async () => user,
     getSchedule: async () => row,
@@ -442,7 +454,7 @@ describe('separately authorized scheduled OBO grants', () => {
     const request = {
       user,
       params: { id: 'sched-1', server: 'Files' },
-      body: { expectedScopes: 'api://resource/Read' },
+      body: { expectedScopes: 'api://resource/Read', expectedUrl: config.url },
       session: {
         openidTokens: {
           appUserId: 'owner',
@@ -489,7 +501,7 @@ describe('separately authorized scheduled OBO grants', () => {
     const request = {
       user,
       params: { id: context.scheduleId, server: target.mcpServer },
-      body: { expectedScopes: target.scopes },
+      body: { expectedScopes: target.scopes, expectedUrl: config.url },
       session: {
         openidTokens: {
           appUserId: user.id,
@@ -508,6 +520,192 @@ describe('separately authorized scheduled OBO grants', () => {
       expect.objectContaining({ assertion: token }),
     );
   });
+
+  it('reads an enrolled grant for activation preflight but never for a disabled scheduled run', async () => {
+    const { service, row, setAllowed, requestGrant } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'one-time-assertion');
+    const forRun = (await service.resolve(user, { context, target }))!;
+    await expect(forRun()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+
+    const forActivation = (await service.resolve(user, {
+      context,
+      target,
+      activationPreflight: true,
+    }))!;
+    await expect(forActivation()).resolves.toMatchObject({ access_token: 'first' });
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+    setAllowed([]);
+    await expect(forActivation()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    setAllowed(['Files']);
+    row.enabled = true;
+    await expect(forRun()).resolves.toMatchObject({ access_token: 'first' });
+    row.enabled = false;
+    await expect(forRun()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
+
+  it('fences a paused grant revocation against activation that already passed preflight', async () => {
+    const { service, row, pauseSchedule, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    const revisionAtPreflight = row.configRevision;
+    const provider = (await service.resolve(user, {
+      context,
+      target,
+      activationPreflight: true,
+    }))!;
+    await expect(provider()).resolves.toMatchObject({ access_token: 'first' });
+    await service.revoke(user.id, row.id, 'Files');
+    expect(pauseSchedule).toHaveBeenCalledWith(row.id, user.id, revisionAtPreflight);
+    expect(row.configRevision).toBe(revisionAtPreflight + 1);
+    expect(tokenStore.getAll()).toEqual([]);
+    await expect(provider()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
+
+  it('rejects a changed endpoint after preview before exchanging any OBO assertion', async () => {
+    const { service, requestGrant, tokenStore, setServer } = harness();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      user,
+      params: { id: context.scheduleId, server: 'Files' },
+      body: { expectedScopes: target.scopes, expectedUrl: config.url },
+      session: {
+        openidTokens: {
+          appUserId: user.id,
+          openidSubject: user.openidId,
+          openidIssuer: user.openidIssuer,
+          tenantId: user.tenantId,
+          accessToken: 'one-time-access',
+          accessTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+        },
+      },
+    } as unknown as ServerRequest;
+    await service.describeFromRequest(request, response);
+    expect(response.json).toHaveBeenCalledWith({
+      server: 'Files',
+      scopes: target.scopes,
+      url: config.url,
+    });
+    setServer({ ...config, url: 'https://other-mcp.test/tools' });
+    await service.enrollFromRequest(request, response);
+    expect(response.status).toHaveBeenCalledWith(400);
+    expect(requestGrant).not.toHaveBeenCalled();
+    expect(tokenStore.getAll()).toEqual([]);
+
+    setServer(config);
+    Object.assign(request.body, { expectedUrl: undefined });
+    await service.enrollFromRequest(request, response);
+    expect(response.status).toHaveBeenLastCalledWith(400);
+    expect(requestGrant).not.toHaveBeenCalled();
+  });
+
+  it('rejects endpoint changes during the exchange before storing the grant', async () => {
+    const { service, setServer, tokenStore, requestGrant } = harness();
+    requestGrant.mockImplementationOnce(async () => {
+      setServer({ ...config, url: 'https://moved-mcp.test/tools' });
+      return { access_token: 'received', refresh_token: 'grant', expires_in: 3600 };
+    });
+    await expect(
+      service.enroll(user.id, context.scheduleId, 'Files', 'assertion', target.scopes, config.url!),
+    ).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('uses the injected coordinator for storage and credential lookup', async () => {
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    coordinator.storeTokens = jest.fn((...args) => MCPTokenStorage.storeTokens(...args));
+    coordinator.getClientInfoAndMetadata = jest.fn(async () => null);
+    const { service, row } = harness(coordinator);
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    expect(coordinator.storeTokens).toHaveBeenCalledTimes(1);
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    expect(coordinator.getClientInfoAndMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a real MCP SDK server to validate an enrolled paused schedule on activation', async () => {
+    const seen: string[] = [];
+    const mcp = await createOAuthMCPServer({
+      onResourceRequest: (req) => {
+        if (req.method === 'POST' && req.headers.authorization)
+          seen.push(req.headers.authorization);
+      },
+    });
+    const { service, row, tokenStore, flow, requestGrant, setServer } = harness();
+    const liveServer = { ...config, url: mcp.url };
+    setServer(liveServer);
+    requestGrant.mockImplementation(async () => {
+      mcp.issuedTokens.add('enrolled');
+      mcp.tokenIssueTimes.set('enrolled', Date.now());
+      return { access_token: 'enrolled', refresh_token: 'offline-grant', expires_in: 3600 };
+    });
+    try {
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      const preflight = createScheduleMCPPreflight({
+        resolveAgentGraphAccess: async () => ({}) as never,
+        getAgentGraphNodes: async (ids) =>
+          ids.map((id) => ({
+            id,
+            provider: 'openAI',
+            model: 'gpt-test',
+            tools: ['echo_mcp_Files'],
+          })),
+        getModelsConfig: async () => ({ openAI: ['gpt-test'] }),
+        getRoleByName: async () =>
+          ({
+            permissions: {
+              [PermissionTypes.MCP_SERVERS]: { [Permissions.USE]: true },
+              [PermissionTypes.SCHEDULES]: { [Permissions.USE]: true },
+              [PermissionTypes.AGENTS]: { [Permissions.USE]: true },
+            },
+          }) as never,
+        getUser: async () => user,
+        getAppConfig: async () =>
+          ({
+            endpoints: { agents: { capabilities: [AgentCapabilities.tools] } },
+            mcpConfig: { Files: liveServer },
+            interfaceConfig: { schedules: { use: true, oboServers: ['Files'] } },
+          }) as Partial<AppConfig> as AppConfig,
+        ensureConfigServers: async () => ({ Files: liveServer }),
+        getServerConfigs: async () => ({ Files: liveServer }),
+        findPluginAuthsByKeys: async () => [],
+        resolveUpstreamTokenProvider: service.resolve,
+        connect: async (options) => {
+          const connection = await MCPConnectionFactory.create(
+            { serverName: options.serverName, serverConfig: options.serverConfig! },
+            {
+              user,
+              useOAuth: true,
+              flowManager: flow,
+              tokenMethods: tokenStore,
+              upstreamTokenProviderResolver: options.upstreamTokenProviderResolver,
+              oboTokenResolver: async () => {
+                throw new Error('The downstream grant must never be exchanged as an assertion');
+              },
+              oboTrustChecker: async () => true,
+            },
+          );
+          options.requestScopedConnections?.connections.set(options.serverName, connection);
+          return connection;
+        },
+      });
+      const options = { scheduleId: row.id, concurrency: 3 };
+      await expect(
+        preflight('root', user, { ...options, activationPreflight: true }),
+      ).resolves.toEqual([{ server: 'Files', status: 'ready' }]);
+      expect(seen).toContain('Bearer enrolled');
+      await expect(preflight('root', user, options)).rejects.toBeInstanceOf(ScheduleMCPError);
+      row.enabled = true;
+      await expect(preflight('root', user, options)).resolves.toEqual([
+        { server: 'Files', status: 'ready' },
+      ]);
+    } finally {
+      await mcp.close();
+    }
+  }, 30_000);
 
   it('calls a real MCP SDK server before and after offline OBO access-token renewal', async () => {
     const sentBearers: string[] = [];

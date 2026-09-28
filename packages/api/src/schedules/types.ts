@@ -335,6 +335,8 @@ export type ScheduleMCPPreflight = (
     signal?: AbortSignal;
     deadlineMs?: number;
     scheduleId?: string;
+    /** Only a disabled row being explicitly activated may probe its already-enrolled grant. */
+    activationPreflight?: boolean;
     inspectOboTarget?: {
       serverName: string;
       onSelected: (config: import('../mcp/types').ParsedServerConfig) => Promise<void>;

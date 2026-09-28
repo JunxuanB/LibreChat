@@ -395,10 +395,12 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     signal: AbortSignal,
     limits: ScheduleLimits,
     scheduleId: string,
+    activationPreflight = false,
   ): Promise<boolean> {
     try {
       await deps.preflightMCP(agentId, requestUser(req), {
         scheduleId,
+        ...(activationPreflight && { activationPreflight: true }),
         signal,
         concurrency: limits.mcpPreflightConcurrency,
         deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
@@ -996,6 +998,7 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
         mcpSignal,
         limits,
         existing.id,
+        existing.enabled === false && parsed.data.enabled === true,
       ))
     )
       return;

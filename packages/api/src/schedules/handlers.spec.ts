@@ -1229,6 +1229,65 @@ describe('updateSchedule cadence timezone resolution', () => {
   });
 });
 
+describe('scheduled OBO activation preflight', () => {
+  const patch = (body: { enabled?: boolean; name?: string }) =>
+    ({
+      params: { id: 'sched-1' },
+      body,
+      user: { id: 'user-1', tenantId: 't1', role: 'USER' },
+    }) as unknown as ServerRequest;
+
+  it('probes a disabled grant before enabling but does not allow disabled run access', async () => {
+    const paused = fullScheduleDoc({ enabled: false, file_ids: [] });
+    const preflightMCP = jest.fn<
+      ReturnType<SchedulesHandlersDeps['preflightMCP']>,
+      Parameters<SchedulesHandlersDeps['preflightMCP']>
+    >(async (_agent, _owner, options) => {
+      expect(paused.enabled).toBe(false);
+      expect(options).toMatchObject({ scheduleId: paused.id, activationPreflight: true });
+      return [];
+    });
+    const deps = makeCreateDeps({
+      preflightMCP,
+      isUserDeleting: async () => false,
+    });
+    jest.mocked(deps.methods.getScheduleById).mockResolvedValue(paused);
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).updateSchedule(patch({ enabled: true }), res);
+    expect(preflightMCP).toHaveBeenCalledTimes(1);
+    expect(captured.status ?? 200).toBe(200);
+    expect(deps.methods.updateScheduleById).toHaveBeenCalledWith(
+      paused.id,
+      'user-1',
+      expect.objectContaining({ enabled: true }),
+      expect.anything(),
+      expect.objectContaining({ expectedConfigRevision: paused.configRevision }),
+    );
+  });
+
+  it('does not grant activation preflight access for an ordinary enabled edit', async () => {
+    const preflightMCP = jest.fn<
+      ReturnType<SchedulesHandlersDeps['preflightMCP']>,
+      Parameters<SchedulesHandlersDeps['preflightMCP']>
+    >(async () => []);
+    const deps = makeCreateDeps({ preflightMCP, isUserDeleting: async () => false });
+    jest.mocked(deps.methods.getScheduleById).mockResolvedValue(fullScheduleDoc({ file_ids: [] }));
+    await createSchedulesHandlers(deps).updateSchedule(patch({ name: 'renamed' }), makeRes().res);
+    expect(preflightMCP).toHaveBeenCalledTimes(1);
+    expect(preflightMCP.mock.calls[0][2]).not.toHaveProperty('activationPreflight');
+  });
+
+  it('does not probe a disabled schedule whose edit leaves it paused', async () => {
+    const preflightMCP = jest.fn(async () => []);
+    const deps = makeCreateDeps({ preflightMCP, isUserDeleting: async () => false });
+    jest
+      .mocked(deps.methods.getScheduleById)
+      .mockResolvedValue(fullScheduleDoc({ enabled: false, file_ids: [] }));
+    await createSchedulesHandlers(deps).updateSchedule(patch({ name: 'renamed' }), makeRes().res);
+    expect(preflightMCP).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateSchedule re-enable attachment revalidation', () => {
   const disabledWithFiles = () =>
     ({

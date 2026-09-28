@@ -92,15 +92,18 @@ export const useRunScheduleNowMutation = (
 };
 
 export type ScheduledOboParams = { id: string; server: string };
-export type ScheduledOboConsent = ScheduledOboParams & { expectedScopes: string };
+export type ScheduledOboConsent = ScheduledOboParams & {
+  expectedScopes: string;
+  expectedUrl: string;
+};
 export const useAuthorizeScheduledOboMutation = (
   options?: UseMutationOptions<void, Error, ScheduledOboConsent>,
 ) => {
   const queryClient = useQueryClient();
   return useMutation<void, Error, ScheduledOboConsent>(
     [MutationKeys.scheduledObo],
-    ({ id, server, expectedScopes }) =>
-      dataService.authorizeScheduledObo(id, server, expectedScopes),
+    ({ id, server, expectedScopes, expectedUrl }) =>
+      dataService.authorizeScheduledObo(id, server, expectedScopes, expectedUrl),
     {
       ...options,
       onSettled: (...args) => {

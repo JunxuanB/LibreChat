@@ -89,6 +89,7 @@ describe('saved schedule OBO grant actions', () => {
         id: 'sched-1',
         server: 'Files',
         expectedScopes: 'api://files/Read',
+        expectedUrl: 'https://mcp.example.test',
       }),
     );
   });

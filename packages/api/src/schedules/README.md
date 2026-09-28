@@ -54,15 +54,17 @@ those scopes plus `offline_access`. A checked permission alone does not mint one
 
 To set one up, create the schedule paused using the dialog's OBO setup checkbox.
 While signed in with a current OpenID session, click **Authorize offline** on
-the saved card for the exact named server. This POST uses the live user access
-token once as an OBO assertion. It saves only the encrypted downstream OBO
+the saved card for the exact named server. Confirm the displayed scopes and MCP
+URL; the POST refuses enrollment if either changed after the preview. It uses the
+live user access token once as an OBO assertion. It saves only the encrypted downstream OBO
 refresh grant under the owner, schedule id and server name. It never persists
 the browser login refresh token, and does not present a downstream token as an
 upstream assertion. The backend validates the agent's selected MCP tools,
 owner/tenant, permissions, server config and scopes before storing it. The
 server must issue a refresh token; otherwise the enrollment fails without
-creating a grant. Enable the schedule after authorization. Repeat for each
-required OBO server.
+creating a grant. Enable the schedule after authorization. The activation
+preflight can check a grant while the row is still paused; actual scheduled runs
+still require an enabled row. Repeat for each required OBO server.
 
 Preflight, execution and tool-call recovery use the scoped downstream credential.
 An expired access token is renewed via the provider's refresh-token grant and

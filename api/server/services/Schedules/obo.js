@@ -2,6 +2,7 @@ const client = require('openid-client');
 const {
   createLazyScheduledOboGrantService,
   createScheduledOboGrantService,
+  MCPTokenStorage,
 } = require('@librechat/api');
 const { CacheKeys } = require('librechat-data-provider');
 const { getMCPServersRegistry, getFlowStateManager } = require('~/config');
@@ -14,6 +15,7 @@ const methods = require('~/models');
 
 module.exports = createLazyScheduledOboGrantService(() =>
   createScheduledOboGrantService({
+    tokenStorage: MCPTokenStorage,
     tokens: {
       findToken: methods.findToken,
       listScheduledOboGrantIdentifiers: methods.listScheduledOboGrantIdentifiers,

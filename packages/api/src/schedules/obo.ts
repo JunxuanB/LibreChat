@@ -10,6 +10,7 @@ import type { Response } from 'express';
 import type { SessionOpenIDTokens } from '../auth/openid/types';
 import type { HostUpstreamTokenProviderResolver } from './mcp';
 import type { UpstreamTokenTarget } from '../mcp/oauth/obo';
+import type { MCPTokenStorage } from '../mcp/oauth/tokens';
 import type { GetAppConfigOptions } from '../app/service';
 import type { MCPOAuthTokens } from '../mcp/oauth/types';
 import type { FlowStateManager } from '../flow/manager';
@@ -18,7 +19,6 @@ import type { ScheduledTokenContext } from './context';
 import type { ScheduleMCPPreflight } from './types';
 import type { ServerRequest } from '../types/http';
 import {
-  MCPTokenStorage,
   getJwtAccessTokenExpiry,
   getMCPOAuthLeaseId,
   MCPTokenRefreshUnavailableError,
@@ -63,6 +63,15 @@ interface GrantResponse {
 }
 interface GrantDeps {
   tokens: TokenMethods & ScheduledOboGrantMethods;
+  tokenStorage: Pick<
+    typeof MCPTokenStorage,
+    | 'getClientInfoAndMetadata'
+    | 'getTokens'
+    | 'forceRefreshTokens'
+    | 'storeTokens'
+    | 'beginRefreshTeardown'
+    | 'deleteUserTokens'
+  >;
   flowManager: Pick<FlowStateManager<MCPOAuthTokens | null>, 'getLeaseGeneration' | 'acquireLease'>;
   getUser: (id: string) => Promise<IUser | null>;
   getSchedule: (id: string, userId: string) => Promise<ScheduleGrantRow | null>;
@@ -140,6 +149,8 @@ export interface ScheduledOboGrantService {
     scheduleId: string,
     serverName: string,
     accessToken: string,
+    expectedScopes?: string,
+    expectedUrl?: string,
   ) => Promise<void>;
   revoke: (userId: string, scheduleId: string, serverName: string) => Promise<void>;
   listEnrolled: (userId: string) => Promise<Record<string, string[]>>;
@@ -305,10 +316,11 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     context: ScheduledTokenContext,
     target: UpstreamTokenTarget,
     forceRefresh = false,
+    activationPreflight = false,
   ): Promise<MCPOAuthTokens> => {
     let authorized: Awaited<ReturnType<typeof validate>>;
     try {
-      authorized = await validate(userId, context, target);
+      authorized = await validate(userId, context, target, activationPreflight);
     } catch (error) {
       if (error instanceof OboTokenResolutionError) throw error;
       throw new OboTokenResolutionError(
@@ -321,7 +333,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     const key = scheduledOboGrantKey(context.scheduleId, target.mcpServer);
     const identifier = `mcp:${key}`;
     let refreshRecord: Awaited<ReturnType<typeof tokens.findToken>>;
-    let client: Awaited<ReturnType<typeof MCPTokenStorage.getClientInfoAndMetadata>>;
+    let client: Awaited<ReturnType<typeof deps.tokenStorage.getClientInfoAndMetadata>>;
     try {
       [refreshRecord, client] = await Promise.all([
         tokens.findToken({
@@ -329,7 +341,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           type: 'mcp_oauth_refresh',
           identifier: `${identifier}:refresh`,
         }),
-        MCPTokenStorage.getClientInfoAndMetadata({
+        deps.tokenStorage.getClientInfoAndMetadata({
           userId,
           serverName: key,
           findToken: tokens.findToken,
@@ -396,10 +408,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         refreshTokens,
       };
       let result = forceRefresh
-        ? await MCPTokenStorage.forceRefreshTokens(params)
-        : await MCPTokenStorage.getTokens(params);
+        ? await deps.tokenStorage.forceRefreshTokens(params)
+        : await deps.tokenStorage.getTokens(params);
       if (result?.expires_at && result.expires_at - Date.now() < 45_000 && !forceRefresh) {
-        result = await MCPTokenStorage.forceRefreshTokens(params);
+        result = await deps.tokenStorage.forceRefreshTokens(params);
       }
       if (!result?.access_token || !result.expires_at || result.expires_at <= Date.now())
         throw missingGrant();
@@ -423,10 +435,13 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     }
   };
 
-  const resolve: HostUpstreamTokenProviderResolver = async (user, { context, target }) => {
+  const resolve: HostUpstreamTokenProviderResolver = async (
+    user,
+    { context, target, activationPreflight },
+  ) => {
     if (!context || !target || user.id !== context.ownerId) return undefined;
     return async ({ forceRefresh } = {}) => {
-      const result = await read(user.id, context, target, forceRefresh);
+      const result = await read(user.id, context, target, forceRefresh, activationPreflight);
       return {
         scheduledObo: true,
         access_token: result.access_token,
@@ -441,6 +456,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     serverName: string,
     accessToken: string,
     expectedScopes?: string,
+    expectedUrl?: string,
   ): Promise<void> => {
     const scheduleLease = scheduleGrantLeaseId(userId, scheduleId);
     const scheduleGeneration = await deps.flowManager.getLeaseGeneration(scheduleLease);
@@ -473,7 +489,8 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     await inspectTarget(schedule.agent_id, user, scheduleId, serverName, async (selected) => {
       if (
         !selected.obo?.scopes ||
-        (expectedScopes != null && selected.obo.scopes !== expectedScopes)
+        (expectedScopes != null && selected.obo.scopes !== expectedScopes) ||
+        (expectedUrl != null && selected.url !== expectedUrl)
       )
         throw missingGrant();
       const target = { mcpServer: serverName, scopes: selected.obo.scopes };
@@ -483,7 +500,11 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       const generation = await deps.flowManager.getLeaseGeneration(leaseId);
       if (generation == null)
         throw new MCPTokenRefreshUnavailableError(key, new Error('Grant teardown in progress'));
-      if (config.url !== selected.url || config.obo?.scopes !== selected.obo.scopes)
+      if (
+        config.url !== selected.url ||
+        config.obo?.scopes !== selected.obo.scopes ||
+        (expectedUrl != null && config.url !== expectedUrl)
+      )
         throw missingGrant();
       let response: GrantResponse;
       try {
@@ -532,11 +553,16 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             fresh.tenantId !== user.tenantId
           )
             throw missingGrant();
+          if (expectedUrl != null) {
+            const currentServer = await getServer(user, serverName);
+            if (currentServer?.url !== expectedUrl || currentServer.obo?.scopes !== expectedScopes)
+              throw missingGrant();
+          }
           const clientInfo = {
             client_id: provider.clientId,
             scope: `${target.scopes} offline_access`,
           };
-          await MCPTokenStorage.storeTokens({
+          await deps.tokenStorage.storeTokens({
             userId,
             serverName: key,
             tokens: {
@@ -574,16 +600,15 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       identifier: `mcp:${key}:refresh`,
     });
     if (!refresh) throw missingGrant();
-    if (
-      schedule.enabled &&
-      !(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision))
-    ) {
+    // Advance the revision even for a paused row: a concurrent activation may
+    // already have passed its grant preflight and must lose its final update CAS.
+    if (!(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision))) {
       throw new MCPTokenRefreshUnavailableError(
         scheduledOboGrantKey(scheduleId, serverName),
         new Error('Schedule changed during revocation'),
       );
     }
-    const release = await MCPTokenStorage.beginRefreshTeardown(userId, key);
+    const release = await deps.tokenStorage.beginRefreshTeardown(userId, key);
     const leaseId = getMCPOAuthLeaseId(userId, key);
     try {
       const generation = await deps.flowManager.getLeaseGeneration(leaseId);
@@ -596,7 +621,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       if (!lease)
         throw new MCPTokenRefreshUnavailableError(key, new Error('Grant is being changed'));
       try {
-        await MCPTokenStorage.deleteUserTokens({
+        await deps.tokenStorage.deleteUserTokens({
           userId,
           serverName: key,
           deleteToken: async (filter) => {
@@ -659,14 +684,31 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       return;
     }
     try {
-      const expectedScopes = (
-        req.body as (typeof req.body & { expectedScopes?: string }) | undefined
-      )?.expectedScopes;
-      if (!expectedScopes || expectedScopes.length > 2048) {
-        res.status(400).json({ error: 'Confirm the current OBO scopes before authorizing' });
+      const { expectedScopes, expectedUrl } = (req.body ?? {}) as {
+        expectedScopes?: string;
+        expectedUrl?: string;
+      };
+      if (
+        typeof expectedScopes !== 'string' ||
+        !expectedScopes ||
+        expectedScopes.length > 2048 ||
+        typeof expectedUrl !== 'string' ||
+        !expectedUrl ||
+        expectedUrl.length > 4096
+      ) {
+        res
+          .status(400)
+          .json({ error: 'Confirm the current OBO endpoint and scopes before authorizing' });
         return;
       }
-      await enroll(userId!, scheduleId, serverName, session.accessToken, expectedScopes);
+      await enroll(
+        userId!,
+        scheduleId,
+        serverName,
+        session.accessToken,
+        expectedScopes,
+        expectedUrl,
+      );
       res.status(204).end();
     } catch (error) {
       if (

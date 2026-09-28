@@ -99,6 +99,7 @@ function setup(tools = ['search_mcp_docs']) {
         signal?: AbortSignal;
         deadlineMs?: number;
         scheduleId?: string;
+        activationPreflight?: boolean;
         inspectOboTarget?: {
           serverName: string;
           onSelected: (config: ParsedServerConfig) => Promise<void>;
@@ -153,6 +154,40 @@ it('lazily resolves an upstream token provider for an OBO preflight', async () =
   );
   expect(deps.connect).toHaveBeenCalledWith(
     expect.objectContaining({ upstreamTokenProviderResolver: expect.any(Function) }),
+  );
+});
+
+it('allows disabled-grant reads only in the owner activation preflight context', async () => {
+  const { check, deps } = setup();
+  deps.getServerConfigs = jest.fn(async () => ({
+    docs: { ...server, obo: { scopes: 'api://mcp/.default' } },
+  }));
+  const provider = jest.fn(async () => ({ access_token: 'enrolled-access' }));
+  deps.resolveUpstreamTokenProvider = jest.fn(async () => provider);
+  const connect = deps.connect;
+  deps.connect = jest.fn(async (options) => {
+    const resolved = await options.upstreamTokenProviderResolver?.({
+      target: { mcpServer: options.serverName, scopes: options.serverConfig!.obo!.scopes },
+    });
+    await resolved?.();
+    return connect(options);
+  });
+
+  await check('agent', principal, { scheduleId: 'schedule', activationPreflight: true });
+  expect(deps.resolveUpstreamTokenProvider).toHaveBeenLastCalledWith(
+    expect.objectContaining({ id: 'owner' }),
+    expect.objectContaining({
+      activationPreflight: true,
+      context: expect.objectContaining({ scheduleId: 'schedule' }),
+    }),
+  );
+  await check('agent', principal, { scheduleId: 'schedule' });
+  expect(jest.mocked(deps.resolveUpstreamTokenProvider!).mock.lastCall?.[1]).not.toHaveProperty(
+    'activationPreflight',
+  );
+  await check('agent', principal, { activationPreflight: true });
+  expect(jest.mocked(deps.resolveUpstreamTokenProvider!).mock.lastCall?.[1]).not.toHaveProperty(
+    'activationPreflight',
   );
 });
 

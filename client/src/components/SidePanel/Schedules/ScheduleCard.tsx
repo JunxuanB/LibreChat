@@ -424,6 +424,7 @@ export default function ScheduleCard({
                     id: schedule.id,
                     server: oboTarget.server,
                     expectedScopes: oboTarget.scopes,
+                    expectedUrl: oboTarget.url,
                   });
               }}
             >

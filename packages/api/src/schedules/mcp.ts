@@ -72,6 +72,8 @@ export type HostUpstreamTokenProviderResolver = (
     signal?: AbortSignal;
     context?: ScheduledTokenContext;
     target?: UpstreamTokenTarget;
+    /** Trusted write-side readiness probe, never present on a dispatched run. */
+    activationPreflight?: boolean;
   },
 ) => ReturnType<UpstreamTokenProviderResolver>;
 
@@ -81,6 +83,7 @@ export function bindUpstreamTokenProviderResolver(
   resolve: HostUpstreamTokenProviderResolver | undefined,
   signal?: AbortSignal,
   context?: ScheduledTokenContext,
+  activationPreflight = false,
 ): UpstreamTokenProviderResolver | undefined {
   if (!resolve) return undefined;
   const capturedContext = context && Object.freeze({ ...context });
@@ -98,6 +101,7 @@ export function bindUpstreamTokenProviderResolver(
           signal,
           ...(capturedContext ? { context: capturedContext } : {}),
           ...(target ? { target } : {}),
+          ...(activationPreflight ? { activationPreflight: true } : {}),
         });
       })
       .then((provider) => {
@@ -698,6 +702,7 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
             invocationMode: 'delegated',
           }
         : undefined,
+      options.activationPreflight === true && options.scheduleId != null,
     );
     throwIfAborted();
     const requestBody = {
