@@ -528,6 +528,16 @@ export default function useEventHandlers({
         snapshot.getLoadable(store.submissionByIndex(runIndex)).valueMaybe(),
     [runIndex],
   );
+  /** A newer, non-empty pane submission that is not this one: the user re-sent
+   *  after this run was torn down, and that run owns the pane now. */
+  const paneReplaced = useCallback(
+    (submission: TSubmission) => {
+      const current = getPaneSubmission();
+      return current != null && Object.keys(current).length > 0 && current !== submission;
+    },
+    [getPaneSubmission],
+  );
+
   /** A settlement that lands after an abort round trip must not touch the
    * flags of a newer submission: navigation frees the pane before `/abort`
    * resolves, so a re-send on the destination already owns `isSubmitting` by
@@ -543,18 +553,13 @@ export default function useEventHandlers({
    * strand `isSubmitting` on every ordinary non-Assistants turn. */
   const settlePane = useCallback(
     (submission: TSubmission, fromAbort: boolean) => {
-      if (fromAbort) {
-        const current = getPaneSubmission();
-        const replaced =
-          current != null && Object.keys(current).length > 0 && current !== submission;
-        if (replaced) {
-          return;
-        }
+      if (fromAbort && paneReplaced(submission)) {
+        return;
       }
       setIsSubmitting(false);
       setShowStopButton(false);
     },
-    [getPaneSubmission, setIsSubmitting, setShowStopButton],
+    [paneReplaced, setIsSubmitting, setShowStopButton],
   );
   const { mutate: reconcileCodeDecision } =
     useReconcileConversationCodeEnvironmentMutation(setConversation);
@@ -994,6 +999,10 @@ export default function useEventHandlers({
   const finalHandler = useCallback(
     (data: TFinalResData, submission: EventSubmission, options?: { fromAbort?: boolean }) => {
       const { requestMessage, responseMessage, conversation, runMessages } = data;
+      /** A stale abort final arriving after the pane re-sent: the newer run
+       *  owns the pane, so this reconciliation may only write the DEPARTING
+       *  conversation's cache, never the pane's live conversation state. */
+      const staleForPane = options?.fromAbort === true && paneReplaced(submission);
       const {
         messages,
         conversation: submissionConvo,
@@ -1021,7 +1030,9 @@ export default function useEventHandlers({
               currentMessages: getMessages(),
               regenerateMessages: submission.regenerateMessages,
             });
-            setMessages(abortMessages);
+            if (!staleForPane) {
+              setMessages(abortMessages);
+            }
             queryClient.setQueryData<TMessage[]>(
               [QueryKeys.messages, currentConvoId],
               abortMessages,
@@ -1036,14 +1047,16 @@ export default function useEventHandlers({
             queryClient.removeQueries({ queryKey: [QueryKeys.conversation, currentConvoId] });
             queryClient.removeQueries({ queryKey: [QueryKeys.messages, currentConvoId] });
           }
-          setMessages([]);
+          if (!staleForPane) {
+            setMessages([]);
+          }
           queryClient.setQueryData<TMessage[]>([QueryKeys.messages, Constants.NEW_CONVO], []);
           setDraft({
             id: getConversationDraftId(runIndex, Constants.NEW_CONVO),
             value: requestMessage?.text,
           });
           restorePendingQuotes(String(Constants.NEW_CONVO), requestMessage?.quotes);
-          if (location.pathname !== `/c/${Constants.NEW_CONVO}`) {
+          if (!staleForPane && location.pathname !== `/c/${Constants.NEW_CONVO}`) {
             navigate(`/c/${Constants.NEW_CONVO}`, { replace: true });
           }
           return;
@@ -1073,8 +1086,10 @@ export default function useEventHandlers({
         }
 
         /* a11y announcements */
-        announcePolite({ message: 'end', isStatus: true });
-        announcePolite({ message: getAllContentText(responseMessage) });
+        if (!staleForPane) {
+          announcePolite({ message: 'end', isStatus: true });
+          announcePolite({ message: getAllContentText(responseMessage) });
+        }
 
         const isNewConvo = conversation.conversationId !== submissionConvo.conversationId;
 
@@ -1083,8 +1098,12 @@ export default function useEventHandlers({
           queueTitleGeneration(conversation.conversationId);
         }
 
+        /** The departing conversation's cache is always reconciled; the pane's
+         *  active route only when this final still owns the pane. */
         const setFinalMessages = (id: string | null, _messages: TMessage[]) => {
-          setMessages(_messages);
+          if (!staleForPane) {
+            setMessages(_messages);
+          }
           queryClient.setQueryData<TMessage[]>([QueryKeys.messages, id], _messages);
         };
 
@@ -1181,7 +1200,9 @@ export default function useEventHandlers({
          *  title yet — otherwise the chat reverts to "New Chat" until reload. This
          *  holds for a stopped turn too: the server persists a title that finished
          *  generating before the Stop, so the local one stays in sync. */
-        if (setConversation && isAddedRequest !== true) {
+        /** A stale abort final must not replace the pane's conversation with
+         *  the departed run's, or pull the user onto its route. */
+        if (setConversation && isAddedRequest !== true && !staleForPane) {
           setConversation((prevState) => {
             const update = keepLocalCodeApprovalMode(
               { ...prevState, ...(conversation as TConversation) },
@@ -1252,6 +1273,7 @@ export default function useEventHandlers({
       announcePolite,
       setConversation,
       settlePane,
+      paneReplaced,
       location.pathname,
       applyAgentTemplate,
       attachmentHandler,

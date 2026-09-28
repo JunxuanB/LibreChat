@@ -104,6 +104,11 @@ export default function useSSE(
     payload = removeNullishValues(payload) as TPayload;
 
     let textIndex = null;
+    /** The run's own conversation id, learned from the created/sync events.
+     *  The cancel listener runs after the pane may have switched conversations,
+     *  where its message snapshot is the DESTINATION's (or empty), so the
+     *  abort must target this id rather than whatever the pane shows. */
+    let runConversationId: string | undefined;
     clearStepMaps();
 
     const sse = new SSE(payloadData.server, {
@@ -149,6 +154,7 @@ export default function useSSE(
           ...data.message,
           overrideParentMessageId: userMessage.overrideParentMessageId,
         };
+        runConversationId = userMessage.conversationId ?? runConversationId;
 
         createdHandler(data, { ...submission, userMessage } as EventSubmission);
       } else if (data.event === 'title') {
@@ -188,6 +194,7 @@ export default function useSSE(
       } else if (data.sync != null) {
         const runId = v4();
         setActiveRunId(runId);
+        runConversationId = data.conversationId ?? runConversationId;
         /* synchronize messages to Assistants API as well as with real DB ID's */
         syncHandler(data, { ...submission, userMessage } as EventSubmission);
       } else if (data.type != null) {
@@ -247,7 +254,11 @@ export default function useSSE(
       attributePending(partialResponseId, { ...submission, userMessage });
       try {
         await abortConversation(
-          conversationId ??
+          /** The run's own id first: this listener also runs for teardowns
+           *  after the pane switched conversations, where the message snapshot
+           *  belongs to the destination. */
+          runConversationId ??
+            conversationId ??
             userMessage.conversationId ??
             submission.conversation?.conversationId ??
             '',

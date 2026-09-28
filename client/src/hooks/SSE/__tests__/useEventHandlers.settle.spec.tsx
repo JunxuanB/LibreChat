@@ -128,13 +128,15 @@ describe('post-abort settlement fences on the pane submission', () => {
       );
     const setIsSubmitting = jest.fn();
     const setShowStopButton = jest.fn();
+    const setMessages = jest.fn();
+    const setConversation = jest.fn();
     const { result } = renderHook(
       () => ({
         handlers: useEventHandlers({
           getMessages: () => [user, response],
-          setMessages: jest.fn(),
+          setMessages,
           setCompleted: jest.fn(),
-          setConversation: jest.fn(),
+          setConversation,
           setIsSubmitting,
           setShowStopButton,
           newConversation: jest.fn(),
@@ -151,6 +153,8 @@ describe('post-abort settlement fences on the pane submission', () => {
     return {
       setIsSubmitting,
       setShowStopButton,
+      setMessages,
+      setConversation,
       setPaneSubmission: (value: TSubmission | null) => {
         act(() => result.current.setPaneSubmission(value));
       },
@@ -167,6 +171,18 @@ describe('post-abort settlement fences on the pane submission', () => {
               responseMessage: response,
             },
             liveSubmission,
+          );
+        }),
+      finalFromAbort: (aborted: typeof submission) =>
+        act(async () => {
+          result.current.handlers.finalHandler(
+            {
+              conversation: { conversationId: 'saved' },
+              requestMessage: user,
+              responseMessage: response,
+            },
+            aborted,
+            { fromAbort: true },
           );
         }),
     };
@@ -231,5 +247,20 @@ describe('post-abort settlement fences on the pane submission', () => {
 
     expect(harness.setIsSubmitting).toHaveBeenCalledWith(false);
     expect(harness.setShowStopButton).toHaveBeenCalledWith(false);
+  });
+
+  it('writes only the departing cache for a stale abort final over a re-sent pane', async () => {
+    const harness = await renderSettleHarness();
+    /** The user navigated away and sent again: the pane's newer submission owns
+     *  the live conversation, so the departed run's abort final must not
+     *  replace the pane's messages or conversation state. */
+    const replacement = { ...submission, userMessage: { ...user, messageId: 'user-2' } };
+    harness.setPaneSubmission(replacement);
+
+    await harness.finalFromAbort(submission);
+
+    expect(harness.setMessages).not.toHaveBeenCalled();
+    expect(harness.setConversation).not.toHaveBeenCalled();
+    expect(harness.setIsSubmitting).not.toHaveBeenCalledWith(false);
   });
 });
