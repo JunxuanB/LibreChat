@@ -47,6 +47,8 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  resolveInitialHandoffRunSnapshot:
+    jest.requireActual('@librechat/api').resolveInitialHandoffRunSnapshot,
   getAgentErrorMetadata: (...args) =>
     jest.requireActual('@librechat/api').getAgentErrorMetadata(...args),
   sendEvent: jest.fn(),
@@ -119,6 +121,8 @@ jest.mock('~/server/middleware', () => ({
 jest.mock('~/cache', () => ({
   logViolation: jest.fn(),
 }));
+
+jest.mock('~/server/services/PermissionService', () => ({ checkPermission: jest.fn() }));
 
 jest.mock('~/models', () => ({
   saveMessage: (...args) => mockSaveMessage(...args),
