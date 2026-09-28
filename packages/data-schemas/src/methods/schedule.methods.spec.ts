@@ -100,6 +100,22 @@ async function getRun(scheduleId: string, scheduledFor: Date): Promise<ISchedule
   return run;
 }
 
+describe('Work IQ scheduled OAuth consent persistence', () => {
+  it('retains explicit opt-out and revocation separately from a legacy absent field', async () => {
+    const legacy = await methods.createSchedule(scheduleData());
+    const optedOut = await methods.createSchedule(scheduleData({ workIqOAuthServer: null }));
+    expect((await getSchedule(legacy.id)).workIqOAuthServer).toBeUndefined();
+    expect((await getSchedule(optedOut.id)).workIqOAuthServer).toBeNull();
+
+    const consented = await methods.updateScheduleById(optedOut.id, optedOut.user, {
+      workIqOAuthServer: 'WorkIQ',
+    });
+    expect(consented?.workIqOAuthServer).toBe('WorkIQ');
+    await methods.updateScheduleById(optedOut.id, optedOut.user, { workIqOAuthServer: null });
+    expect((await getSchedule(optedOut.id)).workIqOAuthServer).toBeNull();
+  });
+});
+
 describe('claimDueSchedule', () => {
   it('grants exactly one winner across 8 concurrent claims', async () => {
     await methods.createSchedule(scheduleData());
