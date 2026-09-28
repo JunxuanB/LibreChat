@@ -20,6 +20,7 @@ const {
   resolveMaxPasskeysPerUser,
   resolveCodeEnvironmentMoveCapabilities,
   resolveCodeEnvironmentTransitionVersion,
+  loadConversationListLimits,
 } = require('@librechat/api');
 const {
   DEFAULT_MCP_APP_CSP_LIMITS,
@@ -251,10 +252,13 @@ router.get('/', async function (req, res) {
       return res.status(200).send(payload);
     }
 
-    const appConfig = await getAppConfig({
-      ...getAppConfigOptionsFromUser(req.user),
-      failClosed: true,
-    });
+    const [appConfig, conversationListLimits] = await Promise.all([
+      getAppConfig({
+        ...getAppConfigOptionsFromUser(req.user),
+        failClosed: true,
+      }),
+      loadConversationListLimits(getAppConfig),
+    ]);
     const codeEnvironmentDecisionVersion = resolveCodeEnvironmentDecisionVersion(
       process.env.CODE_ENVIRONMENT_DECISION_VERSION,
     );
@@ -297,6 +301,7 @@ router.get('/', async function (req, res) {
       ...preLoginPayload,
       ...publicSharePayload,
       ...buildPostLoginPayload(appConfig),
+      conversationListLimits,
       sharedLinksSnapshotFilesEnabled: sharedLinksEnabled && isFileSnapshotEnabled(appConfig),
       socialLogins: appConfig?.registration?.socialLogins ?? defaultSocialLogins,
       interface: appConfig?.interfaceConfig,
