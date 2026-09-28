@@ -1049,6 +1049,14 @@ test.describe('MCP Apps full integration', () => {
   test('enforces independent configured resource and tool-call quotas', async ({ page }) => {
     test.skip(PHASE !== 'quota');
     test.setTimeout(90_000);
+    const config = fs.readFileSync(
+      path.resolve(process.cwd(), 'e2e/.generated/librechat.e2e.yaml'),
+      'utf8',
+    );
+    expect(config.match(/^rateLimits:/gm)).toHaveLength(1);
+    expect(config).toContain(
+      'rateLimits:\n  stt:\n    userMax: 2\n  tts:\n    userMax: 2\n  mcpApps:\n    resourcesPerMinute: 2\n    toolCallsPerMinute: 2',
+    );
     await resetEvents(page);
     await page.goto(NEW_CHAT_PATH, { timeout: 15_000 });
     const token = await getAccessToken(page);

@@ -32,6 +32,16 @@ memory:
   personalize: true
   tokenLimit: 10000
 
+# Budgets that exist only here, not in the environment, so
+# yaml-rate-limits.spec.ts proves librechat.yaml reaches the limiters that route
+# modules build while loading. No other spec calls the speech routes.
+rateLimits:
+  stt:
+    userMax: 2
+  tts:
+    userMax: 2
+# __E2E_MCP_APP_RATE_LIMITS__
+
 # __E2E_MCP_APP_SANDBOX__
 
 mcpSettings:
@@ -80,8 +90,6 @@ mcpServers:
       client_id: e2e-oauth-client
   # __E2E_DYNAMIC_MCP_NETWORK_SERVERS__
   # __E2E_MCP_APPS_SERVER__
-
-# __E2E_MCP_APP_RATE_LIMITS__
 
 # Per-endpoint file upload config so both upload UXs get e2e coverage:
 # - Mock Provider A keeps the legacy 3-way dropdown (chat.spec.ts exercises
