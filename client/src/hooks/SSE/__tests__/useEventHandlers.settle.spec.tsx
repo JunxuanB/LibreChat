@@ -203,6 +203,19 @@ describe('post-abort settlement fences on the pane submission', () => {
     expect(harness.setShowStopButton).not.toHaveBeenCalledWith(false);
   });
 
+  it('settles after the pane submission became the empty sentinel', async () => {
+    const harness = await renderSettleHarness();
+    /** What useNewConvo writes on a same-scope new chat: `{}`, which useSSE
+     *  already treats as no active submission. Reading it as a replacement
+     *  would strand the flags after the abort. */
+    harness.setPaneSubmission({} as TSubmission);
+
+    await harness.abort();
+
+    expect(harness.setIsSubmitting).toHaveBeenCalledWith(false);
+    expect(harness.setShowStopButton).toHaveBeenCalledWith(false);
+  });
+
   it('settles a live final unconditionally, even for a rebuilt submission object', async () => {
     const harness = await renderSettleHarness();
     /** What useResumableSSE does after `created`: a spread clone of the pane's

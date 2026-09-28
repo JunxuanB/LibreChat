@@ -532,7 +532,9 @@ export default function useEventHandlers({
    * flags of a newer submission: navigation frees the pane before `/abort`
    * resolves, so a re-send on the destination already owns `isSubmitting` by
    * the time the stale response arrives. A cleared pane submission (stop or
-   * navigation teardown) still settles, which is the stop contract.
+   * navigation teardown) still settles, which is the stop contract; that
+   * includes the empty `{}` sentinel `useNewConvo` writes, which `useSSE`
+   * already treats as no active submission.
    *
    * Abort-scoped only: a LIVE terminal event settles unconditionally, because
    * its stream was open until that event and the pane cannot have replaced
@@ -543,7 +545,9 @@ export default function useEventHandlers({
     (submission: TSubmission, fromAbort: boolean) => {
       if (fromAbort) {
         const current = getPaneSubmission();
-        if (current != null && current !== submission) {
+        const replaced =
+          current != null && Object.keys(current).length > 0 && current !== submission;
+        if (replaced) {
           return;
         }
       }
