@@ -1237,6 +1237,7 @@ const executeResponse = async (envelope, { req, res }) => {
             _configurable,
             callerCapabilityProjection,
             runSignal,
+            executionContext,
           ) => {
             const ctx =
               agentToolContexts.get(agentId) ?? agentToolContexts.get(primaryConfig.id) ?? {};
@@ -1249,6 +1250,7 @@ const executeResponse = async (envelope, { req, res }) => {
               toolNames,
               agent: ctx.agent ?? agent,
               signal: runSignal,
+              executionContext,
               toolRegistry: ctx.toolRegistry,
               callerCapabilityProjection,
               backgroundToolNames: ctx.backgroundToolNames,
@@ -1474,6 +1476,7 @@ const executeResponse = async (envelope, { req, res }) => {
             _configurable,
             callerCapabilityProjection,
             runSignal,
+            executionContext,
           ) => {
             const ctx =
               agentToolContexts.get(agentId) ?? agentToolContexts.get(primaryConfig.id) ?? {};
@@ -1486,6 +1489,7 @@ const executeResponse = async (envelope, { req, res }) => {
               toolNames,
               agent: ctx.agent ?? agent,
               signal: runSignal,
+              executionContext,
               toolRegistry: ctx.toolRegistry,
               callerCapabilityProjection,
               backgroundToolNames: ctx.backgroundToolNames,

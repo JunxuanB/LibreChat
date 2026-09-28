@@ -116,6 +116,7 @@ import { CREATE_FILE_TOOL_NAME, EDIT_FILE_TOOL_NAME } from '~/agents/tools';
 import { buildAgentInitialToolSessions } from '~/agents/codeFilesSession';
 import { getDirectDispatcher, getProxyDispatcher } from '~/utils/proxy';
 import { getAzureCredentials, constructAzureURL } from '~/utils/azure';
+import { getSubagentCodeCloneInstructions } from '~/agents/execution';
 import { getBuiltInBaseURL } from '~/endpoints/openai/initialize';
 import { getProviderConfig } from '~/endpoints/config/providers';
 import { buildToolApprovalHooks } from '~/agents/hitl/hooks';
@@ -2412,7 +2413,11 @@ export async function createRun({
 
     const systemContent = [toolInstructions, agent.instructions ?? ''].join('\n').trim();
 
-    const additionalInstructions = [dynamicToolInstructions, agent.additional_instructions ?? '']
+    const additionalInstructions = [
+      dynamicToolInstructions,
+      agent.additional_instructions ?? '',
+      getSubagentCodeCloneInstructions(isSubagent, agent.codeExecutionContext) ?? '',
+    ]
       .join('\n')
       .trim();
 
