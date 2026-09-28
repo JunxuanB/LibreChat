@@ -79,6 +79,7 @@ type ScheduleFormValues = {
    *  user who tries a preset does not lose the expression they typed. */
   expression: string;
   timezone: string;
+  workIqOAuthServer: boolean;
 };
 
 const FREQUENCY_LABELS: Record<ScheduleFrequency, TranslationKeys> = {
@@ -118,6 +119,7 @@ const getDefaultValues = (schedule?: TSchedule): ScheduleFormValues => {
       daysOfWeek: DEFAULT_WEEKLY_DAYS,
       expression: DEFAULT_CRON,
       timezone: localTimezone,
+      workIqOAuthServer: false,
     };
   }
   const identity = {
@@ -128,6 +130,7 @@ const getDefaultValues = (schedule?: TSchedule): ScheduleFormValues => {
     // A stored row always has one; the fallback only covers a legacy row written
     // before the field existed, which would otherwise render an empty picker.
     timezone: schedule.timezone || localTimezone,
+    workIqOAuthServer: schedule.workIqOAuthServer != null,
   };
   const cadence = schedule.cadence;
   if (isCronCadence(cadence)) {
@@ -247,6 +250,7 @@ export default function ScheduleDialog({
   const { data: schedulesData } = useSchedulesQuery();
   const pinnedProjectId = schedulesData?.limits.projectId;
   const minIntervalMinutes = schedulesData?.limits.minIntervalMinutes;
+  const workIqServer = schedulesData?.limits.workIqServer;
   const requireProject = schedulesData?.limits.requireProject === true;
   const {
     items: loadedProjectItems,
@@ -403,6 +407,9 @@ export default function ScheduleDialog({
           : {}),
         ...(cadenceTouched ? { cadence } : {}),
         ...(dirtyFields.timezone === true ? { timezone: values.timezone } : {}),
+        ...(dirtyFields.workIqOAuthServer
+          ? { workIqOAuthServer: values.workIqOAuthServer && workIqServer ? workIqServer : null }
+          : {}),
       };
       // Nothing touched: a field-less PATCH is refused server-side (it would rotate
       // the schedule's fencing for a request that changes nothing), so just close.
@@ -436,6 +443,7 @@ export default function ScheduleDialog({
       timezone: values.timezone,
       target: 'new' as const,
       enabled: true,
+      workIqOAuthServer: values.workIqOAuthServer && workIqServer ? workIqServer : null,
     };
     // STABLE across retries of the SAME intent, which is the whole point: the server
     // commits the row and arms it in two writes, so a failure between them leaves the
@@ -744,6 +752,13 @@ export default function ScheduleDialog({
                 {localize('com_ui_schedule_target_new_chat')}
               </p>
             </div>
+
+            {workIqServer != null && (
+              <label className="flex items-start gap-2 text-sm text-text-primary">
+                <input type="checkbox" className="mt-1" {...register('workIqOAuthServer')} />
+                <span>{localize('com_ui_schedule_workiq_consent', { server: workIqServer })}</span>
+              </label>
+            )}
 
             <Controller
               name="prompt"

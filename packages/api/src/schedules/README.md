@@ -44,6 +44,28 @@ The schedule card shows failed servers and links to the selected agent for recov
 A pure pause remains available even when MCP validation fails. This change does not
 re-enable existing schedules automatically or repair credentials on the user's behalf.
 
+## Work IQ direct OAuth (first opt-in provider)
+
+Set `interface.schedules.workIqServer` to the exact name of an operator-configured
+Work IQ MCP server at `https://workiq.svc.cloud.microsoft/mcp`. Configure OAuth
+with a registered Entra client, matching tenant authorization and token endpoints,
+and scopes `api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask offline_access`.
+Authorize that MCP connection once in an interactive agent chat. Only the
+server-specific, encrypted MCP OAuth refresh credential is used for later runs;
+this does not copy or reuse the user's browser-login refresh token. Work IQ's
+delegated permission and offline access must be consented to at the provider.
+
+The schedule dialog offers an unchecked, per-schedule checkbox for this one named
+server. The backend checks that this server is selected in the agent graph, the
+configured resource and scopes match Work IQ, the owner still has MCP USE access,
+and a same-generation, nonexpired refresh grant exists. It repeats those checks
+at each dispatch and on approval resume. Removing the checkmark, removing the
+mapping, or revoking the grant prevents future unattended runs; transient store
+failures remain retryable. New schedules persist an explicit `null` for no consent;
+older schedules without this field preserve their prior direct OAuth behavior.
+This does not authorize OBO servers or all MCP providers, and it does not assert
+a live end-to-end run against a real Work IQ tenant.
+
 ## Host token-provider context
 
 `createMCPPreflight` and `createInitializeClient` accept a

@@ -62,6 +62,7 @@
   "com_ui_code_workspace_default": "Default workspace for new chats",
   "com_ui_code_workspace_last_used": "Last used workspace",
   "com_ui_code_workspace_default_description": "New chats use this workspace. Without a default, reuse your last available choice for this agent and machine in this browser. Existing chats keep their workspace.",
+  "com_ui_schedule_workiq_consent": "Allow this schedule to use my renewable {{server}} Work IQ MCP authorization when I am offline. I can revoke this by editing the schedule or disconnecting the server.",
   "com_ui_schedule_mcp_ready": "Ready for scheduled chats",
   "com_ui_schedule_mcp_reauth": "Reconnect this MCP server before enabling the schedule.",
   "com_ui_schedule_mcp_unattended_auth": "Unattended access is not configured for this MCP server. Ask your administrator to set up a renewable credential provider; reconnecting in chat will not fix this.",

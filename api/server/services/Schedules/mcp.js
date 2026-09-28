@@ -1,4 +1,4 @@
-const { createScheduleMCPPreflight } = require('@librechat/api');
+const { createScheduleMCPPreflight, hasRenewableWorkIqAuthorization } = require('@librechat/api');
 const { CacheKeys } = require('librechat-data-provider');
 const { getMCPManager, getMCPServersRegistry, getFlowStateManager } = require('~/config');
 const { getAppConfig } = require('~/server/services/Config/app');
@@ -31,6 +31,8 @@ function createMCPPreflight(options = {}) {
       getMCPServersRegistry().getAllServerConfigs(userId, config, role),
     findPluginAuthsByKeys: methods.findPluginAuthsByKeys,
     resolveUpstreamTokenProvider: options.resolveUpstreamTokenProvider,
+    hasRenewableWorkIqAuthorization: (userId, name, config) =>
+      hasRenewableWorkIqAuthorization(userId, name, config, methods.findToken),
     connect: (connectionOptions) =>
       getMCPManager().getConnection({
         ...connectionOptions,

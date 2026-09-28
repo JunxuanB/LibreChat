@@ -82,6 +82,7 @@ describe('toWireSchedule', () => {
         'timezone',
         'updatedAt',
         'user',
+        'workIqOAuthServer',
       ].sort(),
     );
   });

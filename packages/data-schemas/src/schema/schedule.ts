@@ -96,6 +96,7 @@ const scheduleSchema: Schema<IScheduleDocument> = new Schema(
     chatProjectId: {
       type: String,
     },
+    workIqOAuthServer: { type: String, default: undefined },
     file_ids: {
       type: [String],
       default: undefined,

@@ -2318,6 +2318,9 @@ export const interfaceSchema = z
           fireConcurrency: z.number().int().min(1).optional(),
           mcpPreflightConcurrency: z.number().int().min(1).max(10).optional(),
           mcpPreflightTimeoutMs: z.number().int().min(1000).max(600000).optional(),
+          /** Name of the admin-configured Work IQ MCP server eligible for delegated
+           * scheduled use. Absent by default; no other MCP server is enabled by this option. */
+          workIqServer: z.string().trim().min(1).optional(),
           /** Refuse schedules that are not filed under a chat project. Enforced on
            *  create/update AND at every fire, so raising it later stops schedules
            *  that predate the policy instead of grandfathering them. */

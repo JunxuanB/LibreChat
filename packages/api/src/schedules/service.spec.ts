@@ -1,9 +1,11 @@
 import { logger } from '@librechat/data-schemas';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import type { AppConfig } from '@librechat/data-schemas';
 import type { SchedulesServiceDeps } from './service';
 import { createSchedulesService, recordScheduledMCPToolAuthFailure } from './service';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
 import { isShutdownInProgress } from '../app/shutdown';
+import { ScheduleMCPError } from './mcp';
 
 /** Swappable per test: null keeps the no-job-store harness the drain tests rely on. */
 let mockJobStore: { getJob: jest.Mock; deleteJob?: jest.Mock } | null = null;
@@ -1102,6 +1104,44 @@ describe('isScheduleLive policy recheck', () => {
     } finally {
       delete process.env.SCHEDULES_DISABLED;
     }
+  });
+
+  it('rechecks a Work IQ grant before resuming an opted-in schedule', async () => {
+    const service = makeService(
+      jest.fn<Promise<ActiveRun[]>, [string]>().mockResolvedValue([]),
+      jest.fn(
+        async () =>
+          ({
+            interfaceConfig: { schedules: { use: true, workIqServer: 'WorkIQ' } },
+          }) as Partial<AppConfig> as AppConfig,
+      ),
+    );
+    const methods = service.engineDeps.methods as unknown as {
+      getScheduleById: jest.Mock;
+      getRoleByName: jest.Mock;
+    };
+    methods.getScheduleById = jest.fn(async () => ({
+      id: 's1',
+      user: 'u1',
+      agent_id: 'root',
+      enabled: true,
+      workIqOAuthServer: 'WorkIQ',
+    }));
+    methods.getRoleByName = jest.fn(async () => ({ permissions: { SCHEDULES: { USE: true } } }));
+    (service.engineDeps as unknown as { getUserContext: jest.Mock }).getUserContext = jest.fn(
+      async () => ({ id: 'u1', tenantId: 't1', role: 'USER' }),
+    );
+    const preflight = service.engineDeps.preflightMCP as jest.Mock;
+    await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(true);
+    expect(preflight).toHaveBeenCalledWith(
+      'root',
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ workIqServer: 'WorkIQ', workIqOAuthServer: 'WorkIQ' }),
+    );
+    preflight.mockRejectedValueOnce(
+      new ScheduleMCPError([{ server: 'WorkIQ', status: 'mcp_reauth_required' }]),
+    );
+    await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(false);
   });
 
   it('refuses a resume when the owner lost SCHEDULES:USE', async () => {

@@ -99,6 +99,8 @@ function setup(tools = ['search_mcp_docs']) {
         signal?: AbortSignal;
         deadlineMs?: number;
         scheduleId?: string;
+        workIqServer?: string;
+        workIqOAuthServer?: string | null;
       },
     ) => preflight(agentId, user, { concurrency: 3, ...options }),
   };
@@ -1610,4 +1612,91 @@ it('admits a scheduled connection when request headers shadow an unused generate
   });
   await check('agent', principal);
   expect(deps.connect).toHaveBeenCalledTimes(1);
+});
+
+const workIqConfig: ParsedServerConfig = {
+  type: 'streamable-http',
+  url: 'https://workiq.svc.cloud.microsoft/mcp',
+  oauth: {
+    client_id: 'workiq-client',
+    client_secret: 'configured-secret',
+    authorization_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize',
+    token_url: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    scope: 'api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask offline_access',
+  },
+};
+
+it('requires per-schedule consent and a renewable grant for the configured Work IQ server', async () => {
+  const { check, deps } = setup(['search_mcp_WorkIQ']);
+  deps.getServerConfigs = jest.fn(async () => ({ WorkIQ: workIqConfig }));
+  deps.getAppConfig = jest.fn(
+    async () =>
+      ({
+        endpoints: { agents: { capabilities: [AgentCapabilities.tools] } },
+        mcpConfig: { WorkIQ: workIqConfig },
+      }) as Partial<AppConfig> as AppConfig,
+  );
+  deps.hasRenewableWorkIqAuthorization = jest.fn(async () => true);
+  const options = { scheduleId: 'schedule', workIqServer: 'WorkIQ' };
+
+  await expect(
+    check('agent', principal, { ...options, workIqOAuthServer: null }),
+  ).rejects.toMatchObject({
+    code: 'mcp_configuration_missing',
+  });
+  expect(deps.hasRenewableWorkIqAuthorization).not.toHaveBeenCalled();
+  await expect(
+    check('agent', principal, { ...options, workIqOAuthServer: 'WorkIQ' }),
+  ).resolves.toEqual([{ server: 'WorkIQ', status: 'ready' }]);
+  expect(deps.hasRenewableWorkIqAuthorization).toHaveBeenCalledWith(
+    'owner',
+    'WorkIQ',
+    workIqConfig,
+  );
+  jest.mocked(deps.hasRenewableWorkIqAuthorization).mockResolvedValue(false);
+  await expect(
+    check('agent', principal, { ...options, workIqOAuthServer: 'WorkIQ' }),
+  ).rejects.toMatchObject({
+    code: 'mcp_reauth_required',
+  });
+  jest.mocked(deps.hasRenewableWorkIqAuthorization).mockRejectedValue(new Error('store offline'));
+  await expect(
+    check('agent', principal, { ...options, workIqOAuthServer: 'WorkIQ' }),
+  ).rejects.toMatchObject({
+    code: 'mcp_unavailable',
+  });
+  // A pre-upgrade schedule without this field keeps its current direct OAuth behavior.
+  await expect(check('agent', principal, options)).resolves.toEqual([
+    { server: 'WorkIQ', status: 'ready' },
+  ]);
+});
+
+it('refuses mismatched server consent or an OAuth grant without the Work IQ offline scope', async () => {
+  const { check, deps } = setup(['search_mcp_WorkIQ']);
+  deps.getServerConfigs = jest.fn(async () => ({ WorkIQ: workIqConfig }));
+  deps.getAppConfig = jest.fn(
+    async () =>
+      ({
+        endpoints: { agents: { capabilities: [AgentCapabilities.tools] } },
+        mcpConfig: { WorkIQ: workIqConfig },
+      }) as Partial<AppConfig> as AppConfig,
+  );
+  deps.hasRenewableWorkIqAuthorization = jest.fn(async () => true);
+  await expect(
+    check('agent', principal, {
+      workIqServer: 'WorkIQ',
+      workIqOAuthServer: 'other',
+    }),
+  ).rejects.toMatchObject({ code: 'mcp_configuration_missing' });
+  expect(deps.connect).not.toHaveBeenCalled();
+  deps.getServerConfigs = jest.fn(async () => ({
+    WorkIQ: { ...workIqConfig, oauth: { ...workIqConfig.oauth, scope: 'offline_access' } },
+  }));
+  await expect(
+    check('agent', principal, {
+      workIqServer: 'WorkIQ',
+      workIqOAuthServer: 'WorkIQ',
+    }),
+  ).rejects.toMatchObject({ code: 'mcp_configuration_missing' });
+  expect(deps.hasRenewableWorkIqAuthorization).not.toHaveBeenCalled();
 });

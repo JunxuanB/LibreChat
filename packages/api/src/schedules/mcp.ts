@@ -16,6 +16,7 @@ import {
 } from 'librechat-data-provider';
 import type {
   IUser,
+  TokenMethods,
   AppConfig,
   PluginAuthMethods,
   AgentGraphNode,
@@ -47,6 +48,7 @@ import {
 import { MCPConfigInitializationCanceledError } from '../mcp/registry/MCPServersRegistry';
 import { createMCPRequestContext, cleanupMCPRequestContext } from '../mcp/request';
 import { isScheduleFireRequest, readScheduleFireContext } from './trigger';
+import { MCPOAuthHandler, MCPTokenStorage, MCPTokenStorageUnavailableError } from '../mcp/oauth';
 import { getAppConfigOptionsFromUser } from '../app/service';
 import { createConcurrencyLimiter } from '../utils/promise';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
@@ -164,6 +166,93 @@ export function getScheduleMCPFailureCode(
   return 'mcp_unavailable';
 }
 
+const WORK_IQ_MCP_URL = 'https://workiq.svc.cloud.microsoft/mcp';
+const WORK_IQ_SCOPE = 'api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask';
+
+/** The first supported provider is a configured, resource-bound direct OAuth grant,
+ * never an OBO exchange or the browser's OpenID refresh token. */
+export function isScheduledWorkIqOAuthConfig(config: ParsedServerConfig): boolean {
+  const oauth = config.oauth;
+  if (
+    config.url !== WORK_IQ_MCP_URL ||
+    ('obo' in config && config.obo != null) ||
+    config.source === 'user' ||
+    !oauth?.client_id ||
+    !oauth.client_secret ||
+    !oauth.authorization_url ||
+    !oauth.token_url ||
+    !oauth.scope
+  )
+    return false;
+  const scopes = new Set(oauth.scope.split(/\s+/));
+  if (!scopes.has(WORK_IQ_SCOPE) || !scopes.has('offline_access')) return false;
+  try {
+    const authorize = new URL(oauth.authorization_url);
+    const token = new URL(oauth.token_url);
+    return (
+      authorize.protocol === 'https:' &&
+      token.protocol === 'https:' &&
+      authorize.hostname === 'login.microsoftonline.com' &&
+      token.hostname === authorize.hostname &&
+      authorize.pathname === token.pathname.replace(/\/token$/, '/authorize') &&
+      authorize.pathname.endsWith('/oauth2/v2.0/authorize')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Inspect only record metadata and client binding, not refresh-token plaintext.
+ * A store outage or cross-generation read throws (retryable); a missing or expired grant returns false. */
+export async function hasRenewableWorkIqAuthorization(
+  userId: string,
+  serverName: string,
+  config: ParsedServerConfig,
+  findToken: TokenMethods['findToken'],
+): Promise<boolean> {
+  const identifier = `mcp:${serverName}`;
+  const [refresh, access, client] = await Promise.all([
+    findToken({ userId, type: 'mcp_oauth_refresh', identifier: `${identifier}:refresh` }),
+    findToken({ userId, type: 'mcp_oauth', identifier }),
+    MCPTokenStorage.getClientInfoAndMetadata({ userId, serverName, findToken }),
+  ]);
+  if (!refresh || !client || (refresh.expiresAt && refresh.expiresAt <= new Date())) return false;
+  const metadata = refresh.metadata;
+  const generation =
+    metadata instanceof Map
+      ? metadata.get('credential_set_id')
+      : (metadata as { credential_set_id?: string } | undefined)?.credential_set_id;
+  if (typeof generation !== 'string' || !generation) return false;
+  if (access) {
+    const accessMetadata = access.metadata;
+    const accessGeneration =
+      accessMetadata instanceof Map
+        ? accessMetadata.get('credential_set_id')
+        : (accessMetadata as { credential_set_id?: string } | undefined)?.credential_set_id;
+    if (accessGeneration !== generation) {
+      throw new MCPTokenStorageUnavailableError(serverName, new Error('OAuth grant is rotating'));
+    }
+  }
+  if (client.clientMetadata.credential_set_id !== generation) {
+    throw new MCPTokenStorageUnavailableError(serverName, new Error('OAuth grant is rotating'));
+  }
+  const scope = (client.clientInfo as typeof client.clientInfo & { scope?: string }).scope;
+  const scopes = new Set(scope?.split(/\s+/));
+  if (!scopes.has(WORK_IQ_SCOPE) || !scopes.has('offline_access')) return false;
+  try {
+    MCPOAuthHandler.assertStoredClientBinding(
+      serverName,
+      config.url,
+      client.clientInfo,
+      client.clientMetadata,
+      config.oauth,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface ScheduleMCPDeps {
   resolveAgentGraphAccess: (access: {
     userId: string;
@@ -189,6 +278,11 @@ interface ScheduleMCPDeps {
   ) => Promise<Record<string, ParsedServerConfig>>;
   findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
   resolveUpstreamTokenProvider?: HostUpstreamTokenProviderResolver;
+  hasRenewableWorkIqAuthorization?: (
+    userId: string,
+    serverName: string,
+    config: ParsedServerConfig,
+  ) => Promise<boolean>;
   connect: (options: UserMCPConnectionOptions) => Promise<{
     fetchToolsSnapshot: (deadlineMs?: number, signal?: AbortSignal) => Promise<MCPToolsSnapshot>;
   }>;
@@ -639,6 +733,19 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
     const selectedRawConfig = Object.fromEntries(
       Object.entries(rawConfig).filter(([serverName]) => selected.has(serverName)),
     );
+    // An absent consent field is a legacy schedule: preserve its existing behavior.
+    // New schedules persist null explicitly. Neither a server name nor a checkmark
+    // can authorize an arbitrary resource or a browser-login refresh token.
+    if (options.workIqOAuthServer != null && options.workIqOAuthServer !== options.workIqServer) {
+      throw new ScheduleMCPError([
+        { server: options.workIqOAuthServer, status: 'mcp_configuration_missing' },
+      ]);
+    }
+    if (options.workIqOAuthServer != null && !selected.has(options.workIqOAuthServer)) {
+      throw new ScheduleMCPError([
+        { server: options.workIqOAuthServer, status: 'mcp_configuration_missing' },
+      ]);
+    }
     const requestProbeLimit = createConcurrencyLimiter(options.concurrency);
     const config = await deps.ensureConfigServers(selectedRawConfig, (task) =>
       requestProbeLimit(() => {
@@ -696,6 +803,25 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
                   getMissingCustomUserVars(serverConfig, customUserVars).length > 0
                 ) {
                   return outcomesForOwners(server, 'mcp_configuration_missing');
+                }
+                if (server === options.workIqServer && options.workIqOAuthServer !== undefined) {
+                  if (
+                    options.workIqOAuthServer !== server ||
+                    !rawConfig[server] ||
+                    !isScheduledWorkIqOAuthConfig(serverConfig)
+                  ) {
+                    return outcomesForOwners(server, 'mcp_configuration_missing');
+                  }
+                  try {
+                    const renewable = await deps.hasRenewableWorkIqAuthorization?.(
+                      user.id,
+                      server,
+                      serverConfig,
+                    );
+                    if (!renewable) return outcomesForOwners(server, 'mcp_reauth_required');
+                  } catch {
+                    return outcomesForOwners(server, 'mcp_unavailable');
+                  }
                 }
                 let reauth = false;
                 try {

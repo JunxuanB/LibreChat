@@ -33,6 +33,7 @@ let mockLimits: {
   minIntervalMinutes: number;
   requireProject: boolean;
   projectId?: string;
+  workIqServer?: string;
 } = {
   maxPerUser: 10,
   minIntervalMinutes: 0,
@@ -123,6 +124,27 @@ const fillRequiredFields = async (user: ReturnType<typeof userEvent.setup>) => {
 };
 
 describe('ScheduleDialog', () => {
+  it('requires an explicit Work IQ choice and submits the exact configured server name', async () => {
+    mockLimits.workIqServer = 'WorkIQ';
+    const user = userEvent.setup();
+    renderDialog();
+    const consent = screen.getByRole('checkbox', { name: /com_ui_schedule_workiq_consent/ });
+    expect(consent).not.toBeChecked();
+    await fillRequiredFields(user);
+    await user.click(consent);
+    await user.click(screen.getByRole('button', { name: 'com_ui_create' }));
+    await waitFor(() =>
+      expect(mockMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ workIqOAuthServer: 'WorkIQ' }),
+      ),
+    );
+  });
+
+  it('does not offer Work IQ authorization without an operator-configured server', () => {
+    renderDialog();
+    expect(screen.queryByRole('checkbox', { name: /com_ui_schedule_workiq_consent/ })).toBeNull();
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
     mockLimits = { maxPerUser: 10, minIntervalMinutes: 0, requireProject: false };

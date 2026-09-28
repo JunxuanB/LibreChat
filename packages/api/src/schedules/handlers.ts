@@ -151,6 +151,9 @@ export function computeCreateDigest(payload: TCreateSchedule): string {
     // for the pinned row, i.e. success for the opposite of what it asked. A pre-scope
     // client never sent the field at all, so nothing legacy can carry an explicit null.
     ...(payload.chatProjectId !== undefined && { chatProjectId: payload.chatProjectId }),
+    ...(payload.workIqOAuthServer !== undefined && {
+      workIqOAuthServer: payload.workIqOAuthServer,
+    }),
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -205,7 +208,9 @@ function matchesCreatedSchedule(existing: ISchedule, payload: TCreateSchedule): 
     // Only when the payload names one: an operator pin is written to the row without
     // the client ever sending it, and a legacy row predates project scope entirely.
     (payload.chatProjectId === undefined ||
-      (existing.chatProjectId ?? null) === (payload.chatProjectId ?? null))
+      (existing.chatProjectId ?? null) === (payload.chatProjectId ?? null)) &&
+    (payload.workIqOAuthServer === undefined ||
+      existing.workIqOAuthServer === payload.workIqOAuthServer)
   );
 }
 
@@ -236,6 +241,7 @@ export type WireSchedule = Pick<
   | 'timezone'
   | 'target'
   | 'chatProjectId'
+  | 'workIqOAuthServer'
   | 'file_ids'
   | 'enabled'
   | 'disabledReason'
@@ -305,6 +311,7 @@ export function toWireSchedule(
     timezone: schedule.timezone,
     target: schedule.target,
     chatProjectId: resolveScheduleProjectId(limits ?? {}, schedule.chatProjectId),
+    workIqOAuthServer: schedule.workIqOAuthServer,
     file_ids: schedule.file_ids,
     enabled: schedule.enabled,
     disabledReason: schedule.disabledReason,
@@ -388,10 +395,13 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     signal: AbortSignal,
     limits: ScheduleLimits,
     scheduleId: string,
+    workIqOAuthServer?: string | null,
   ): Promise<boolean> {
     try {
       await deps.preflightMCP(agentId, requestUser(req), {
         scheduleId,
+        workIqServer: limits.workIqServer,
+        workIqOAuthServer,
         signal,
         concurrency: limits.mcpPreflightConcurrency,
         deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
@@ -588,6 +598,7 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
         minIntervalMinutes: limits.minIntervalMinutes,
         requireProject: limits.requireProject,
         ...(limits.projectId != null && { projectId: limits.projectId }),
+        ...(limits.workIqServer != null && { workIqServer: limits.workIqServer }),
       },
     });
   }
@@ -710,7 +721,15 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     const id = `sched_${randomUUID()}`;
     if (
       parsed.data.enabled &&
-      !(await validateMCP(parsed.data.agent_id, req, res, mcpSignal, limits, id))
+      !(await validateMCP(
+        parsed.data.agent_id,
+        req,
+        res,
+        mcpSignal,
+        limits,
+        id,
+        parsed.data.workIqOAuthServer ?? null,
+      ))
     )
       return;
     // Project policy applies to a NEW insert only, and is therefore resolved AFTER every
@@ -791,6 +810,8 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
         user: user.id as never,
         tenantId: user.tenantId,
         clientRequestDigest: digest,
+        // Distinguish new, explicitly unconsented rows from legacy rows with no field.
+        workIqOAuthServer: parsed.data.workIqOAuthServer ?? null,
       },
       limits.maxPerUser,
     );
@@ -981,6 +1002,9 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
         mcpSignal,
         limits,
         existing.id,
+        parsed.data.workIqOAuthServer !== undefined
+          ? parsed.data.workIqOAuthServer
+          : existing.workIqOAuthServer,
       ))
     )
       return;

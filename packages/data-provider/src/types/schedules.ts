@@ -87,6 +87,9 @@ export const createSchedulePayloadSchema = z.object({
    * deleted project disables the schedule instead of silently filing runs loose.
    */
   chatProjectId: z.string().trim().min(1).nullable().optional(),
+  /** Explicit consent for this schedule to use the configured Work IQ MCP grant.
+   * null declines; absent on a stored legacy schedule preserves its old behavior. */
+  workIqOAuthServer: z.string().trim().min(1).nullable().optional(),
   enabled: z.boolean().default(true),
   /**
    * Client-generated key making creation idempotent across retries. Creation commits
@@ -135,6 +138,7 @@ export type TSchedule = {
   target: ScheduleTarget;
   file_ids?: string[];
   chatProjectId?: string | null;
+  workIqOAuthServer?: string | null;
   enabled: boolean;
   disabledReason?: ScheduleDisabledReason;
   nextRunAt?: string;
@@ -180,6 +184,7 @@ export type TScheduleLimits = {
   /** Operator-pinned destination project; when set it is the ONLY destination and
    *  the client must not offer a picker. */
   projectId?: string;
+  workIqServer?: string;
 };
 
 export type TSchedulesResponse = {

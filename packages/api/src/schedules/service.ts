@@ -42,6 +42,7 @@ import { getBalanceConfig } from '../app/config';
 import { startScheduleEngine } from './engine';
 import { withCapacitySlot } from './capacity';
 import { isEnabled } from '../utils/common';
+import { ScheduleMCPError } from './mcp';
 
 /** Recordable terminal/paused run outcome, as accepted by `recordRunOutcome`. */
 type ScheduleRunOutcomeStatus = Parameters<ScheduleMethods['recordRunOutcome']>[0]['status'];
@@ -422,6 +423,7 @@ export function createSchedulesService(
         config.mcpPreflightTimeoutMs ?? DEFAULT_SCHEDULE_LIMITS.mcpPreflightTimeoutMs,
       requireProject: config.requireProject === true || projectId != null,
       ...(projectId != null && { projectId }),
+      ...(config.workIqServer && { workIqServer: config.workIqServer }),
     };
   }
 
@@ -1153,6 +1155,24 @@ export function createSchedulesService(
       }
       if (!(await engineDeps.hasScheduleAccess(owner))) {
         return false;
+      }
+      if (schedule.workIqOAuthServer != null) {
+        // A paused approval can outlive both the owner's grant and an operator's
+        // provider mapping. Re-probe before permitting the continuation to run.
+        try {
+          await engineDeps.runInTenantContext(owner, () =>
+            deps.preflightMCP(schedule.agent_id, owner, {
+              scheduleId,
+              workIqServer: limits.workIqServer,
+              workIqOAuthServer: schedule.workIqOAuthServer,
+              concurrency: limits.mcpPreflightConcurrency,
+              deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
+            }),
+          );
+        } catch (error) {
+          if (error instanceof ScheduleMCPError && error.code === 'mcp_unavailable') throw error;
+          return false;
+        }
       }
       // Project policy belongs HERE rather than in the resume claim: this branch's
       // refusal is already routed through abort-and-settle by both callers, so a

@@ -449,6 +449,8 @@ export async function fireSchedule(
         Math.min(ownerLimits.mcpPreflightTimeoutMs, deploymentLimits.mcpPreflightTimeoutMs);
       mcp = await deps.preflightMCP(schedule.agent_id, user, {
         scheduleId: schedule.id,
+        workIqServer: ownerLimits.workIqServer,
+        workIqOAuthServer: schedule.workIqOAuthServer,
         signal: options?.signal,
         concurrency: Math.min(
           ownerLimits.mcpPreflightConcurrency,
