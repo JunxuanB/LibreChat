@@ -19,17 +19,18 @@ import type { ImmediateScheduleMCPFailure } from './errors';
 import type { TranslationKeys } from '~/hooks';
 import type { ScheduleRowTone } from './state';
 import {
+  scheduleMCPErrorMessage,
+  scheduleMCPErrorOutcomes,
+  scheduleLastRunKey,
+  scheduleMCPCardOutcomes,
+  scheduleDisabledMCPLabel,
+} from './errors';
+import {
   useGetAgentByIdQuery,
   useDeleteScheduleMutation,
   useUpdateScheduleMutation,
   useRunScheduleNowMutation,
 } from '~/data-provider';
-import {
-  scheduleMCPErrorMessage,
-  scheduleMCPErrorOutcomes,
-  scheduleLastRunKey,
-  scheduleMCPCardOutcomes,
-} from './errors';
 import { useLocalize, useHasAccess, useClockFormat, useWeekStart } from '~/hooks';
 import { cn, getMessageTimestamp, rowActionClasses } from '~/utils';
 import ScheduleMCPRecovery from './ScheduleMCPRecovery';
@@ -158,6 +159,7 @@ export default function ScheduleCard({ schedule, projectName }: ScheduleCardProp
   const [immediateMCPFailure, setImmediateMCPFailure] =
     useState<ImmediateScheduleMCPFailure | null>(null);
   const mcpOutcomes = scheduleMCPCardOutcomes(schedule, immediateMCPFailure);
+  const disabledMCPLabel = scheduleDisabledMCPLabel(schedule.disabledReason, mcpOutcomes);
   const { i18n } = useTranslation();
   const { showToast } = useToastContext();
   const agentsMap = useAgentsMapContext();
@@ -394,7 +396,9 @@ export default function ScheduleCard({ schedule, projectName }: ScheduleCardProp
               to get an MCP server back. A healthy schedule shows neither. */}
           {schedule.disabledReason != null && (
             <div className="mt-1.5">
-              <Chip tone="error">{localize(DISABLED_REASON_LABELS[schedule.disabledReason])}</Chip>
+              <Chip tone="error">
+                {localize(disabledMCPLabel ?? DISABLED_REASON_LABELS[schedule.disabledReason])}
+              </Chip>
             </div>
           )}
           <ScheduleMCPRecovery

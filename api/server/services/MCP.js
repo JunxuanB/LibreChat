@@ -861,6 +861,8 @@ async function reconnectServer({
     recoveryPolicy,
     mcpApps,
     oboIdentityContext,
+    streamId,
+    jobCreatedAt,
     forceNew: true,
     returnOnOAuth: false,
     connectionTimeout: Time.THIRTY_SECONDS,
@@ -1412,6 +1414,16 @@ function createToolInstance({
           error,
         );
       }
+
+      // The schedule service checks the typed cause and verified job identity before
+      // recording a durable tool failure; other tool errors are a cheap no-op.
+      await require('~/server/services/Schedules').recordMCPToolAuthFailure({
+        error,
+        streamId,
+        jobCreatedAt,
+        userId,
+        serverName,
+      });
 
       /** Carries the actionable re-auth message; the substring heuristic below would misreport it as an OAuth configuration problem */
       if (
