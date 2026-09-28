@@ -7,6 +7,10 @@ import { ReasoningEffort } from 'librechat-data-provider';
 import { act, render, screen, within, fireEvent } from '@testing-library/react';
 import type { SteeringControls } from '~/hooks/Chat/useSteering';
 import type { QueuedMessage } from '~/store/families';
+import {
+  QueuedTurnPortalProvider,
+  useQueuedTurnPortal,
+} from '~/components/Chat/Steering/QueuedTurnPortal';
 import { hasQueuedIntent, releaseQueuedIntent } from '~/utils/queueIntent';
 import { revealedQueuedTurnFamily } from '~/store/steer';
 import Queue from '../Queue';
@@ -99,6 +103,22 @@ const approvalPausedSteering = steeringWith({
   pausedOnApproval: true,
 });
 
+function PendingTurnTarget({ requestId }: { requestId: string }) {
+  const setTarget = useQueuedTurnPortal()?.setTarget;
+  const register = React.useCallback(
+    (element: HTMLSpanElement | null) =>
+      setTarget?.(
+        element == null ? null : { element, conversationId: CONVO_ID, clientRequestId: requestId },
+      ),
+    [setTarget, requestId],
+  );
+  return (
+    <div data-testid="pending-turn">
+      <span ref={register} />
+    </div>
+  );
+}
+
 const queued = (over: Partial<QueuedMessage> = {}): QueuedMessage =>
   ({
     id: 'q1',
@@ -116,20 +136,26 @@ function renderQueue(
     onEditToComposer?: jest.Mock;
     onRestoreToComposer?: jest.Mock;
     canRestoreToComposer?: jest.Mock;
+    portalRequestId?: string;
   } = {},
 ) {
   return render(
     <RecoilRoot initializeState={({ set }) => set(store.queuedMessagesByConvoId(CONVO_ID), items)}>
       {/* Mirrors `App`, which mounts the provider around the whole tree. */}
       <DndProvider backend={HTML5Backend}>
-        <Queue
-          steering={steeringOverride}
-          conversationId={CONVO_ID}
-          onRestoreToComposer={
-            handlers.onRestoreToComposer ?? handlers.onEditToComposer ?? jest.fn()
-          }
-          canRestoreToComposer={handlers.canRestoreToComposer ?? jest.fn().mockReturnValue(true)}
-        />
+        <QueuedTurnPortalProvider>
+          <Queue
+            steering={steeringOverride}
+            conversationId={CONVO_ID}
+            onRestoreToComposer={
+              handlers.onRestoreToComposer ?? handlers.onEditToComposer ?? jest.fn()
+            }
+            canRestoreToComposer={handlers.canRestoreToComposer ?? jest.fn().mockReturnValue(true)}
+          />
+          {handlers.portalRequestId != null && (
+            <PendingTurnTarget requestId={handlers.portalRequestId} />
+          )}
+        </QueuedTurnPortalProvider>
       </DndProvider>
     </RecoilRoot>,
   );
@@ -823,6 +849,39 @@ describe('Queue', () => {
       expect(firstRow.queryByRole('button', { name: 'com_ui_send_now' })).not.toBeInTheDocument();
       expect(firstRow.queryByLabelText('com_ui_edit_message')).not.toBeInTheDocument();
       expect(firstRow.getByLabelText('com_ui_remove_queued')).toBeEnabled();
+    } finally {
+      jotaiStore.set(revealedQueuedTurnFamily(CONVO_ID), null);
+    }
+  });
+
+  it('moves a claimed turn’s sole remove action into the pending user turn', () => {
+    const jotaiStore = getDefaultStore();
+    jotaiStore.set(revealedQueuedTurnFamily(CONVO_ID), {
+      clientRequestId: 'req-1',
+      parentMessageId: 'response-1',
+      text: 'follow up on this',
+      revealedAt: '2026-09-14T00:00:00.000Z',
+    });
+    try {
+      renderQueue(
+        [
+          queued({
+            id: 'q1',
+            clientRequestId: 'req-1',
+            server: { id: 'server-q1', status: 'claimed' },
+          }),
+          queued({ id: 'q2', text: 'another queued message' }),
+        ],
+        steeringWith({ canSendQueuedNow: false, canSteer: false }),
+        { portalRequestId: 'req-1' },
+      );
+      const turn = within(screen.getByTestId('pending-turn'));
+      expect(turn.getByLabelText('com_ui_remove_queued')).toBeEnabled();
+      expect(turn.queryByRole('button', { name: 'com_ui_send_now' })).not.toBeInTheDocument();
+      expect(turn.queryByLabelText('com_ui_edit_message')).not.toBeInTheDocument();
+      const row = screen.getByTestId('queued-message-row');
+      expect(row).toHaveTextContent('another queued message');
+      expect(row).not.toHaveTextContent('follow up on this');
     } finally {
       jotaiStore.set(revealedQueuedTurnFamily(CONVO_ID), null);
     }

@@ -1,6 +1,7 @@
 import { memo, useId, useRef, useMemo, useState, useCallback } from 'react';
 import { useAtomValue } from 'jotai';
 import { useRecoilValue } from 'recoil';
+import { createPortal } from 'react-dom';
 import { useDrag, useDrop } from 'react-dnd';
 import { X, Pencil, TextQuote, TriangleAlert, GripVertical, Clock } from 'lucide-react';
 import {
@@ -13,8 +14,9 @@ import {
 import type { RestoreToComposer } from '~/Providers/ComposerRestoreContext';
 import type { SteeringControls } from '~/hooks/Chat/useSteering';
 import type { QueuedMessage } from '~/store/families';
+import { claimQueuedIntent, releaseQueuedIntent, hasQueuedIntent } from '~/utils/queueIntent';
+import { useQueuedTurnPortal } from '~/components/Chat/Steering/QueuedTurnPortal';
 import { escalatingSteerFamily, revealedQueuedTurnFamily } from '~/store/steer';
-import { claimQueuedIntent, releaseQueuedIntent } from '~/utils/queueIntent';
 import EscalateNowButton from '~/components/Chat/Input/EscalateNowButton';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
@@ -59,6 +61,8 @@ interface QueueRowProps {
   canRestoreToComposer: (conversationId: string) => boolean;
   /** The server has revealed this row as the next user turn; only removal remains meaningful. */
   revealed?: boolean;
+  /** The matching user turn owns this row's actions when its bubble is visible. */
+  portalElement?: HTMLSpanElement;
   onAnnounce: (message: string) => void;
 }
 
@@ -100,6 +104,7 @@ function QueueRow({
   canRestoreToComposer,
   onAnnounce,
   revealed = false,
+  portalElement,
 }: QueueRowProps) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
@@ -388,6 +393,38 @@ function QueueRow({
    *  short enough that appearing and vanishing again just reads as a flicker. */
   const showEscalate = !isRecovered && (steering.pausedOnApproval || steering.duringRunActive);
 
+  if (portalElement != null) {
+    return createPortal(
+      <span className="flex items-center gap-1">
+        {serverActionable && (
+          <IconButton
+            label={localize('com_ui_edit_message')}
+            size="xs"
+            disabled={actionPending || hasQueuedIntent(message.id)}
+            onClick={editToComposer}
+          >
+            <Pencil className="h-4 w-4" aria-hidden="true" />
+          </IconButton>
+        )}
+        <IconButton
+          label={localize('com_ui_remove_queued')}
+          size="xs"
+          disabled={
+            actionPending ||
+            hasQueuedIntent(message.id) ||
+            (!serverActionable &&
+              !(message.server?.id != null && message.server.status === 'claimed'))
+          }
+          onClick={removeToComposer}
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </IconButton>
+      </span>,
+      portalElement,
+      message.id,
+    );
+  }
+
   return (
     <div
       ref={rowRef}
@@ -609,55 +646,69 @@ function Queue({
     setAnnouncement('');
   }
 
+  const target = useQueuedTurnPortal()?.target;
+  const portaledIndex =
+    target?.conversationId === conversationId &&
+    revealed?.clientRequestId === target.clientRequestId
+      ? queued.findIndex((message) => message.clientRequestId === target.clientRequestId)
+      : -1;
+
   if (queued.length === 0) {
     return null;
   }
 
-  return (
-    /* Inset and only rounded on top: the rail reads as paper tucked behind
-       the composer rather than a second composer stacked on it.
+  const renderRow = (message: QueuedMessage, index: number, portalElement?: HTMLSpanElement) => (
+    <QueueRow
+      key={message.id}
+      message={message}
+      index={index}
+      total={queued.length}
+      order={order}
+      serverOwnedIds={serverOwnedIds}
+      steering={steering}
+      conversationId={conversationId}
+      interruptPending={interruptPending}
+      reorderHintId={reorderHintId}
+      onRestoreToComposer={onRestoreToComposer}
+      canRestoreToComposer={canRestoreToComposer}
+      revealed={
+        revealed != null &&
+        message.clientRequestId != null &&
+        revealed.clientRequestId === message.clientRequestId
+      }
+      portalElement={portalElement}
+      onAnnounce={setAnnouncement}
+    />
+  );
 
-       The rows are the list; the hint and the live region are not items, and a
-       list that owns them reports the wrong count. */
-    <div className="border-border-light bg-surface-secondary mx-3 overflow-hidden rounded-t-2xl border border-b-0">
-      <div
-        role="list"
-        aria-label={localize('com_ui_queued_messages')}
-        data-testid="composer-queue"
-        className="flex flex-col"
-      >
-        {queued.map((message: QueuedMessage, index: number) => (
-          <QueueRow
-            key={message.id}
-            message={message}
-            index={index}
-            total={queued.length}
-            order={order}
-            serverOwnedIds={serverOwnedIds}
-            steering={steering}
-            conversationId={conversationId}
-            interruptPending={interruptPending}
-            reorderHintId={reorderHintId}
-            onRestoreToComposer={onRestoreToComposer}
-            canRestoreToComposer={canRestoreToComposer}
-            revealed={
-              revealed != null &&
-              message.clientRequestId != null &&
-              revealed.clientRequestId === message.clientRequestId
-            }
-            onAnnounce={setAnnouncement}
-          />
-        ))}
-      </div>
-      {queued.length > 1 && (
-        <span id={reorderHintId} className="sr-only">
-          {localize('com_ui_queue_reorder_hint')}
-        </span>
+  return (
+    <>
+      {queued.length > (portaledIndex >= 0 ? 1 : 0) && (
+        <div className="border-border-light bg-surface-secondary mx-3 overflow-hidden rounded-t-2xl border border-b-0">
+          <div
+            role="list"
+            aria-label={localize('com_ui_queued_messages')}
+            data-testid="composer-queue"
+            className="flex flex-col"
+          >
+            {queued.map((message, index) =>
+              index === portaledIndex ? null : renderRow(message, index),
+            )}
+          </div>
+          {queued.length > 1 && (
+            <span id={reorderHintId} className="sr-only">
+              {localize('com_ui_queue_reorder_hint')}
+            </span>
+          )}
+          <span role="status" aria-live="polite" className="sr-only">
+            {announcement}
+          </span>
+        </div>
       )}
-      <span role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </span>
-    </div>
+      {portaledIndex >= 0 &&
+        target != null &&
+        renderRow(queued[portaledIndex], portaledIndex, target.element)}
+    </>
   );
 }
 
