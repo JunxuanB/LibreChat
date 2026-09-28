@@ -61,7 +61,11 @@ async function ensureAssistant(page: Page) {
     path: '/api/assistants/v1',
     token,
     method: 'POST',
-    body: { model: ASSISTANTS_MODEL, name: `E2E pane settle ${uniqueName('assistant')}` },
+    body: {
+      model: ASSISTANTS_MODEL,
+      name: `E2E pane settle ${uniqueName('assistant')}`,
+      endpoint: 'assistants',
+    },
   });
 }
 
@@ -86,20 +90,27 @@ async function startSlowAssistantRun(page: Page, label: string) {
 }
 
 /** A second conversation with one completed turn, so a real sidebar row and a
- *  warm transcript exist to navigate to mid-run. Returns the row locator. */
-async function seedDestinationChat(page: Page, label: string): Promise<Locator> {
+ *  warm transcript exist to navigate to mid-run. Returns the row locator and
+ *  the marker the row and transcript both carry. */
+/** Sidebar rows show the conversation title, which truncates the first
+ *  message far sooner than uniqueName's timestamp, so the destination's
+ *  marker is short enough to survive inside it. */
+const shortMarker = () => `dest-${Math.random().toString(36).slice(2, 8)}`;
+
+async function seedDestinationChat(
+  page: Page,
+  label: string,
+): Promise<{ row: Locator; marker: string }> {
+  const marker = shortMarker();
   await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
   await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
   expect(
-    (await sendMessageAndWaitForCompletion(page, `Destination seed dest-${label}`)).ok(),
+    (await sendMessageAndWaitForCompletion(page, `Destination seed ${marker} ${label}`)).ok(),
   ).toBeTruthy();
 
-  const row = page
-    .getByTestId('convo-item')
-    .filter({ hasText: `dest-${label}` })
-    .first();
+  const row = page.getByTestId('convo-item').filter({ hasText: marker }).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
-  return row;
+  return { row, marker };
 }
 
 /** Opens a new chat on the Assistants endpoint, ready for a slow run. */
@@ -119,7 +130,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('navigate-away');
-    const destinationRow = await seedDestinationChat(page, label);
+    const { row: destinationRow, marker } = await seedDestinationChat(page, label);
     await openAssistantsNewChat(page);
     await startSlowAssistantRun(page, label);
 
@@ -142,7 +153,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     expect(abort.ok(), 'the departing run still aborts after the switch').toBeTruthy();
 
     /** The destination transcript is the seeded turn, not the departed run. */
-    await expect(messagesView(page).getByText(`dest-${label}`)).toBeVisible();
+    await expect(messagesView(page).getByText(marker)).toBeVisible();
   });
 
   test('a new chat opened mid-run is idle immediately @scenario:pane-settle-new-chat', async ({
@@ -173,7 +184,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('late-abort');
-    const destinationRow = await seedDestinationChat(page, label);
+    const { row: destinationRow } = await seedDestinationChat(page, label);
     await openAssistantsNewChat(page);
     await startSlowAssistantRun(page, label);
 
@@ -234,7 +245,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('resumable');
-    const destinationRow = await seedDestinationChat(page, label);
+    const { row: destinationRow, marker } = await seedDestinationChat(page, label);
 
     await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
     await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
@@ -260,6 +271,6 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     /** The resumable twin already settles its flags on detach; the destination
      *  stays idle and its transcript intact. */
     await expect(stopButton(page)).toBeHidden({ timeout: 10_000 });
-    await expect(messagesView(page).getByText(`dest-${label}`)).toBeVisible();
+    await expect(messagesView(page).getByText(marker)).toBeVisible();
   });
 });
