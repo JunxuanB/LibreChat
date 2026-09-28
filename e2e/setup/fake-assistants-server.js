@@ -16,6 +16,9 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const assistants = new Map();
 const threads = new Map();
 const runs = new Map();
+/** Run steps by run id: the abort path lists them to reconcile the partial
+ *  response against the thread's messages. */
+const steps = new Map();
 const requests = [];
 
 function now() {
@@ -172,8 +175,9 @@ const SLOW_MARKER = /E2E_SLOW_ASSISTANT:([A-Za-z0-9._-]+)/;
 const SLOW_CHUNKS = 30;
 const SLOW_INTERVAL_MS = Number(process.env.E2E_ASSISTANTS_SLOW_INTERVAL_MS || 400);
 /** Deterministic cancel latency: the pane-flag window a spec exercises must
- *  not depend on how fast the fixture answers a cancel. */
-const CANCEL_DELAY_MS = Number(process.env.E2E_ASSISTANTS_CANCEL_DELAY_MS || 1000);
+ *  not depend on how fast the fixture answers a cancel. Long enough that a
+ *  spec can assert the pane settled while the abort is still in flight. */
+const CANCEL_DELAY_MS = Number(process.env.E2E_ASSISTANTS_CANCEL_DELAY_MS || 2500);
 
 function latestUserText(thread) {
   const latestUserMessage = [...thread.messages]
@@ -336,6 +340,7 @@ function sendAssistantStream(res, { assistant, thread }) {
   const slow = slowRun(thread);
   if (slow == null) {
     runs.set(runId, completedRun);
+    steps.set(runId, [completedStep]);
     thread.messages.push(message);
     sendEvent('thread.run.created', createdRun);
     sendEvent('thread.run.step.created', createdStep);
@@ -359,6 +364,7 @@ function sendAssistantStream(res, { assistant, thread }) {
     status: 'in_progress',
   });
   runs.set(runId, inProgressRun);
+  steps.set(runId, [createdStep]);
   thread.messages.push(message);
   const timers = [];
   const stream = { res, timers, message, delivered: '' };
@@ -381,6 +387,7 @@ function sendAssistantStream(res, { assistant, thread }) {
     setTimeout(
       () => {
         runs.set(runId, completedRun);
+        steps.set(runId, [completedStep]);
         activeStreams.delete(runId);
         sendEvent('thread.message.completed', message);
         sendEvent('thread.run.step.completed', completedStep);
@@ -453,6 +460,7 @@ const server = http.createServer(async (req, res) => {
     assistants.clear();
     threads.clear();
     runs.clear();
+    steps.clear();
     requests.length = 0;
     sendJson(res, 200, { ok: true });
     return;
@@ -621,6 +629,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendJson(res, 200, run);
+      return;
+    }
+
+    const runStepsPath = pathMatch(url.pathname, /^\/v1\/threads\/([^/]+)\/runs\/([^/]+)\/steps$/);
+    if (runStepsPath && req.method === 'GET') {
+      const [threadId, runId] = runStepsPath;
+      const run = runs.get(runId);
+      if (!run || run.thread_id !== threadId) {
+        sendError(res, 404, `No run found with id '${runId}'`);
+        return;
+      }
+      sendJson(res, 200, listResponse(steps.get(runId) ?? []));
       return;
     }
 
