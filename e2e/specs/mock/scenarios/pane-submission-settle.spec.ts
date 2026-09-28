@@ -11,6 +11,7 @@ import {
   MOCK_ENDPOINTS,
 } from '../helpers';
 import { withMongo } from '../db';
+import { ensureSidebarOnScreen } from './pinned.helpers';
 import { getE2EUser } from '../../../setup/user';
 
 /**
@@ -50,7 +51,8 @@ async function selectAssistantsEndpoint(page: Page) {
   await page.getByRole('option', { name: 'Assistants', exact: true }).click();
   /** The endpoint's model list arrives asynchronously, and the spec-prioritized
    *  menu stays open (with a combobox overlay above the composer) until a model
-   *  commits the selection. */
+   *  commits the selection. The send itself proves the endpoint stuck: it goes
+   *  out on the Assistants chat route. */
   const modelOption = page.getByRole('option', { name: ASSISTANTS_MODEL, exact: true });
   if (await modelOption.isVisible({ timeout: 10_000 }).catch(() => false)) {
     await modelOption.click();
@@ -58,7 +60,6 @@ async function selectAssistantsEndpoint(page: Page) {
     await page.keyboard.press('Escape');
   }
   await expect(page.getByRole('option')).toHaveCount(0, { timeout: 10_000 });
-  await expect(trigger).toContainText(/Assistants|gpt-4o-mini/);
 }
 
 /** The Assistants endpoint needs an assistant on the account before a new
@@ -124,6 +125,7 @@ async function seedDestinationChat(page: Page): Promise<{ row: Locator; title: s
   });
 
   await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
+  await ensureSidebarOnScreen(page);
   const row = page.getByTestId('convo-item').filter({ hasText: title }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
   return { row, title };
@@ -158,6 +160,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
         return response;
       });
 
+    await ensureSidebarOnScreen(page);
     await destinationRow.click();
 
     /** The switch settles the pane: the destination transcript must not show a
@@ -207,6 +210,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
 
     const abortSettled = page.waitForResponse(isAssistantsAbort, { timeout: 20_000 });
 
+    await ensureSidebarOnScreen(page);
     await destinationRow.click();
     await expect(stopButton(page)).toBeHidden({ timeout: 10_000 });
 
@@ -283,6 +287,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     expect(admission.ok()).toBeTruthy();
     await expect(stopButton(page)).toBeVisible({ timeout: 15_000 });
 
+    await ensureSidebarOnScreen(page);
     await destinationRow.click();
 
     /** The resumable twin already settles its flags on detach; the destination
