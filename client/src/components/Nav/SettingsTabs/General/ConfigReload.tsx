@@ -69,7 +69,7 @@ export default function ConfigReload() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <Label id="config-reload-label">{localize('com_ui_config_reload_title')}</Label>
-          <p className="text-text-secondary text-sm">
+          <p className="text-sm text-text-secondary">
             {localize('com_ui_config_reload_description')}
           </p>
         </div>
@@ -87,7 +87,7 @@ export default function ConfigReload() {
         </Button>
       </div>
       {errorKey && (
-        <div role="alert" className="text-text-destructive space-y-1 text-sm">
+        <div role="alert" className="space-y-1 text-sm text-text-destructive">
           <p>{localize(errorKey)}</p>
           {validationErrors && validationErrors.length > 0 && (
             <ul className="list-inside list-disc">
@@ -108,20 +108,20 @@ export default function ConfigReload() {
               {localize('com_ui_config_reload_propagation_error')}
             </p>
           )}
-          <ul className="border-border-light divide-border-light max-h-48 divide-y overflow-auto rounded-lg border">
+          <ul className="max-h-48 divide-y divide-border-light overflow-auto rounded-lg border border-border-light">
             {report.sections.map(({ section, status, restartRequired, restartRequiredPaths }) => (
               <li
                 key={section}
                 className="flex flex-wrap items-start justify-between gap-2 px-3 py-2"
               >
-                <span className="text-text-primary break-all">{section}</span>
-                <span className="text-text-secondary text-right">
+                <span className="break-all text-text-primary">{section}</span>
+                <span className="text-right text-text-secondary">
                   {localize(SECTION_LABELS[status])}
                   {restartRequired && status !== 'restart_required' && (
                     <span> · {localize('com_ui_config_reload_restart_required')}</span>
                   )}
                   {restartRequiredPaths && restartRequiredPaths.length > 0 && (
-                    <span className="block text-xs break-all">
+                    <span className="block break-all text-xs">
                       {restartRequiredPaths.join(', ')}
                     </span>
                   )}
