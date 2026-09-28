@@ -51,32 +51,16 @@ const isAssistantsAbort = (response: Response) => {
   );
 };
 
-/** Brings the sidebar on screen for narrow viewports, where the drawer stays
- *  mounted but slid out of view and row taps would land beside it. Adapted from
- *  the sidebar-scroll spec: it measures the chat-history region rather than the
- *  Pinned section, which only exists when something is pinned. */
+/** Brings the sidebar on screen. Desktop keeps the panel open and renders no
+ *  opener at all; a narrow viewport keeps the drawer closed until the header's
+ *  opener is used, and nothing inside it is visible or tappable before that. */
 async function openSidebar(page: Page): Promise<void> {
   const historyRegion = page.getByRole('region', { name: 'Chat History' });
-  const placement = async (): Promise<'unlaid' | 'on-screen' | 'off-screen'> => {
-    const box = await historyRegion.boundingBox();
-    if (box === null) {
-      return 'unlaid';
-    }
-    return box.x >= 0 ? 'on-screen' : 'off-screen';
-  };
-  await expect(historyRegion).toBeVisible({ timeout: 30_000 });
-  await expect.poll(placement, { timeout: 30_000 }).not.toBe('unlaid');
-  for (let attempt = 0; attempt < 3 && (await placement()) === 'off-screen'; attempt++) {
-    const opener = page.getByRole('button', { name: 'Open sidebar' }).first();
-    if (await opener.isVisible().catch(() => false)) {
-      await opener.click();
-    }
-    await expect
-      .poll(placement, { timeout: 10_000 })
-      .toBe('on-screen')
-      .catch(() => undefined);
+  const opener = page.getByRole('button', { name: 'Open sidebar' }).first();
+  if (await opener.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await opener.click();
   }
-  await expect.poll(placement, { timeout: 15_000 }).toBe('on-screen');
+  await expect(historyRegion).toBeVisible({ timeout: 30_000 });
 }
 
 /** The Assistants entry opens a submenu whose options are the account's
@@ -218,6 +202,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
      *  rather than /c/new; what matters is that the pane left the departing
      *  conversation and reports idle there. */
     const departingUrl = page.url();
+    await openSidebar(page);
     await page.getByRole('link', { name: 'New chat' }).first().click();
 
     await expect(page).not.toHaveURL(departingUrl, { timeout: 10_000 });
