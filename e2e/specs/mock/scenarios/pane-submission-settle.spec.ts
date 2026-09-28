@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { expect, test } from '@playwright/test';
 import type { Locator, Page, Response } from '@playwright/test';
 import {
@@ -5,11 +6,12 @@ import {
   messagesView,
   requestJson,
   selectMockEndpoint,
-  sendMessageAndWaitForCompletion,
   uniqueName,
   NEW_CHAT_PATH,
   MOCK_ENDPOINTS,
 } from '../helpers';
+import { withMongo } from '../db';
+import { getE2EUser } from '../../../setup/user';
 
 /**
  * Leaving a conversation that has a classic (Assistants) SSE run in flight
@@ -46,11 +48,17 @@ async function selectAssistantsEndpoint(page: Page) {
   const trigger = page.getByRole('button', { name: 'Select a model' }).first();
   await trigger.click();
   await page.getByRole('option', { name: 'Assistants', exact: true }).click();
+  /** The endpoint's model list arrives asynchronously, and the spec-prioritized
+   *  menu stays open (with a combobox overlay above the composer) until a model
+   *  commits the selection. */
   const modelOption = page.getByRole('option', { name: ASSISTANTS_MODEL, exact: true });
-  if (await modelOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+  if (await modelOption.isVisible({ timeout: 10_000 }).catch(() => false)) {
     await modelOption.click();
+  } else {
+    await page.keyboard.press('Escape');
   }
-  await expect(trigger).not.toHaveText('Select a model');
+  await expect(page.getByRole('option')).toHaveCount(0, { timeout: 10_000 });
+  await expect(trigger).toContainText(/Assistants|gpt-4o-mini/);
 }
 
 /** The Assistants endpoint needs an assistant on the account before a new
@@ -89,28 +97,36 @@ async function startSlowAssistantRun(page: Page, label: string) {
   await expect(stopButton(page)).toBeVisible({ timeout: 15_000 });
 }
 
-/** A second conversation with one completed turn, so a real sidebar row and a
- *  warm transcript exist to navigate to mid-run. Returns the row locator and
- *  the marker the row and transcript both carry. */
-/** Sidebar rows show the conversation title, which truncates the first
- *  message far sooner than uniqueName's timestamp, so the destination's
- *  marker is short enough to survive inside it. */
-const shortMarker = () => `dest-${Math.random().toString(36).slice(2, 8)}`;
+/** A second conversation with a titled sidebar row, inserted the way the
+ *  pinned fixtures seed theirs: rows carry the conversation title, and a
+ *  conversation created through the composer keeps "New Chat" for its title
+ *  under the mock endpoints (they disable title generation). */
+async function seedDestinationChat(page: Page): Promise<{ row: Locator; title: string }> {
+  const title = `Destination dest-${Math.random().toString(36).slice(2, 8)}`;
+  const conversationId = randomUUID();
+  const userEmail = getE2EUser().email;
+  const now = new Date();
+  await withMongo(async (db) => {
+    const user = await db.collection('users').findOne({ email: userEmail });
+    if (!user) {
+      throw new Error(`E2E seed: user "${userEmail}" not found`);
+    }
+    await db.collection('conversations').insertOne({
+      conversationId,
+      title,
+      user: String(user._id),
+      endpoint: 'openAI',
+      isArchived: false,
+      createdAt: now,
+      updatedAt: now,
+      __v: 0,
+    });
+  });
 
-async function seedDestinationChat(
-  page: Page,
-  label: string,
-): Promise<{ row: Locator; marker: string }> {
-  const marker = shortMarker();
   await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
-  await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
-  expect(
-    (await sendMessageAndWaitForCompletion(page, `Destination seed ${marker} ${label}`)).ok(),
-  ).toBeTruthy();
-
-  const row = page.getByTestId('convo-item').filter({ hasText: marker }).first();
-  await expect(row).toBeVisible({ timeout: 10_000 });
-  return { row, marker };
+  const row = page.getByTestId('convo-item').filter({ hasText: title }).first();
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  return { row, title };
 }
 
 /** Opens a new chat on the Assistants endpoint, ready for a slow run. */
@@ -130,7 +146,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('navigate-away');
-    const { row: destinationRow, marker } = await seedDestinationChat(page, label);
+    const { row: destinationRow } = await seedDestinationChat(page);
     await openAssistantsNewChat(page);
     await startSlowAssistantRun(page, label);
 
@@ -152,8 +168,9 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     const abort = await abortSettled;
     expect(abort.ok(), 'the departing run still aborts after the switch').toBeTruthy();
 
-    /** The destination transcript is the seeded turn, not the departed run. */
-    await expect(messagesView(page).getByText(marker)).toBeVisible();
+    /** The destination stays itself: the departed run's streamed chunks never
+     *  land in its transcript. */
+    await expect(messagesView(page).getByText(/slow-/)).toHaveCount(0);
   });
 
   test('a new chat opened mid-run is idle immediately @scenario:pane-settle-new-chat', async ({
@@ -184,7 +201,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('late-abort');
-    const { row: destinationRow } = await seedDestinationChat(page, label);
+    const { row: destinationRow } = await seedDestinationChat(page);
     await openAssistantsNewChat(page);
     await startSlowAssistantRun(page, label);
 
@@ -245,7 +262,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('resumable');
-    const { row: destinationRow, marker } = await seedDestinationChat(page, label);
+    const { row: destinationRow } = await seedDestinationChat(page);
 
     await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
     await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
@@ -269,8 +286,8 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     await destinationRow.click();
 
     /** The resumable twin already settles its flags on detach; the destination
-     *  stays idle and its transcript intact. */
+     *  stays idle and the departed run's chunks never reach its transcript. */
     await expect(stopButton(page)).toBeHidden({ timeout: 10_000 });
-    await expect(messagesView(page).getByText(marker)).toBeVisible();
+    await expect(messagesView(page).getByText(/chunk-|slow-/)).toHaveCount(0);
   });
 });
