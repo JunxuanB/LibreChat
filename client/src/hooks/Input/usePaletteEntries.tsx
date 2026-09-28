@@ -15,13 +15,17 @@ import {
   AuthType,
   Permissions,
   ArtifactModes,
+  PermissionBits,
   PermissionTypes,
+  hasPermissions,
   SkillsScope,
   isEphemeralAgentId,
   defaultAgentCapabilities,
   resolveAgentSkillsScope,
 } from 'librechat-data-provider';
 import type { TSkillSummary, TToolFavoriteType } from 'librechat-data-provider';
+import type { ItemStatus } from '~/components/SidePanel/Agents/Tools/items/types';
+import type { TranslationKeys } from '~/hooks/useLocalize';
 import {
   useHasAccess,
   useAuthContext,
@@ -29,6 +33,7 @@ import {
   useAgentCapabilities,
   useSkillActiveState,
 } from '~/hooks';
+import { getStatusColor, getStatusTextKey } from '~/components/MCP/mcpServerUtils';
 import { filterSkillsForPopover } from '~/components/Chat/Input/SkillsCommand';
 import { useAgentsMapContext, useBadgeRowContext } from '~/Providers';
 import { useSkillsInfiniteQuery } from '~/data-provider';
@@ -73,6 +78,15 @@ export interface PaletteEntry {
   /** Refinements of this tool, rendered as inline pills on the row while it is
    *  on. Not separately favouritable: they only exist within the parent. */
   modes?: PaletteMode[];
+  /** The catalog record behind a skill row, for the "Show all" dialog's card. */
+  skill?: TSkillSummary;
+  /** A server's own branding, for the "Show all" dialog's card. */
+  iconUrl?: string;
+  /** Authored (skill) or owned (MCP server) by the signed-in user, for the
+   *  "Show all" dialog's "Made by you" view. */
+  ownedByUser?: boolean;
+  /** Connection state of an MCP server, drawn on the row and its card. */
+  status?: ItemStatus;
 }
 
 /** Accumulates skill pages so client-side search covers the full catalog. */
@@ -440,6 +454,8 @@ export default function usePaletteEntries({
           active: staged.has(skill.name),
           pinned: false,
           onSelect: () => toggleSkill(skill.name),
+          skill,
+          ownedByUser: user?.id != null && skill.author === user.id,
         });
       }
       /* Skills staged by name (the slash command, or a draft restored before
@@ -470,8 +486,21 @@ export default function usePaletteEntries({
       toggleServerSelection,
       connectionStatus,
       initializeServer,
+      isInitializing,
       getServerStatusIconProps,
     } = mcpServerManager ?? {};
+    /* The same vocabulary as the MCP menu this palette replaced. Its
+       "connecting" string takes the server name, which the row already shows. */
+    const getServerStatus = (serverName: string): ItemStatus => {
+      const key = getStatusTextKey(serverName, connectionStatus, isInitializing);
+      return {
+        label:
+          key === 'com_nav_mcp_status_connecting'
+            ? localize('com_ui_connecting')
+            : localize(key as TranslationKeys),
+        tone: getStatusColor(serverName, connectionStatus, isInitializing),
+      };
+    };
     if (toolsEnabled && canUseMcp && selectableServers) {
       const selected = new Set(mcpValues ?? []);
       const syntheticClick = {
@@ -564,6 +593,11 @@ export default function usePaletteEntries({
           pinned: false,
           onSelect: selectServer,
           modes: getServerModes(),
+          iconUrl: server.config?.iconPath,
+          /* Only the owner role carries Share, so it separates a server this
+             user made from one merely shared with them. */
+          ownedByUser: hasPermissions(server.effectivePermissions, PermissionBits.SHARE),
+          status: getServerStatus(server.serverName),
         });
       }
     }
@@ -591,5 +625,6 @@ export default function usePaletteEntries({
     artifactsEnabled,
     canUseFileSearch,
     fileSearchEnabled,
+    user?.id,
   ]);
 }
