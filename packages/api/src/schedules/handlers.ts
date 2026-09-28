@@ -30,6 +30,7 @@ export interface SchedulesHandlersDeps {
   preflightMCP: ScheduleMCPPreflight;
   methods: ScheduleMethods;
   getLimits: (user?: ScheduleUserContext) => Promise<ScheduleLimits>;
+  listOboGrants: (userId: string) => Promise<Record<string, string[]>>;
   /** Agent existence + VIEW access for the requesting user. */
   canViewAgent: (agentId: string, req: ServerRequest) => Promise<boolean>;
   /** Whether the requesting user owns this chat project. Projects are user-owned,
@@ -573,20 +574,27 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
 
   async function listSchedules(req: ServerRequest, res: Response): Promise<void> {
     const user = requestUser(req);
-    // Three independent, user-scoped reads; the generating runs ride alongside so
-    // the list can name the chat each one is producing without a second round trip
-    // per card.
-    const [schedules, limits, inFlight] = await Promise.all([
+    // Independent, user-scoped reads; one indexed grant-name projection serves
+    // all cards, including grants removed from the current operator allowlist.
+    const [schedules, limits, inFlight, enrolled] = await Promise.all([
       deps.methods.getSchedulesByUser(user.id),
       deps.getLimits(user),
       deps.methods.getActiveRunsForUser(user.id, LISTED_RUN_STATUSES),
+      deps.listOboGrants(user.id).catch((error: unknown) => {
+        logger.warn('[schedules] unable to list stored OBO grant names', error);
+        return null;
+      }),
     ]);
     const inFlightBySchedule_ = inFlightBySchedule(inFlight);
+    const oboGrants: Record<string, string[]> = Object.create(null);
+    const projected = schedules.map((schedule) => {
+      if (enrolled?.[schedule.id]?.length) oboGrants[schedule.id] = enrolled[schedule.id];
+      return toWireSchedule(schedule, limits, inFlightBySchedule_.get(schedule.id));
+    });
     retryDeferredDeletions(user.id);
     res.json({
-      schedules: schedules.map((schedule) =>
-        toWireSchedule(schedule, limits, inFlightBySchedule_.get(schedule.id)),
-      ),
+      schedules: projected,
+      ...(enrolled && { oboGrants }),
       limits: {
         maxPerUser: limits.maxPerUser,
         // minIntervalMinutes ships with the list so the dialog can refuse a cadence

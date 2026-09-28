@@ -52,11 +52,14 @@ const schedule = {
   failureCount: 0,
 } as TSchedule;
 
-function renderCard() {
+function renderCard(oboServers = ['Files'], oboGrants: string[] = []) {
   function Wrapper({ children }: { children: ReactNode }) {
     return createElement(MemoryRouter, null, createElement(ToastProvider, null, children));
   }
-  return render(<ScheduleCard schedule={schedule} oboServers={['Files']} />, { wrapper: Wrapper });
+  return render(
+    <ScheduleCard schedule={schedule} oboServers={oboServers} oboGrants={oboGrants} />,
+    { wrapper: Wrapper },
+  );
 }
 
 describe('saved schedule OBO grant actions', () => {
@@ -89,8 +92,22 @@ describe('saved schedule OBO grant actions', () => {
 
   it('can revoke only the specified schedule and server', async () => {
     const user = userEvent.setup();
-    renderCard();
+    renderCard(['Files'], ['Files']);
     await user.click(screen.getByRole('button', { name: 'com_ui_schedule_obo_revoke' }));
     expect(mockRevoke).toHaveBeenCalledWith({ id: 'sched-1', server: 'Files' });
+  });
+
+  it('keeps an enrolled grant revocable when policy no longer allows new enrollment', async () => {
+    const user = userEvent.setup();
+    renderCard([], ['Files']);
+    expect(screen.queryByRole('button', { name: 'com_ui_schedule_obo_authorize' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'com_ui_schedule_obo_revoke' }));
+    expect(mockRevoke).toHaveBeenCalledWith({ id: 'sched-1', server: 'Files' });
+    expect(mockInspect).not.toHaveBeenCalled();
+  });
+
+  it('never shows revoke for a server with no stored grant', () => {
+    renderCard(['Files']);
+    expect(screen.queryByRole('button', { name: 'com_ui_schedule_obo_revoke' })).toBeNull();
   });
 });

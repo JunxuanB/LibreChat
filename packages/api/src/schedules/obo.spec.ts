@@ -65,7 +65,8 @@ function harness() {
     ): Promise<{
       access_token: string;
       refresh_token?: string;
-      expires_in: number;
+      expires_in?: number;
+      refresh_token_expires_in?: number;
     }> =>
       grantType === 'refresh_token'
         ? { access_token: 'fresh-after-12h', refresh_token: 'rotated-refresh', expires_in: 3600 }
@@ -203,6 +204,73 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(tokenStore.getAll().find((t) => t.type === 'mcp_oauth_refresh')?.token).toBe(
       'enc:rotated-refresh',
     );
+  });
+
+  it('accepts JWT exp without expires_in on enrollment and rotating renewal', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    const initial = jwt.sign({ exp: Math.floor(Date.now() / 1000) + 3600 }, 'test-signature');
+    const renewed = jwt.sign({ exp: Math.floor(Date.now() / 1000) + 7200 }, 'test-signature');
+    requestGrant
+      .mockResolvedValueOnce({ access_token: initial, refresh_token: 'original' })
+      .mockResolvedValueOnce({ access_token: renewed, refresh_token: 'rotated' });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    const storedAccess = tokenStore.getAll().find((record) => record.type === 'mcp_oauth')!;
+    expect(storedAccess.expiresAt.getTime() - Date.now()).toBeGreaterThan(3500_000);
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).resolves.toMatchObject({
+      scheduledObo: true,
+      access_token: renewed,
+    });
+    expect(tokenStore.getAll().find((record) => record.type === 'mcp_oauth_refresh')?.token).toBe(
+      'enc:rotated',
+    );
+    expect(
+      tokenStore
+        .getAll()
+        .find((record) => record.type === 'mcp_oauth')!
+        .expiresAt.getTime() - Date.now(),
+    ).toBeGreaterThan(7100_000);
+  });
+
+  it('preserves provider refresh expiry on enrollment and after token rotation', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    requestGrant
+      .mockResolvedValueOnce({
+        access_token: 'first',
+        refresh_token: 'short-lived',
+        expires_in: 3600,
+        refresh_token_expires_in: 120,
+      })
+      .mockResolvedValueOnce({
+        access_token: 'second',
+        refresh_token: 'long-lived',
+        expires_in: 3600,
+        refresh_token_expires_in: 2 * 365 * 24 * 3600,
+      });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    const refresh = tokenStore.getAll().find((record) => record.type === 'mcp_oauth_refresh')!;
+    expect(refresh.expiresAt.getTime() - Date.now()).toBeLessThan(121_000);
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    await provider({ forceRefresh: true });
+    const rotated = tokenStore.getAll().find((record) => record.type === 'mcp_oauth_refresh')!;
+    expect(rotated.token).toBe('enc:long-lived');
+    expect(rotated.expiresAt.getTime() - Date.now()).toBeGreaterThan(365 * 24 * 3600_000);
+  });
+
+  it('lists retained grant names after policy removal without exposing secrets or other owners', async () => {
+    const { service, tokenStore, row, setAllowed } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    setAllowed([]);
+    expect(await service.listEnrolled(user.id)).toEqual({ 'sched-1': ['Files'] });
+    expect(await service.listEnrolled('other')).toEqual({});
+    expect(JSON.stringify(await service.listEnrolled(user.id))).not.toContain(
+      'server-scoped-refresh',
+    );
+    await service.revoke(user.id, row.id, 'Files');
+    expect(tokenStore.getAll()).toEqual([]);
+    expect(await service.listEnrolled(user.id)).toEqual({});
   });
 
   it('rechecks schedule, agent, scope and allowlist at every use; revoke makes future use impossible', async () => {

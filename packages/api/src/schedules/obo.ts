@@ -1,6 +1,11 @@
 import { Permissions, PermissionTypes } from 'librechat-data-provider';
 import { logger, getTenantId, isRuntimeDisabled } from '@librechat/data-schemas';
-import type { IUser, TokenMethods, AppConfig } from '@librechat/data-schemas';
+import type {
+  IUser,
+  TokenMethods,
+  AppConfig,
+  ScheduledOboGrantMethods,
+} from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { SessionOpenIDTokens } from '../auth/openid/types';
 import type { HostUpstreamTokenProviderResolver } from './mcp';
@@ -14,6 +19,7 @@ import type { ScheduleMCPPreflight } from './types';
 import type { ServerRequest } from '../types/http';
 import {
   MCPTokenStorage,
+  getJwtAccessTokenExpiry,
   getMCPOAuthLeaseId,
   MCPTokenRefreshUnavailableError,
   ReauthenticationRequiredError,
@@ -52,10 +58,11 @@ interface GrantResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  refresh_token_expires_in?: number;
   scope?: string;
 }
 interface GrantDeps {
-  tokens: Pick<TokenMethods, 'findToken' | 'createToken' | 'updateToken' | 'deleteTokens'>;
+  tokens: TokenMethods & ScheduledOboGrantMethods;
   flowManager: Pick<FlowStateManager<MCPOAuthTokens | null>, 'getLeaseGeneration' | 'acquireLease'>;
   getUser: (id: string) => Promise<IUser | null>;
   getSchedule: (id: string, userId: string) => Promise<ScheduleGrantRow | null>;
@@ -109,7 +116,11 @@ function missingGrant(): OboTokenResolutionError {
 }
 
 function expiresInSeconds(tokens: GrantResponse): number {
-  const value = tokens.expires_in;
+  let value = tokens.expires_in;
+  if (value == null) {
+    const jwtExpiry = getJwtAccessTokenExpiry(tokens.access_token);
+    value = jwtExpiry == null ? undefined : Math.floor((jwtExpiry - Date.now()) / 1000);
+  }
   if (!Number.isSafeInteger(value) || value == null || value <= 30) {
     throw new MCPTokenRefreshUnavailableError('schedule-obo', new Error('No usable token expiry'));
   }
@@ -131,6 +142,7 @@ export interface ScheduledOboGrantService {
     accessToken: string,
   ) => Promise<void>;
   revoke: (userId: string, scheduleId: string, serverName: string) => Promise<void>;
+  listEnrolled: (userId: string) => Promise<Record<string, string[]>>;
   enrollFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
   describeFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
   revokeFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
@@ -363,6 +375,9 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       return {
         access_token: next.access_token,
         ...(next.refresh_token ? { refresh_token: next.refresh_token } : {}),
+        ...(next.refresh_token && next.refresh_token_expires_in != null
+          ? { refresh_token_expires_in: next.refresh_token_expires_in }
+          : {}),
         token_type: 'Bearer',
         obtained_at: Date.now(),
         expires_at: Date.now() + expiresInSeconds(next) * 1000,
@@ -529,6 +544,9 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
               refresh_token: response.refresh_token,
               token_type: 'Bearer',
               expires_in: expiresIn,
+              ...(response.refresh_token_expires_in != null && {
+                refresh_token_expires_in: response.refresh_token_expires_in,
+              }),
             },
             clientInfo,
             metadata,
@@ -591,6 +609,23 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     } finally {
       release();
     }
+  };
+
+  const listEnrolled = async (userId: string): Promise<Record<string, string[]>> => {
+    const identifiers = await tokens.listScheduledOboGrantIdentifiers(userId);
+    const grants: Record<string, string[]> = Object.create(null);
+    const prefix = 'mcp:schedule-obo:';
+    const suffix = ':refresh';
+    for (const identifier of identifiers) {
+      if (!identifier.startsWith(prefix) || !identifier.endsWith(suffix)) continue;
+      const name = identifier.slice(prefix.length, -suffix.length);
+      const separator = name.indexOf(':');
+      if (separator < 1) continue;
+      const scheduleId = name.slice(0, separator);
+      const server = name.slice(separator + 1);
+      if (server) (grants[scheduleId] ??= []).push(server);
+    }
+    return grants;
   };
 
   const enrollFromRequest = async (req: ServerRequest, res: Response): Promise<void> => {
@@ -729,6 +764,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     resolve,
     enroll,
     revoke,
+    listEnrolled,
     enrollFromRequest,
     describeFromRequest,
     revokeFromRequest,
@@ -759,6 +795,7 @@ export function createLazyScheduledOboGrantService(
     resolve: (...args) => get().resolve(...args),
     enroll: (...args) => get().enroll(...args),
     revoke: (...args) => get().revoke(...args),
+    listEnrolled: (...args) => get().listEnrolled(...args),
     enrollFromRequest: (...args) => get().enrollFromRequest(...args),
     describeFromRequest: (...args) => get().describeFromRequest(...args),
     revokeFromRequest: (...args) => get().revokeFromRequest(...args),

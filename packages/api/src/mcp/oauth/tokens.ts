@@ -169,7 +169,7 @@ export const getMCPOAuthRefreshFlightLeaseId = (
  * not verified — the protected resource server validates the token; here we
  * only read its self-declared expiry to avoid a lossy default.
  */
-function getJwtAccessTokenExpiry(accessToken?: string): number | null {
+export function getJwtAccessTokenExpiry(accessToken?: string): number | null {
   if (!accessToken) {
     return null;
   }

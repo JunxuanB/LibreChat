@@ -51,6 +51,7 @@ interface ScheduleCardProps {
    *  deriving it per card is O(schedules x projects) on every project-list refresh. */
   projectName?: string | null;
   oboServers?: string[];
+  oboGrants?: string[];
 }
 
 type StatusTone = 'neutral' | 'success' | 'warning' | 'error';
@@ -82,6 +83,7 @@ export default function ScheduleCard({
   schedule,
   projectName,
   oboServers = [],
+  oboGrants = [],
 }: ScheduleCardProps) {
   const localize = useLocalize();
   const navigate = useNavigate();
@@ -126,6 +128,7 @@ export default function ScheduleCard({
     onError: () =>
       showToast({ message: localize('com_ui_schedule_obo_revoke_failed'), status: 'error' }),
   });
+  const oboTargets = [...new Set([...oboServers, ...oboGrants])];
   const canWrite = useHasAccess({
     permissionType: PermissionTypes.SCHEDULES,
     permission: Permissions.CREATE,
@@ -340,32 +343,40 @@ export default function ScheduleCard({
           )}
         </div>
       )}
-      {canWrite && oboServers.length > 0 && (
+      {canWrite && oboTargets.length > 0 && (
         <div className="mt-2 space-y-1">
           <p className="text-xs text-text-secondary">
             {localize('com_ui_schedule_obo_description')}
           </p>
-          {oboServers.map((server) => (
+          {oboTargets.map((server) => (
             <div key={server} className="flex items-center gap-2 text-xs">
               <span className="min-w-0 flex-1 truncate text-text-primary">{server}</span>
-              <button
-                type="button"
-                disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
-                className="rounded border border-border-light px-2 py-1 text-text-primary focus-visible:ring-2 focus-visible:ring-border-heavy"
-                onClick={() => {
-                  void inspectObo(server);
-                }}
-              >
-                {localize('com_ui_schedule_obo_authorize')}
-              </button>
-              <button
-                type="button"
-                disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
-                className="rounded border border-border-light px-2 py-1 text-text-primary focus-visible:ring-2 focus-visible:ring-border-heavy"
-                onClick={() => revokeObo.mutate({ id: schedule.id, server })}
-              >
-                {localize('com_ui_schedule_obo_revoke')}
-              </button>
+              {oboServers.includes(server) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
+                  className="h-auto min-h-8 px-2 py-1 text-xs"
+                  onClick={() => {
+                    void inspectObo(server);
+                  }}
+                >
+                  {localize('com_ui_schedule_obo_authorize')}
+                </Button>
+              )}
+              {oboGrants.includes(server) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
+                  className="h-auto min-h-8 px-2 py-1 text-xs"
+                  onClick={() => revokeObo.mutate({ id: schedule.id, server })}
+                >
+                  {localize('com_ui_schedule_obo_revoke')}
+                </Button>
+              )}
             </div>
           ))}
         </div>

@@ -187,6 +187,7 @@ function makeCreateDeps(over: Partial<SchedulesHandlersDeps> = {}): SchedulesHan
       requireProject: false,
     }),
     preflightMCP: jest.fn().mockResolvedValue([]),
+    listOboGrants: jest.fn(async () => ({})),
     canViewAgent: async () => true,
     filterOwnedFileIds: async (ids: string[]) => ids,
     markFilesUsed: async () => undefined,
@@ -805,6 +806,59 @@ describe('in-flight run projection', () => {
   it('names the chat a generating occurrence is producing', async () => {
     const { schedules } = await listWith([run({ conversationId: 'convo-1' })]);
     expect(schedules[0].inFlight).toEqual([{ conversationId: 'convo-1' }]);
+  });
+
+  it('exposes owner-scoped grant names even after allowlist removal, without orphaned schedules', async () => {
+    const deps = makeCreateDeps({
+      listOboGrants: jest.fn(async () => ({
+        'sched-1': ['Files'],
+        'deleted-schedule': ['Hidden'],
+      })),
+      getLimits: async () => ({
+        enabled: true,
+        maxPerUser: 10,
+        minIntervalMinutes: 60,
+        autoDisableAfterFailures: 5,
+        admissionConcurrency: 20,
+        fireConcurrency: 5,
+        mcpPreflightConcurrency: 3,
+        mcpPreflightTimeoutMs: 300_000,
+        requireProject: false,
+        oboServers: [],
+      }),
+    });
+    (deps.methods.getSchedulesByUser as jest.Mock) = jest.fn(async () => [schedule]);
+    (deps.methods.getDeletingScheduleIds as jest.Mock) = jest.fn(async () => []);
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).listSchedules(
+      { user: { id: 'user-1' } } as unknown as ServerRequest,
+      res,
+    );
+    expect(deps.listOboGrants).toHaveBeenCalledTimes(1);
+    expect(deps.listOboGrants).toHaveBeenCalledWith('user-1');
+    expect(captured.body).toMatchObject({
+      oboGrants: { 'sched-1': ['Files'] },
+      limits: expect.not.objectContaining({ oboServers: expect.anything() }),
+    });
+  });
+
+  it('keeps ordinary schedules visible when the grant-name lookup is unavailable', async () => {
+    const deps = makeCreateDeps({
+      listOboGrants: jest.fn(async () => {
+        throw new Error('grant store offline');
+      }),
+    });
+    (deps.methods.getSchedulesByUser as jest.Mock) = jest.fn(async () => [schedule]);
+    (deps.methods.getDeletingScheduleIds as jest.Mock) = jest.fn(async () => []);
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).listSchedules(
+      { user: { id: 'user-1' } } as unknown as ServerRequest,
+      res,
+    );
+    expect(captured.body).toMatchObject({
+      schedules: [expect.objectContaining({ id: 'sched-1' })],
+    });
+    expect(captured.body).not.toHaveProperty('oboGrants');
   });
 
   it('asks only for generating occurrences, never the parked ones', async () => {

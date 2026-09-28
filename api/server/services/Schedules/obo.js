@@ -16,6 +16,7 @@ module.exports = createLazyScheduledOboGrantService(() =>
   createScheduledOboGrantService({
     tokens: {
       findToken: methods.findToken,
+      listScheduledOboGrantIdentifiers: methods.listScheduledOboGrantIdentifiers,
       createToken: methods.createToken,
       updateToken: methods.updateToken,
       deleteTokens: methods.deleteTokens,

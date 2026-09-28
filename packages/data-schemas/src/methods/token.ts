@@ -5,6 +5,7 @@ import logger from '~/config/winston';
 // Factory function that takes mongoose instance and returns the methods
 export function createTokenMethods(mongoose: typeof import('mongoose')): {
   findToken: (query: TokenQuery, options?: QueryOptions) => Promise<IToken | null>;
+  listScheduledOboGrantIdentifiers: (userId: string) => Promise<string[]>;
   createToken: (tokenData: TokenCreateData) => Promise<IToken>;
   updateToken: (query: TokenQuery, updateData: TokenUpdateData) => Promise<IToken | null>;
   deleteTokens: (query: TokenQuery) => Promise<TokenDeleteResult>;
@@ -135,13 +136,31 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
     }
   }
 
+  /** Reads identifiers only; never returns encrypted credentials to the schedule list. */
+  async function listScheduledOboGrantIdentifiers(userId: string): Promise<string[]> {
+    const Token = mongoose.models.Token;
+    const grants = await Token.find(
+      { userId, type: 'mcp_oauth_refresh', identifier: /^mcp:schedule-obo:/ },
+      { _id: 0, identifier: 1 },
+    ).lean<Array<{ identifier: string }>>();
+    return grants.map((grant) => grant.identifier);
+  }
+
   // Return all methods
   return {
     findToken,
+    listScheduledOboGrantIdentifiers,
     createToken,
     updateToken,
     deleteTokens,
   };
 }
 
-export type TokenMethods = ReturnType<typeof createTokenMethods>;
+export type TokenMethods = Omit<
+  ReturnType<typeof createTokenMethods>,
+  'listScheduledOboGrantIdentifiers'
+>;
+export type ScheduledOboGrantMethods = Pick<
+  ReturnType<typeof createTokenMethods>,
+  'listScheduledOboGrantIdentifiers'
+>;

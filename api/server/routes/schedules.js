@@ -38,6 +38,7 @@ const handlers = createSchedulesHandlers({
   preflightMCP: require('~/server/services/Schedules/mcp'),
   methods,
   getLimits,
+  listOboGrants: (userId) => scheduledObo.listEnrolled(userId),
   // Full fire-equivalent access check (not mere existence): the body-based agent
   // middleware is a no-op for schedule payloads (no `endpoint: 'agents'`), so
   // enforce the same role AGENTS:USE + resource VIEW (with manage:agents bypass)

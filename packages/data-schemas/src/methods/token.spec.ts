@@ -36,6 +36,36 @@ beforeEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
+describe('scheduled OBO grant identifier projection', () => {
+  it('returns only owner-scoped refresh identifiers, never access, direct OAuth or secrets', async () => {
+    const owner = new mongoose.Types.ObjectId();
+    const other = new mongoose.Types.ObjectId();
+    const values = [
+      [owner, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_1:Files:refresh'],
+      [owner, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_2:Files:refresh'],
+      [owner, 'mcp_oauth', 'mcp:schedule-obo:sched_1:Files'],
+      [owner, 'mcp_oauth_refresh', 'mcp:direct:refresh'],
+      [other, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_3:Private:refresh'],
+    ] as const;
+    await Token.create(
+      values.map(([userId, type, identifier]) => ({
+        userId,
+        type,
+        identifier,
+        token: 'encrypted-secret',
+        expiresAt: new Date(Date.now() + 3600_000),
+      })),
+    );
+
+    const identifiers = await methods.listScheduledOboGrantIdentifiers(owner.toString());
+    expect(identifiers.sort()).toEqual([
+      'mcp:schedule-obo:sched_1:Files:refresh',
+      'mcp:schedule-obo:sched_2:Files:refresh',
+    ]);
+    expect(JSON.stringify(identifiers)).not.toContain('encrypted-secret');
+  });
+});
+
 describe('Token Methods - Detailed Tests', () => {
   describe('createToken', () => {
     test('should create a token with correct expiry time', async () => {

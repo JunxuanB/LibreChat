@@ -189,6 +189,8 @@ export type TScheduledOboTarget = { server: string; url: string; scopes: string 
 export type TSchedulesResponse = {
   schedules: TSchedule[];
   limits: TScheduleLimits;
+  /** Owner-scoped stored grants, including those no longer allowed for new enrollment. */
+  oboGrants?: Record<string, string[]>;
 };
 
 export type TScheduleRunNowResponse = {

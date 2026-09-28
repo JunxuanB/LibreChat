@@ -607,6 +607,16 @@ export class InMemoryTokenStore {
     return null;
   }) as unknown as TokenMethods['findToken'];
 
+  listScheduledOboGrantIdentifiers = async (userId: string): Promise<string[]> =>
+    [...this.tokens.values()]
+      .filter(
+        (token) =>
+          token.userId === userId &&
+          token.type === 'mcp_oauth_refresh' &&
+          token.identifier.startsWith('mcp:schedule-obo:'),
+      )
+      .map((token) => token.identifier);
+
   createToken = (async (data: {
     userId: string;
     type: string;
