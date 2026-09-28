@@ -35,6 +35,7 @@ export * from './links';
 export * from './languages';
 export * from './conversation';
 export * from './endpoints';
+export * from './reconcileModelSpecConversation';
 export * from './resources';
 export * from './configHtml';
 export * from './downloadFile';
