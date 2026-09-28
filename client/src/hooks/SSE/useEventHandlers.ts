@@ -532,12 +532,20 @@ export default function useEventHandlers({
    * flags of a newer submission: navigation frees the pane before `/abort`
    * resolves, so a re-send on the destination already owns `isSubmitting` by
    * the time the stale response arrives. A cleared pane submission (stop or
-   * navigation teardown) still settles, which is the stop contract. */
+   * navigation teardown) still settles, which is the stop contract.
+   *
+   * Abort-scoped only: a LIVE terminal event settles unconditionally, because
+   * its stream was open until that event and the pane cannot have replaced
+   * it. The resumable twin rebuilds its submission object after `created`
+   * without rewriting the pane atom, so identity fencing a live final would
+   * strand `isSubmitting` on every ordinary non-Assistants turn. */
   const settlePane = useCallback(
-    (submission: TSubmission) => {
-      const current = getPaneSubmission();
-      if (current != null && current !== submission) {
-        return;
+    (submission: TSubmission, fromAbort: boolean) => {
+      if (fromAbort) {
+        const current = getPaneSubmission();
+        if (current != null && current !== submission) {
+          return;
+        }
       }
       setIsSubmitting(false);
       setShowStopButton(false);
@@ -760,7 +768,7 @@ export default function useEventHandlers({
         );
       }
 
-      settlePane(submission);
+      settlePane(submission, true);
     },
     [setMessages, setConversation, isAddedRequest, queryClient, settlePane],
   );
@@ -980,7 +988,7 @@ export default function useEventHandlers({
   );
 
   const finalHandler = useCallback(
-    (data: TFinalResData, submission: EventSubmission) => {
+    (data: TFinalResData, submission: EventSubmission, options?: { fromAbort?: boolean }) => {
       const { requestMessage, responseMessage, conversation, runMessages } = data;
       const {
         messages,
@@ -995,7 +1003,7 @@ export default function useEventHandlers({
         // Handle early abort - aborted before any response message was saved.
         if ((data as Record<string, unknown>).earlyAbort) {
           console.log('[finalHandler] Early abort detected - no response message saved');
-          settlePane(submission);
+          settlePane(submission, options?.fromAbort === true);
 
           const currentConvoId = submissionConvo.conversationId;
           const isInitialNewConvo = isInitialNewConversationSubmission(submission);
@@ -1226,7 +1234,7 @@ export default function useEventHandlers({
           }
         }
       } finally {
-        settlePane(submission);
+        settlePane(submission, options?.fromAbort === true);
       }
     },
     [
@@ -1319,10 +1327,11 @@ export default function useEventHandlers({
               responseMessage,
             },
             submission,
+            { fromAbort: true },
           );
         } catch (error) {
           console.error('Error in finalHandler during abort:', error);
-          settlePane(submission);
+          settlePane(submission, true);
           setSubmissionStart(null);
         }
         return;
@@ -1330,7 +1339,7 @@ export default function useEventHandlers({
         const convoId = conversationId || `_${v4()}`;
         logger.log('conversation', 'Aborted conversation with minimal messages, ID: ' + convoId);
         recoverConversation(convoId, submission);
-        settlePane(submission);
+        settlePane(submission, true);
         return;
       }
 
@@ -1352,16 +1361,16 @@ export default function useEventHandlers({
         if (contentType != null && contentType.includes('application/json')) {
           const data = await response.json();
           if (response.status === 404) {
-            settlePane(submission);
+            settlePane(submission, true);
             return;
           }
           if (data.final === true) {
-            finalHandler(data, submission);
+            finalHandler(data, submission, { fromAbort: true });
           } else {
             cancelHandler(data, submission);
           }
         } else if (response.status === 204 || response.status === 200) {
-          settlePane(submission);
+          settlePane(submission, true);
         } else {
           throw new Error(
             'Unexpected response from server; Status: ' +
@@ -1386,7 +1395,7 @@ export default function useEventHandlers({
             : [...submission.messages, submission.userMessage, errorResponse],
         );
         recoverConversation(conversationId || errorResponse.conversationId || v4(), submission);
-        settlePane(submission);
+        settlePane(submission, true);
       }
     },
     [

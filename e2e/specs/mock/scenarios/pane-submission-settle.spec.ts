@@ -106,6 +106,11 @@ async function seedDestinationChat(page: Page, label: string): Promise<Locator> 
 async function openAssistantsNewChat(page: Page) {
   await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
   await ensureAssistant(page);
+  /** The assistant list query caches its (empty) first answer and does not
+   *  refetch on mount, so an assistant created after the page loaded would
+   *  leave `assistant_id` unset and the composer disabled. Reload once to
+   *  mount the queries against the now-populated list. */
+  await page.reload({ timeout: 10_000 });
   await selectAssistantsEndpoint(page);
 }
 

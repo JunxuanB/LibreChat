@@ -227,7 +227,7 @@ export default function useSSE(
       flushPendingDeltas();
       const streamKey = (submission as TSubmission | null)?.['initialResponse']?.messageId;
       if (completed.has(streamKey)) {
-        settlePane(submission);
+        settlePane(submission, true);
         setCompleted((prev) => {
           prev.delete(streamKey);
           return new Set(prev);
@@ -256,7 +256,7 @@ export default function useSSE(
         );
       } catch (error) {
         console.error('Error during abort:', error);
-        settlePane(submission);
+        settlePane(submission, true);
       }
     });
 

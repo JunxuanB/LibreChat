@@ -158,6 +158,17 @@ describe('post-abort settlement fences on the pane submission', () => {
         act(async () => {
           await result.current.handlers.abortConversation('saved', submission, [user, response]);
         }),
+      finalFromLiveStream: (liveSubmission: typeof submission) =>
+        act(async () => {
+          result.current.handlers.finalHandler(
+            {
+              conversation: { conversationId: 'saved' },
+              requestMessage: user,
+              responseMessage: response,
+            },
+            liveSubmission,
+          );
+        }),
     };
   }
 
@@ -190,5 +201,22 @@ describe('post-abort settlement fences on the pane submission', () => {
 
     expect(harness.setIsSubmitting).not.toHaveBeenCalledWith(false);
     expect(harness.setShowStopButton).not.toHaveBeenCalledWith(false);
+  });
+
+  it('settles a live final unconditionally, even for a rebuilt submission object', async () => {
+    const harness = await renderSettleHarness();
+    /** What useResumableSSE does after `created`: a spread clone of the pane's
+     *  submission with replaced message rows, never written back to the atom.
+     *  A live terminal for it must still settle the flags. */
+    const rebuilt = {
+      ...submission,
+      userMessage: { ...user, messageId: 'user-server' },
+    } as typeof submission;
+    harness.setPaneSubmission(submission);
+
+    await harness.finalFromLiveStream(rebuilt);
+
+    expect(harness.setIsSubmitting).toHaveBeenCalledWith(false);
+    expect(harness.setShowStopButton).toHaveBeenCalledWith(false);
   });
 });
