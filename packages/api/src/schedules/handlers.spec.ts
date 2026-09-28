@@ -921,6 +921,53 @@ describe('capacity pre-check vs concurrent same-key insert', () => {
   });
 });
 
+describe('Work IQ consent revocation', () => {
+  const request = (body: Record<string, unknown>) =>
+    ({
+      params: { id: 'sched-1' },
+      body,
+      user: { id: 'user-1', tenantId: 't1', role: 'USER' },
+    }) as unknown as ServerRequest;
+
+  it('atomically pauses the schedule without probing a grant the owner just revoked', async () => {
+    const existing = fullScheduleDoc({ workIqOAuthServer: 'WorkIQ', enabled: true });
+    const deps = makeCreateDeps({ isUserDeleting: jest.fn(async () => false) });
+    jest.mocked(deps.methods.getScheduleById).mockResolvedValue(existing);
+    jest.mocked(deps.methods.updateScheduleById).mockImplementation(async (_id, _user, update) => ({
+      ...existing,
+      ...update,
+    }));
+    const { res, captured } = makeRes();
+
+    await createSchedulesHandlers(deps).updateSchedule(request({ workIqOAuthServer: null }), res);
+
+    expect(captured.status ?? 200).toBe(200);
+    expect(captured.body).toMatchObject({ enabled: false, workIqOAuthServer: null });
+    expect(deps.preflightMCP).not.toHaveBeenCalled();
+    expect(deps.methods.updateScheduleById).toHaveBeenCalledWith(
+      'sched-1',
+      'user-1',
+      expect.objectContaining({ enabled: false, workIqOAuthServer: null }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it('refuses contradictory re-enable and revocation in one edit', async () => {
+    const deps = makeCreateDeps({ isUserDeleting: jest.fn(async () => false) });
+    jest
+      .mocked(deps.methods.getScheduleById)
+      .mockResolvedValue(fullScheduleDoc({ workIqOAuthServer: 'WorkIQ', enabled: true }));
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).updateSchedule(
+      request({ workIqOAuthServer: null, enabled: true }),
+      res,
+    );
+    expect(captured.status).toBe(400);
+    expect(deps.methods.updateScheduleById).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateSchedule refuses field-less payloads', () => {
   it('rejects {} before touching claim-token or revision fencing', async () => {
     const deps = makeCreateDeps({ isUserDeleting: jest.fn(async () => false) });

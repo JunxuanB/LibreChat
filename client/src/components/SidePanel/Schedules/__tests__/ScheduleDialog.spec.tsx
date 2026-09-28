@@ -140,6 +140,20 @@ describe('ScheduleDialog', () => {
     );
   });
 
+  it('lets the owner revoke stored consent even after the operator removes the mapping', async () => {
+    const user = userEvent.setup();
+    renderDialog(storedSchedule({ workIqOAuthServer: 'WorkIQ' }));
+    const consent = screen.getByRole('checkbox', { name: /com_ui_schedule_workiq_consent/ });
+    expect(consent).toBeChecked();
+    await user.click(consent);
+    await user.click(screen.getByRole('button', { name: 'com_ui_save' }));
+    await waitFor(() =>
+      expect(mockMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ payload: expect.objectContaining({ workIqOAuthServer: null }) }),
+      ),
+    );
+  });
+
   it('does not offer Work IQ authorization without an operator-configured server', () => {
     renderDialog();
     expect(screen.queryByRole('checkbox', { name: /com_ui_schedule_workiq_consent/ })).toBeNull();

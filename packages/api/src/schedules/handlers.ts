@@ -954,10 +954,17 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
       res.status(409).json({ error: 'Schedule was modified concurrently. Please retry.' });
       return;
     }
+    const revokesWorkIq =
+      existing.workIqOAuthServer != null && parsed.data.workIqOAuthServer === null;
+    if (revokesWorkIq && parsed.data.enabled === true) {
+      res.status(400).json({ error: 'Revoking Work IQ authorization must pause the schedule' });
+      return;
+    }
+    const enabled = revokesWorkIq ? false : (parsed.data.enabled ?? existing.enabled);
     const limits = await deps.getLimits(user);
     // When the owner's config disables schedules, block edits that keep the
-    // schedule enabled; still allow turning one OFF.
-    if (!limits.enabled && (parsed.data.enabled ?? existing.enabled)) {
+    // schedule enabled; still allow turning one OFF or revoking its Work IQ grant.
+    if (!limits.enabled && enabled) {
       res.status(403).json({ error: 'Scheduled chats are disabled' });
       return;
     }
@@ -966,7 +973,6 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     }
     const cadence = parsed.data.cadence ?? existing.cadence;
     const timezone = parsed.data.timezone ?? existing.timezone;
-    const enabled = parsed.data.enabled ?? existing.enabled;
     // Timing is the CADENCE AND THE ZONE it is read in: the same expression is a
     // different schedule in another zone, and `0 0,12 * * *` moved from UTC into
     // America/New_York goes from a 12-hour gap to an 11-hour one on spring-forward
@@ -1048,13 +1054,14 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     }
     const cadenceChanged =
       parsed.data.cadence != null || parsed.data.timezone != null || parsed.data.enabled != null;
-    const reEnabled = parsed.data.enabled === true && existing.enabled === false;
+    const reEnabled = !revokesWorkIq && parsed.data.enabled === true && existing.enabled === false;
     // RECOVERY: an enabled schedule with no nextRunAt is inert — claimDueSchedule sorts
     // on nextRunAt and can never select it. Creation arms in a second write, so a crash
     // or a failed arm leaves exactly this state; re-arm on ANY edit rather than only a
     // cadence one, or a name/prompt edit would silently leave it dead.
     const needsArming = existing.nextRunAt == null;
     const update: Partial<ISchedule> = { ...editedFields } as Partial<ISchedule>;
+    if (revokesWorkIq) update.enabled = false;
     // `chatProjectId` is resolved, not copied: an operator pin rewrites it even when
     // this PATCH never mentioned the field, so the row converges on the policy
     // instead of drifting until the owner happens to touch the picker.

@@ -59,8 +59,8 @@ The schedule dialog offers an unchecked, per-schedule checkbox for this one name
 server. The backend checks that this server is selected in the agent graph, the
 configured resource and scopes match Work IQ, the owner still has MCP USE access,
 and a same-generation, nonexpired refresh grant exists. It repeats those checks
-at each dispatch and on approval resume. Removing the checkmark, removing the
-mapping, or revoking the grant prevents future unattended runs; transient store
+at each dispatch and on approval resume. Removing the checkmark atomically pauses the schedule; removing the
+mapping or revoking the grant prevents future unattended runs; transient store
 failures remain retryable. New schedules persist an explicit `null` for no consent;
 older schedules without this field preserve their prior direct OAuth behavior.
 This does not authorize OBO servers or all MCP providers, and it does not assert
