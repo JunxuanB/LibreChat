@@ -79,10 +79,37 @@ export function getSubagentCodeCloneInstructions(
 export function resolveSubagentCodeExecutionContext(
   context: CodeExecutionContext,
   executionContext?: { readonly ancestry: readonly { readonly subagentRunId: string }[] },
+  expectedContext?: CodeExecutionContext | null,
 ): CodeExecutionContext {
   const workspace = context.codeWorkspace;
   const parentInstanceId = workspace?.workspaceInstanceId;
   const ancestry = executionContext?.ancestry;
+  const expectedWorkspace = expectedContext?.codeWorkspace;
+  if (
+    ancestry?.length &&
+    ancestry.some(({ subagentRunId }) => !subagentRunId) &&
+    (expectedWorkspace?.workspaceInstanceId || parentInstanceId)
+  ) {
+    throw new Error(
+      'The subagent checkout identity is incomplete. No code tool was started. Retry the subagent.',
+    );
+  }
+  if (
+    ancestry?.length &&
+    expectedContext?.environmentType === 'attached' &&
+    expectedWorkspace?.workspaceInstanceId &&
+    (context.environmentType !== 'attached' ||
+      context.environmentId !== expectedContext.environmentId ||
+      context.bridgeWorkerId !== expectedContext.bridgeWorkerId ||
+      context.baseUrl !== expectedContext.baseUrl ||
+      workspace?.workspaceId !== expectedWorkspace.workspaceId ||
+      parentInstanceId !== expectedWorkspace.workspaceInstanceId)
+  ) {
+    throw new Error(
+      'The attached workspace changed or lost isolated checkout support during this subagent run. ' +
+        'No code tool was started. Reconnect the worker and retry the subagent.',
+    );
+  }
   if (
     context.environmentType !== 'attached' ||
     workspace == null ||

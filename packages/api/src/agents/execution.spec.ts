@@ -62,8 +62,31 @@ describe('resolveSubagentCodeExecutionContext', () => {
     expect(first.codeWorkspace?.workspaceId).toBe(parent.codeWorkspace?.workspaceId);
   });
 
-  it('does not allocate a clone from incomplete lineage', () => {
-    expect(resolveSubagentCodeExecutionContext(parent, lineage(''))).toBe(parent);
+  it('does not use the parent checkout when a child lineage is incomplete', () => {
+    expect(() => resolveSubagentCodeExecutionContext(parent, lineage(''))).toThrow(
+      'No code tool was started',
+    );
+  });
+
+  it('fails closed when a child loses the clone capability negotiated at run start', () => {
+    const downgraded = {
+      ...parent,
+      codeWorkspace: { ...parent.codeWorkspace!, workspaceInstanceId: undefined },
+    };
+    expect(() =>
+      resolveSubagentCodeExecutionContext(downgraded, lineage('child-1'), parent),
+    ).toThrow('No code tool was started');
+    expect(() =>
+      resolveSubagentCodeExecutionContext(
+        { ...parent, codeWorkspace: { ...parent.codeWorkspace!, workspaceId: 'other-repo' } },
+        lineage('child-1'),
+        parent,
+      ),
+    ).toThrow('No code tool was started');
+    expect(resolveSubagentCodeExecutionContext(downgraded, lineage('child-1'), downgraded)).toBe(
+      downgraded,
+    );
+    expect(resolveSubagentCodeExecutionContext(downgraded, lineage(), parent)).toBe(downgraded);
   });
 
   it('explains the separate checkout only to child runs that can use it', () => {

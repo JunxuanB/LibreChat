@@ -2211,6 +2211,7 @@ async function loadToolsForExecution({
   const codeExecutionContext = resolveSubagentCodeExecutionContext(
     resolvedCodeExecutionContext,
     executionContext,
+    agent?.codeExecutionContext,
   );
   Object.assign(
     codeExecutionContext,
