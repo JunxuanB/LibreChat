@@ -357,7 +357,6 @@ export default function ScheduleCard({
                   variant="outline"
                   size="sm"
                   disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
-                  className="h-auto min-h-8 px-2 py-1 text-xs"
                   onClick={() => {
                     void inspectObo(server);
                   }}
@@ -371,7 +370,6 @@ export default function ScheduleCard({
                   variant="outline"
                   size="sm"
                   disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
-                  className="h-auto min-h-8 px-2 py-1 text-xs"
                   onClick={() => revokeObo.mutate({ id: schedule.id, server })}
                 >
                   {localize('com_ui_schedule_obo_revoke')}

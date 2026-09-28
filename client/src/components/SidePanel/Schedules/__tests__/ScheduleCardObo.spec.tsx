@@ -75,6 +75,9 @@ describe('saved schedule OBO grant actions', () => {
   it('previews the exact provider scope before authorizing the named server', async () => {
     const user = userEvent.setup();
     renderCard();
+    expect(screen.getByRole('button', { name: 'com_ui_schedule_obo_authorize' })).toHaveClass(
+      'h-9',
+    );
     await user.click(screen.getByRole('button', { name: 'com_ui_schedule_obo_authorize' }));
     expect(mockInspect).toHaveBeenCalledWith('sched-1', 'Files');
     const dialog = await screen.findByRole('dialog', { name: 'com_ui_schedule_obo_confirm_title' });
@@ -93,6 +96,7 @@ describe('saved schedule OBO grant actions', () => {
   it('can revoke only the specified schedule and server', async () => {
     const user = userEvent.setup();
     renderCard(['Files'], ['Files']);
+    expect(screen.getByRole('button', { name: 'com_ui_schedule_obo_revoke' })).toHaveClass('h-9');
     await user.click(screen.getByRole('button', { name: 'com_ui_schedule_obo_revoke' }));
     expect(mockRevoke).toHaveBeenCalledWith({ id: 'sched-1', server: 'Files' });
   });
