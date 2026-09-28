@@ -52,7 +52,7 @@ export interface CodeExecutionContext {
 }
 
 /** Child checkout boundaries must be visible to the model, not just the scheduler. */
-export const SUBAGENT_CODE_CLONE_INSTRUCTIONS =
+export const SUBAGENT_CODE_CLONE_INSTRUCTIONS: string =
   'Your attached code tools use a private checkout for this subagent run. Changes in the parent ' +
   'checkout, including uncommitted changes, are not copied here, and your edits are not visible ' +
   'to the parent. If you change files that the parent needs, commit and push an authorized branch ' +
