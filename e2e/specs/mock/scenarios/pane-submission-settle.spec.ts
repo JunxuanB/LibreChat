@@ -53,11 +53,17 @@ const isAssistantsAbort = (response: Response) => {
 
 /** Brings the sidebar on screen. Desktop keeps the panel open and renders no
  *  opener at all; a narrow viewport keeps the drawer closed until the header's
- *  opener is used, and nothing inside it is visible or tappable before that. */
+ *  opener is used, and nothing inside it is visible or tappable before that.
+ *  Which of the two appears first says which layout this is, without paying a
+ *  timeout for the one this layout never renders. */
 async function openSidebar(page: Page): Promise<void> {
   const historyRegion = page.getByRole('region', { name: 'Chat History' });
   const opener = page.getByRole('button', { name: 'Open sidebar' }).first();
-  if (await opener.isVisible({ timeout: 3_000 }).catch(() => false)) {
+  const appeared = await Promise.race([
+    opener.waitFor({ state: 'visible', timeout: 20_000 }).then(() => 'opener' as const),
+    historyRegion.waitFor({ state: 'visible', timeout: 20_000 }).then(() => 'region' as const),
+  ]);
+  if (appeared === 'opener') {
     await opener.click();
   }
   await expect(historyRegion).toBeVisible({ timeout: 30_000 });
