@@ -1415,11 +1415,23 @@ export default function useEventHandlers({
          *  the turn hangs off, which `messages` already holds. Writing it here
          *  would duplicate that id as an empty, self-parented user message —
          *  a phantom root the thread then folds into. */
-        setMessages(
+        const errorMessages =
           submission.compact === true
             ? [...submission.messages, errorResponse]
-            : [...submission.messages, submission.userMessage, errorResponse],
-        );
+            : [...submission.messages, submission.userMessage, errorResponse];
+        if (paneReplaced(submission)) {
+          /** A newer run owns the pane after a re-send: the departed turn's
+           *  error belongs to its own conversation's cache, and the recovery
+           *  (a newConversation) would replace the live submission and hijack
+           *  the destination. */
+          const errorConvoId = conversationId || errorResponse.conversationId || '';
+          if (errorConvoId) {
+            queryClient.setQueryData<TMessage[]>([QueryKeys.messages, errorConvoId], errorMessages);
+          }
+          settlePane(submission, true);
+          return;
+        }
+        setMessages(errorMessages);
         recoverConversation(conversationId || errorResponse.conversationId || v4(), submission);
         settlePane(submission, true);
       }
@@ -1428,9 +1440,11 @@ export default function useEventHandlers({
       token,
       getMessages,
       setMessages,
+      queryClient,
       finalHandler,
       cancelHandler,
       settlePane,
+      paneReplaced,
       setSubmissionStart,
       recoverConversation,
     ],

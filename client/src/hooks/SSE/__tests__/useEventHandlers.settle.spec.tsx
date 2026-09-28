@@ -162,6 +162,10 @@ describe('post-abort settlement fences on the pane submission', () => {
         act(async () => {
           await result.current.handlers.abortConversation('saved', submission, [user, response]);
         }),
+      abortSubmission: (aborted: typeof submission) =>
+        act(async () => {
+          await result.current.handlers.abortConversation('saved', aborted, [user, response]);
+        }),
       finalFromLiveStream: (liveSubmission: typeof submission) =>
         act(async () => {
           result.current.handlers.finalHandler(
@@ -262,5 +266,40 @@ describe('post-abort settlement fences on the pane submission', () => {
     expect(harness.setMessages).not.toHaveBeenCalled();
     expect(harness.setConversation).not.toHaveBeenCalled();
     expect(harness.setIsSubmitting).not.toHaveBeenCalledWith(false);
+  });
+
+  it('recovers only its own pane when an abort request fails', async () => {
+    const harness = await renderSettleHarness();
+    const originalFetch = global.fetch;
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(new Error('abort request failed')) as unknown as typeof fetch;
+    try {
+      /** The failing abort targets the Assistants route, whose endpoint's
+       *  submission carries no message rows for the local synthesis path. */
+      const assistantsSubmission = {
+        ...submission,
+        conversation: { conversationId: 'saved', endpoint: 'assistants' },
+        endpointOption: { endpoint: 'assistants' },
+        userMessage: { ...user, conversationId: 'saved' },
+      } as typeof submission;
+      harness.setPaneSubmission(assistantsSubmission);
+
+      await harness.abortSubmission(assistantsSubmission);
+
+      expect(harness.setMessages).toHaveBeenCalled();
+      harness.setMessages.mockClear();
+
+      /** A re-sent pane: the failed abort must not write the pane or recover
+       *  the departed conversation over the live one. */
+      const replacement = { ...assistantsSubmission, userMessage: { ...user, messageId: 'u2' } };
+      harness.setPaneSubmission(replacement);
+
+      await harness.abortSubmission(assistantsSubmission);
+
+      expect(harness.setMessages).not.toHaveBeenCalled();
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });
