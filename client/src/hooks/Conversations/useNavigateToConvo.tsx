@@ -220,13 +220,18 @@ const useNavigateToConvo = (index = 0) => {
     }
     if (generation !== navigationGeneration || currentRoute() !== routeAtStart) {
       logger.log('conversation', 'Discarding superseded navigation', conversationId);
+      /** The user is still on the departing conversation, so the run torn down
+       *  here settles through its abort, exactly like an in-place stop. */
+      setSubmission(null);
       return;
     }
     /** The switch commits in this task: only now does the destination own the
-     * pane, so only now may its in-flight flags settle. Settling when the
-     * navigation started would unblock the still-visible departing composer
-     * for the whole fetch window. */
+     *  pane, so only now does the run tear down and its flags settle. Tearing
+     *  down when the navigation started would let the abort settle while the
+     *  departing conversation is still the one on screen, unblocking its
+     *  composer for the whole fetch window. */
     settlePaneSubmission(destination);
+    setSubmission(null);
     applyConversation(record);
     navigate(`/c/${conversationId}`);
   };
@@ -247,11 +252,11 @@ const useNavigateToConvo = (index = 0) => {
     /** Claim this click's place in the order before any await, so a request
      * still in flight for an earlier one cannot land on top of it. */
     const generation = ++navigationGeneration;
-    setSubmission(null);
-    /** The pane's in-flight flags settle where the switch COMMITS (below or
-     * inside `navigateWithRecord`), not here: a first visit still fetching its
-     * record keeps the departing composer on screen, and its submits must stay
-     * guarded for that window. */
+    /** The submission tears down where the switch COMMITS: synchronously below
+     * for the cached and new-chat paths, and inside `navigateWithRecord` at
+     * its commit or abandonment for a first visit. A first visit still
+     * fetching its record keeps the departing conversation on screen with its
+     * run honestly live, so its composer must stay guarded for that window. */
     const destination: PaneDestination = {
       conversationId: conversation.conversationId ?? Constants.NEW_CONVO,
       chatProjectId: conversation.chatProjectId,
@@ -318,6 +323,7 @@ const useNavigateToConvo = (index = 0) => {
         navigateWithRecord(convo, generation, destination);
         return;
       }
+      setSubmission(null);
       /** Route and conversation state change together, in the click's own
        * task, so the switch commits once instead of straddling a round trip.
        * The cached record underlays the row, which is a list PROJECTION: the
@@ -330,6 +336,7 @@ const useNavigateToConvo = (index = 0) => {
       navigate(`/c/${convo.conversationId}`);
       refreshConversationRecord(convo.conversationId);
     } else {
+      setSubmission(null);
       settlePaneSubmission(destination);
       setConversation(convo);
       requestChatFocus();
