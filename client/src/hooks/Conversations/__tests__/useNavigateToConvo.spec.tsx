@@ -116,6 +116,46 @@ function Harness() {
           setShowStopButton(true);
         }}
       />
+      {/* What `ProjectsSection.startChat` does mid-run: swaps one project's
+          `new` draft for another's. */}
+      <button
+        data-testid="raise-flags-project-one"
+        onClick={() => {
+          setConversation({
+            conversationId: 'new',
+            title: 'New Chat',
+            endpoint: EModelEndpoint.openAI,
+            model: 'gpt-4o-mini',
+            chatProjectId: 'project-one',
+            createdAt: '',
+            updatedAt: '',
+          });
+          setIsSubmitting(true);
+          setShowStopButton(true);
+        }}
+      />
+      <button
+        data-testid="go-project-two"
+        onClick={() =>
+          navigateToConvo({
+            conversationId: 'new',
+            title: 'New Chat',
+            endpoint: EModelEndpoint.openAI,
+            chatProjectId: 'project-two',
+          } as TConversation)
+        }
+      />
+      <button
+        data-testid="go-project-one"
+        onClick={() =>
+          navigateToConvo({
+            conversationId: 'new',
+            title: 'New Chat',
+            endpoint: EModelEndpoint.openAI,
+            chatProjectId: 'project-one',
+          } as TConversation)
+        }
+      />
       {/* Every other way out of a conversation — "New chat", a link, a
           redirect, the back button — moves the route without going through
           `navigateToConvo`, exactly like `useNewConvo` does. */}
@@ -527,17 +567,61 @@ describe('useNavigateToConvo', () => {
       expect(stopButton()).toBe('true');
     });
 
-    it('settles the flags on a first visit too, before the record lands', () => {
+    it('keeps the flags until a first visit commits, then settles', async () => {
       renderHarness();
       click('raise-flags');
       click('go-b');
 
-      /** The route has not moved yet (no cached record), but the switch is
-       *  already decided: the pane must not carry the departed run's flags
-       *  into the conversation that is about to mount. */
+      /** The record fetch is still pending and the departing composer is the
+       *  one on screen: its submits must stay guarded for the whole window,
+       *  or a second turn could start in the departing conversation. */
       expect(currentPath()).toBe('/c/convo-a');
+      expect(submitting()).toBe('true');
+      expect(stopButton()).toBe('true');
+
+      await settle(B, recordB);
+
+      /** The switch commits with the record: the destination owns the pane
+       *  and its flags settle in the same task. */
+      await waitFor(() => expect(currentPath()).toBe(`/c/${B}`));
       expect(submitting()).toBe('false');
       expect(stopButton()).toBe('false');
+    });
+
+    it('keeps the flags when a superseded first visit never commits', async () => {
+      renderHarness();
+      click('raise-flags');
+      click('go-b');
+      click('go-elsewhere');
+
+      await settle(B, recordB);
+
+      /** The navigation was abandoned, so the run torn down by the click
+       *  settles through its abort, exactly like an in-place stop. */
+      expect(currentPath()).toBe('/c/new');
+      expect(submitting()).toBe('true');
+    });
+
+    it('settles the flags when a project-scoped draft switches projects mid-run', () => {
+      renderHarness();
+      click('raise-flags-project-one');
+
+      click('go-project-two');
+
+      /** Both drafts are `new`, but they are different chats: the second
+       *  project's composer must not inherit the first one's run. */
+      expect(submitting()).toBe('false');
+      expect(stopButton()).toBe('false');
+    });
+
+    it('keeps the flags when the destination is the same project draft', async () => {
+      renderHarness();
+      click('raise-flags-project-one');
+
+      click('go-project-one');
+
+      expect(submitting()).toBe('true');
+      expect(stopButton()).toBe('true');
     });
   });
 });

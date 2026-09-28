@@ -257,10 +257,15 @@ const useNewConvo = (index = 0) => {
          * conversation atoms of every pane but the first, and the destination
          * comparison needs the pane's pre-switch conversation. An unsaved '_'
          * template renders as the new-chat route, which is the destination the
-         * pane's in-flight flags are settled for. */
-        settlePaneSubmission(
-          isCancelled ? Constants.NEW_CONVO : (conversation.conversationId ?? Constants.NEW_CONVO),
-        );
+         * pane's in-flight flags are settled for; its project scope travels
+         * with it, since two `new` drafts in different projects are different
+         * destinations. */
+        settlePaneSubmission({
+          conversationId: isCancelled
+            ? Constants.NEW_CONVO
+            : (conversation.conversationId ?? Constants.NEW_CONVO),
+          chatProjectId: conversation.chatProjectId,
+        });
         if (!(keepAddedConvos ?? false)) {
           clearAllConversations(true);
         }

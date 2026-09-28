@@ -16,6 +16,7 @@ import type {
   TConversation,
   TMessage,
 } from 'librechat-data-provider';
+import type { PaneDestination } from '~/hooks/Chat/settle';
 import {
   clearModelForNonEphemeralAgent,
   getDefaultEndpoint,
@@ -190,7 +191,11 @@ const useNavigateToConvo = (index = 0) => {
    * once the real record is in hand. Every later switch to this conversation
    * takes the instant path above.
    */
-  const navigateWithRecord = async (conversation: TConversation, generation: number) => {
+  const navigateWithRecord = async (
+    conversation: TConversation,
+    generation: number,
+    destination: PaneDestination,
+  ) => {
     const conversationId = conversation.conversationId;
     if (!conversationId) {
       return;
@@ -217,6 +222,11 @@ const useNavigateToConvo = (index = 0) => {
       logger.log('conversation', 'Discarding superseded navigation', conversationId);
       return;
     }
+    /** The switch commits in this task: only now does the destination own the
+     * pane, so only now may its in-flight flags settle. Settling when the
+     * navigation started would unblock the still-visible departing composer
+     * for the whole fetch window. */
+    settlePaneSubmission(destination);
     applyConversation(record);
     navigate(`/c/${conversationId}`);
   };
@@ -238,10 +248,14 @@ const useNavigateToConvo = (index = 0) => {
      * still in flight for an earlier one cannot land on top of it. */
     const generation = ++navigationGeneration;
     setSubmission(null);
-    /** Tearing the submission down here leaves its in-flight flags raised
-     * until the departing run's /abort settles; the destination transcript
-     * owns nothing in flight, so the pane settles at the switch instead. */
-    settlePaneSubmission(conversation.conversationId ?? Constants.NEW_CONVO);
+    /** The pane's in-flight flags settle where the switch COMMITS (below or
+     * inside `navigateWithRecord`), not here: a first visit still fetching its
+     * record keeps the departing composer on screen, and its submits must stay
+     * guarded for that window. */
+    const destination: PaneDestination = {
+      conversationId: conversation.conversationId ?? Constants.NEW_CONVO,
+      chatProjectId: conversation.chatProjectId,
+    };
 
     let convo = { ...conversation };
     const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);
@@ -301,7 +315,7 @@ const useNavigateToConvo = (index = 0) => {
       ]);
       queryClient.invalidateQueries([QueryKeys.conversation, convo.conversationId]);
       if (!cachedConvo) {
-        navigateWithRecord(convo, generation);
+        navigateWithRecord(convo, generation, destination);
         return;
       }
       /** Route and conversation state change together, in the click's own
@@ -311,10 +325,12 @@ const useNavigateToConvo = (index = 0) => {
        * (prompt prefix, sampling params, files) survives, and this is the last
        * write this navigation makes — what the user sees now is what a send
        * will carry until they change it themselves. */
+      settlePaneSubmission(destination);
       applyConversation({ ...cachedConvo, ...convo });
       navigate(`/c/${convo.conversationId}`);
       refreshConversationRecord(convo.conversationId);
     } else {
+      settlePaneSubmission(destination);
       setConversation(convo);
       requestChatFocus();
       navigate(`/c/${convo.conversationId ?? Constants.NEW_CONVO}`);
