@@ -40,6 +40,7 @@ rateLimits:
     userMax: 2
   tts:
     userMax: 2
+# __E2E_MCP_APP_RATE_LIMITS__
 
 # __E2E_MCP_APP_SANDBOX__
 
@@ -89,8 +90,6 @@ mcpServers:
       client_id: e2e-oauth-client
   # __E2E_DYNAMIC_MCP_NETWORK_SERVERS__
   # __E2E_MCP_APPS_SERVER__
-
-# __E2E_MCP_APP_RATE_LIMITS__
 
 # Per-endpoint file upload config so both upload UXs get e2e coverage:
 # - Mock Provider A keeps the legacy 3-way dropdown (chat.spec.ts exercises

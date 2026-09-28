@@ -304,7 +304,6 @@ function writeRuntimeMockConfig() {
   const mcpAppsRateLimits =
     mcpAppResourceLimit != null && mcpAppToolCallLimit != null
       ? [
-          'rateLimits:',
           '  mcpApps:',
           `    resourcesPerMinute: ${mcpAppResourceLimit}`,
           `    toolCallsPerMinute: ${mcpAppToolCallLimit}`,
