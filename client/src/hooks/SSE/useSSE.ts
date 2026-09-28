@@ -104,11 +104,12 @@ export default function useSSE(
     payload = removeNullishValues(payload) as TPayload;
 
     let textIndex = null;
-    /** The run's own conversation id, learned from the created/sync events.
-     *  The cancel listener runs after the pane may have switched conversations,
+    /** The run's own conversation id: seeded from the submission, then updated
+     *  by the created/sync events when the server assigns the real id. The
+     *  cancel listener runs after the pane may have switched conversations,
      *  where its message snapshot is the DESTINATION's (or empty), so the
      *  abort must target this id rather than whatever the pane shows. */
-    let runConversationId: string | undefined;
+    let runConversationId = submission.conversation?.conversationId;
     clearStepMaps();
 
     const sse = new SSE(payloadData.server, {

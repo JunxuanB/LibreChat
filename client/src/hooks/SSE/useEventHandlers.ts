@@ -1008,14 +1008,18 @@ export default function useEventHandlers({
       /** A stale abort final must not write the pane. That is not only the
        *  re-sent pane: a navigation that switched to another conversation
        *  leaves the pane submission cleared, and the pane now shows a
-       *  conversation this final's data does not belong to. Reconciliation
-       *  still writes the DEPARTING conversation's cache either way. */
+       *  conversation this final's data does not belong to. The final's own
+       *  conversation is authoritative; the submission's is accepted too, for
+       *  payloads that omit it (a deleted conversation), where fencing is the
+       *  safer default. Reconciliation still writes the DEPARTING
+       *  conversation's cache either way. */
+      const paneConversationId = getPaneConversationId();
       const staleForPane =
         options?.fromAbort === true &&
         (paneReplaced(submission) ||
-          (conversation.conversationId != null &&
-            getPaneConversationId() != null &&
-            getPaneConversationId() !== conversation.conversationId));
+          (paneConversationId != null &&
+            paneConversationId !== conversation.conversationId &&
+            paneConversationId !== submission.conversation?.conversationId));
       const {
         messages,
         conversation: submissionConvo,
@@ -1435,11 +1439,17 @@ export default function useEventHandlers({
           submission.compact === true
             ? [...submission.messages, errorResponse]
             : [...submission.messages, submission.userMessage, errorResponse];
-        if (paneReplaced(submission)) {
-          /** A newer run owns the pane after a re-send: the departed turn's
-           *  error belongs to its own conversation's cache, and the recovery
-           *  (a newConversation) would replace the live submission and hijack
-           *  the destination. */
+        const paneConversationId = getPaneConversationId();
+        if (
+          paneReplaced(submission) ||
+          (conversationId !== '' &&
+            paneConversationId != null &&
+            paneConversationId !== conversationId)
+        ) {
+          /** The pane was re-sent or switched to another conversation: the
+           *  departed turn's error belongs to its own conversation's cache, and
+           *  the recovery (a newConversation) would replace the live submission
+           *  and hijack the destination. */
           const errorConvoId = conversationId || errorResponse.conversationId || '';
           if (errorConvoId) {
             queryClient.setQueryData<TMessage[]>([QueryKeys.messages, errorConvoId], errorMessages);
@@ -1461,6 +1471,7 @@ export default function useEventHandlers({
       cancelHandler,
       settlePane,
       paneReplaced,
+      getPaneConversationId,
       setSubmissionStart,
       recoverConversation,
     ],
