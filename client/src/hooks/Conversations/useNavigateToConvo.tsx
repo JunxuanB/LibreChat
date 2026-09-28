@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
-import { useSetRecoilState } from 'recoil';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { useRecoilCallback, useSetRecoilState } from 'recoil';
 import {
   QueryKeys,
   Constants,
@@ -16,6 +16,7 @@ import type {
   TConversation,
   TMessage,
 } from 'librechat-data-provider';
+import type { TSubmission } from 'librechat-data-provider';
 import type { PaneDestination } from '~/hooks/Chat/settle';
 import {
   clearModelForNonEphemeralAgent,
@@ -99,6 +100,16 @@ const useNavigateToConvo = (index = 0) => {
   const applyModelSpecEffects = useApplyModelSpecEffects();
   const settlePaneSubmission = useSettlePaneSubmission(index);
   const setSubmission = useSetRecoilState(store.submissionByIndex(index));
+  /** The deferred first-visit path acts on the pane only while the submission
+   *  it captured at the click still owns it: a newer submission means the user
+   *  re-engaged (sent again, or a superseding navigation landed first), and
+   *  that run must survive this continuation. */
+  const getPaneSubmission = useRecoilCallback(
+    ({ snapshot }) =>
+      () =>
+        snapshot.getLoadable(store.submissionByIndex(index)).valueMaybe(),
+    [index],
+  );
   const { hasSetConversation, setConversation: setConvo } = store.useSetConversationAtom(index);
 
   const setConversation = useCallback(
@@ -191,10 +202,19 @@ const useNavigateToConvo = (index = 0) => {
    * once the real record is in hand. Every later switch to this conversation
    * takes the instant path above.
    */
+  /** True when the pane's submission is still the one this navigation left in
+   *  place, or has been cleared (stop, the empty sentinel, a superseding
+   *  synchronous navigation that already tore it down). */
+  const stillOwnsPane = (captured: TSubmission | null | undefined) => {
+    const current = getPaneSubmission();
+    return current == null || Object.keys(current).length === 0 || current === captured;
+  };
+
   const navigateWithRecord = async (
     conversation: TConversation,
     generation: number,
     destination: PaneDestination,
+    submissionAtClick: TSubmission | null | undefined,
   ) => {
     const conversationId = conversation.conversationId;
     if (!conversationId) {
@@ -221,8 +241,18 @@ const useNavigateToConvo = (index = 0) => {
     if (generation !== navigationGeneration || currentRoute() !== routeAtStart) {
       logger.log('conversation', 'Discarding superseded navigation', conversationId);
       /** The user is still on the departing conversation, so the run torn down
-       *  here settles through its abort, exactly like an in-place stop. */
-      setSubmission(null);
+       *  here settles through its abort, exactly like an in-place stop; a newer
+       *  submission that already replaced it owns the pane and must survive. */
+      if (stillOwnsPane(submissionAtClick)) {
+        setSubmission(null);
+      }
+      return;
+    }
+    /** A newer submission means the user sent again while the fetch was
+     *  pending: their turn owns the pane, so the navigation stands down
+     *  entirely rather than landing a destination over a live run. */
+    if (!stillOwnsPane(submissionAtClick)) {
+      logger.log('conversation', 'Discarding navigation superseded by a newer run', conversationId);
       return;
     }
     /** The switch commits in this task: only now does the destination own the
@@ -261,6 +291,7 @@ const useNavigateToConvo = (index = 0) => {
       conversationId: conversation.conversationId ?? Constants.NEW_CONVO,
       chatProjectId: conversation.chatProjectId,
     };
+    const submissionAtClick = getPaneSubmission();
 
     let convo = { ...conversation };
     const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);
@@ -320,7 +351,7 @@ const useNavigateToConvo = (index = 0) => {
       ]);
       queryClient.invalidateQueries([QueryKeys.conversation, convo.conversationId]);
       if (!cachedConvo) {
-        navigateWithRecord(convo, generation, destination);
+        navigateWithRecord(convo, generation, destination, submissionAtClick);
         return;
       }
       setSubmission(null);

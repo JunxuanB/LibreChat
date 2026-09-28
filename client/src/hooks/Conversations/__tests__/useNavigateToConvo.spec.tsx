@@ -77,6 +77,8 @@ function Harness() {
   const { setConversation } = store.useSetConversationAtom(0);
   const isSubmitting = useRecoilValue(store.isSubmittingFamily(0));
   const showStopButton = useRecoilValue(store.showStopButtonByIndex(0));
+  const submission = useRecoilValue(store.submissionByIndex(0));
+  const setSubmission = useSetRecoilState(store.submissionByIndex(0));
   const setIsSubmitting = useSetRecoilState(store.isSubmittingFamily(0));
   const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(0));
   const navigate = useNavigate();
@@ -192,6 +194,13 @@ function Harness() {
       <div data-testid="convo">{JSON.stringify(conversation ?? null)}</div>
       <div data-testid="submitting">{String(isSubmitting)}</div>
       <div data-testid="stop-button">{String(showStopButton)}</div>
+      <div data-testid="submission">{submission == null ? 'null' : JSON.stringify(submission)}</div>
+      {/* What a send into the still-visible departing conversation looks like
+          while a first-visit record fetch is pending: a newer submission. */}
+      <button
+        data-testid="resend-during-fetch"
+        onClick={() => setSubmission({ userMessage: { messageId: 'user-2' } } as never)}
+      />
     </div>
   );
 }
@@ -600,6 +609,22 @@ describe('useNavigateToConvo', () => {
        *  settles through its abort, exactly like an in-place stop. */
       expect(currentPath()).toBe('/c/new');
       expect(submitting()).toBe('true');
+    });
+
+    it('stands down when a newer run starts in the departing conversation during the fetch', async () => {
+      renderHarness();
+      click('raise-flags');
+      click('go-b');
+      /** The stream finished normally during the record fetch and the user
+       *  sent again into the conversation still on screen. */
+      click('resend-during-fetch');
+
+      await settle(B, recordB);
+
+      /** The newer turn owns the pane: the navigation does not land on top of
+       *  it and must not clear its submission. */
+      expect(currentPath()).toBe('/c/convo-a');
+      expect(screen.getByTestId('submission').textContent).toContain('user-2');
     });
 
     it('settles the flags when a project-scoped draft switches projects mid-run', () => {
