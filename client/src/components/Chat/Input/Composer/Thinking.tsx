@@ -1,10 +1,10 @@
 import { memo, useRef, useMemo, useState, useLayoutEffect } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { ChevronDown } from 'lucide-react';
-import { TooltipAnchor } from '@librechat/client';
+import { TooltipAnchor, useMediaQuery } from '@librechat/client';
 import type { SettingDefinition, TConversation, TReasoningOverride } from 'librechat-data-provider';
 import { ReasoningControl, useComposerReasoning } from '../Reasoning';
-import Effort, { resolveEffortLabel } from './Effort';
+import Effort, { effortRank, resolveEffortLabel } from './Effort';
 import { useGetStartupConfig } from '~/data-provider';
 import { useChatContext } from '~/Providers';
 import { cn, getModelSpec } from '~/utils';
@@ -32,7 +32,10 @@ function ThinkingControl({
      with the controlled form, hide-on-interact-outside fired on mousedown and
      the disclosure's own click re-opened it, so a second click never closed the
      popup. */
-  const popover = Ariakit.usePopoverStore({ placement: 'bottom' });
+  /* Above the composer on a phone, where the composer sits at the bottom of the
+     screen and a popup below it would open off the edge or under the keyboard. */
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  const popover = Ariakit.usePopoverStore({ placement: isMobile ? 'top' : 'bottom' });
   const open = popover.useState('open');
   const disclosureRef = useRef<HTMLButtonElement>(null);
   const ghostsRef = useRef<HTMLSpanElement>(null);
@@ -52,6 +55,29 @@ function ThinkingControl({
     currentValue == null
       ? localize('com_ui_auto')
       : resolveEffortLabel(setting, currentValue, localize);
+
+  /* The word on the button moves with the level: up for a higher one, down for
+     a lower one, the outgoing word staying behind as a blurred ghost until it
+     has cleared. `turn` restarts the animation for each change. */
+  const rank = effortRank(setting, currentValue);
+  const [label, setLabel] = useState({
+    text: display,
+    rank,
+    previous: null as string | null,
+    up: true,
+    turn: 0,
+  });
+  if (label.text !== display) {
+    setLabel({
+      text: display,
+      rank,
+      previous: label.text,
+      up: rank >= label.rank,
+      turn: label.turn + 1,
+    });
+  }
+  const clearPrevious = (turn: number) =>
+    setLabel((state) => (state.turn === turn ? { ...state, previous: null } : state));
 
   /* Every label this button can show, in the active language. All of them get
      measured rather than picking by character count: the longest string is not
@@ -83,8 +109,8 @@ function ThinkingControl({
     }
   }, [open, display, optionLabels]);
 
-  /* Opens downward; Ariakit flips it above on its own once the composer sits
-     low enough in the viewport that there is no room below. */
+  /* Opens downward on wider screens; Ariakit flips it above on its own once
+     the composer sits low enough in the viewport that there is no room below. */
   return (
     <Ariakit.PopoverProvider store={popover}>
       {/* Named on hover like the mic and send buttons: closed, the trigger shows
@@ -115,8 +141,9 @@ function ThinkingControl({
         {/* Closed, the button hugs its label so it takes no more room in the bar
             than it needs. Open, it widens to the longest label and the text
             centres, so changing levels while the popup is up never shifts the
-            row. The label itself swaps plainly: a keyed crossfade dipped it to
-            transparent mid-change, which read as a flicker rather than polish. */}
+            row. A level change never dips the label to transparent (a plain
+            keyed crossfade did, and read as a flicker): the new word arrives
+            while the old one is still leaving, so one is always legible. */}
         <span
           /* `composer-slot-resize` runs on `animate-composer-popover`'s clock,
              so the button and the popup resize together. */
@@ -144,7 +171,30 @@ function ThinkingControl({
           {/* Always centred: flipping alignment as the width animated made the
               label jump sideways mid-transition. Closed the slot is exactly the
               label's width, so centred and left are identical anyway. */}
-          <span className="block text-center whitespace-nowrap">{display}</span>
+          <span className="grid text-center whitespace-nowrap">
+            {label.previous != null && (
+              <span
+                key={`out-${label.turn}`}
+                aria-hidden="true"
+                onAnimationEnd={() => clearPrevious(label.turn)}
+                className={cn(
+                  'col-start-1 row-start-1',
+                  label.up ? 'composer-label-out-up' : 'composer-label-out-down',
+                )}
+              >
+                {label.previous}
+              </span>
+            )}
+            <span
+              key={`in-${label.turn}`}
+              className={cn(
+                'col-start-1 row-start-1',
+                label.turn > 0 && (label.up ? 'composer-label-in-up' : 'composer-label-in-down'),
+              )}
+            >
+              {display}
+            </span>
+          </span>
         </span>
         {/* Turns to point at the popup, which is the only cue that the button
             and the panel below it are one control. */}
@@ -164,6 +214,21 @@ function ThinkingControl({
            click immediately re-opened it. Excluding the trigger leaves a single
            clean toggle. */
         hideOnInteractOutside={(event) => !disclosureRef.current?.contains(event.target as Node)}
+        /* On a phone the button sits inside the composer, so opening above the
+           button alone would cover the message field. It rises from the
+           composer's top edge instead, still centred over its button. */
+        getAnchorRect={
+          isMobile
+            ? (anchor) => {
+                const button = anchor?.getBoundingClientRect();
+                const composer = anchor?.closest('form')?.getBoundingClientRect();
+                if (button == null || composer == null) {
+                  return null;
+                }
+                return { x: button.x, y: composer.y, width: button.width, height: 0 };
+              }
+            : undefined
+        }
         aria-label={localize('com_ui_composer_thinking_value', { 0: display })}
         /* `border-light` resolves to the same value as `surface-tertiary`, so
            the edge was invisible against the popup's own background. */

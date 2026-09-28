@@ -11,7 +11,7 @@ import { useSetAtom } from 'jotai';
 import * as Ariakit from '@ariakit/react';
 import { AutoSizer, List } from 'react-virtualized';
 import { Star, Plus, Search, ChevronDown } from 'lucide-react';
-import { FileUpload, IconButton, TooltipAnchor } from '@librechat/client';
+import { Button, FileUpload, IconButton, TooltipAnchor, useMediaQuery } from '@librechat/client';
 import type {
   TFile,
   TConversation,
@@ -21,6 +21,7 @@ import type {
 import type { PaletteEntry, PaletteSection } from '~/hooks/Input/usePaletteEntries';
 import type { AttachEntry } from '~/hooks/Input/useAttachItems';
 import type { ExtendedFile, FileSetter } from '~/common';
+import type { CatalogSection } from './Catalog';
 import type { TranslationKeys } from '~/hooks';
 import FilePreview from '~/components/Chat/Input/Files/FilePreview';
 import { SharePointPickerDialog } from '~/components/SharePoint';
@@ -35,8 +36,14 @@ import { isMacPlatform } from '~/utils/shortcuts';
 import { useBadgeRowContext } from '~/Providers';
 import { composerLiftFamily } from './state';
 import { useLocalize } from '~/hooks';
+import Catalog from './Catalog';
 
 const HEADER_HEIGHT = 26;
+/** A header carrying its section's "Show all" button, which is taller than the
+ *  label alone. */
+const HEADER_ACTION_HEIGHT = 32;
+/** Rows a capped section shows before the rest move behind "Show all". */
+const SECTION_LIMIT = 5;
 const ROW_HEIGHT = 34;
 const ROW_HEIGHT_DESC = 46;
 /* Kept short enough that the popup clears the space below the composer, so it
@@ -92,13 +99,13 @@ const SECTION_LABEL: Record<PaletteSection, TranslationKeys> = {
 };
 
 type PaletteRow =
-  | { type: 'header'; key: string; label: string }
+  | { type: 'header'; key: string; label: string; showAll?: CatalogSection }
   | { type: 'attach'; key: string; entry: AttachEntry }
   | { type: 'more'; key: string; label: string }
   | { type: 'file'; key: string; file: TFile }
   | { type: 'entry'; key: string; entry: PaletteEntry; isFavorite: boolean };
 
-const isSelectable = (row: PaletteRow) => row.type !== 'header';
+const isSelectable = (row: PaletteRow) => row.type !== 'header' || row.showAll != null;
 
 /** Ranks a match so exact prefixes float above incidental description hits. */
 function scoreEntry(label: string, description: string | undefined, query: string): number {
@@ -130,7 +137,7 @@ function formatFileDate(file: TFile): string {
 
 function rowHeight(row: PaletteRow): number {
   if (row.type === 'header') {
-    return HEADER_HEIGHT;
+    return row.showAll != null ? HEADER_ACTION_HEIGHT : HEADER_HEIGHT;
   }
   if (row.type === 'entry' && row.entry.description != null && row.entry.description !== '') {
     return ROW_HEIGHT_DESC;
@@ -211,14 +218,14 @@ function Palette({
      with the controlled form, hide-on-interact-outside fired on mousedown and
      the disclosure's own click re-opened it, so clicking `+` while the palette
      was up reopened it instead of closing it. */
-  const popover = Ariakit.usePopoverStore({ placement: 'bottom-start' });
+  /* Above the composer on a phone, where the composer sits at the bottom of the
+     screen; the lift below exists only to make room for the downward popup. */
+  const opensUp = useMediaQuery('(max-width: 767px)');
+  const popover = Ariakit.usePopoverStore({ placement: opensUp ? 'top-start' : 'bottom-start' });
   const open = popover.useState('open');
   const context = useBadgeRowContext();
   const mcpManager = context?.mcpServerManager;
   const configDialogOpen = mcpManager?.getConfigDialogProps()?.isOpen === true;
-  useMCPRefresh({
-    enabled: (open || configDialogOpen) && (mcpManager?.availableMCPServers.length ?? 0) > 0,
-  });
   useEffect(() => {
     if (open) {
       onOpened?.();
@@ -230,6 +237,20 @@ function Palette({
      to a tool once will do it again, and re-expanding every time is the cost of
      hiding it. */
   const [showAllAttach, setShowAllAttach] = useState(false);
+  /** The section whose "Show all" dialog is open, if any. */
+  const [catalog, setCatalog] = useState<CatalogSection | null>(null);
+  /** Set while the palette closes to hand over to a dialog, so its close does
+   *  not pull focus back into the composer from under the dialog. */
+  const openingCatalogRef = useRef(false);
+  /** Where focus lands when a "Show all" dialog closes. */
+  const catalogReturnRef = useRef<HTMLElement | null>(null);
+  /* The MCP catalog shows the same live statuses as the palette rows, so it
+     keeps the refresh running after the palette hands over to it. */
+  useMCPRefresh({
+    enabled:
+      (open || configDialogOpen || catalog === 'mcp') &&
+      (mcpManager?.availableMCPServers.length ?? 0) > 0,
+  });
   /* Closing runs in two beats, so the rows below never slide up through a hole
      where the folded destinations used to be: they fade where they stand, and
      only once they are gone does the list close over them. */
@@ -326,7 +347,7 @@ function Palette({
   useEffect(() => () => applyLift(0), [applyLift]);
   const baselineRef = useRef<number | null>(null);
   const updateLift = useCallback(() => {
-    if (!mounted) {
+    if (!mounted || opensUp) {
       baselineRef.current = null;
       applyLift(0);
       return;
@@ -347,7 +368,7 @@ function Palette({
       viewport != null ? viewport.offsetTop + viewport.height : window.innerHeight;
     applyLift(Math.max(0, Math.ceil(needed - (viewportBottom - baselineRef.current))));
     follow();
-  }, [mounted, popupHeight, applyLift, anchorRef, follow]);
+  }, [mounted, opensUp, popupHeight, applyLift, anchorRef, follow]);
 
   useLayoutEffect(updateLift, [updateLift]);
 
@@ -482,12 +503,17 @@ function Palette({
       if (list.length === 0) {
         return;
       }
+      /* Tools are a short fixed set; skills and servers run to hundreds, so
+         the palette keeps a handful and the dialog holds the rest. */
+      const capped = section !== 'tool';
       next.push({
         type: 'header',
         key: `h:${section}`,
         label: localize(SECTION_LABEL[section]),
+        showAll: capped ? section : undefined,
       });
-      for (const entry of list) {
+      const shown = capped ? list.slice(0, SECTION_LIMIT) : list;
+      for (const entry of shown) {
         next.push({ type: 'entry', key: entry.key, entry, isFavorite: false });
       }
     };
@@ -497,8 +523,13 @@ function Palette({
     pushSection('mcp');
 
     if (canAttach && recent.files.length > 0) {
-      next.push({ type: 'header', key: 'h:files', label: localize('com_ui_composer_files') });
-      for (const file of recent.files) {
+      next.push({
+        type: 'header',
+        key: 'h:files',
+        label: localize('com_ui_composer_files'),
+        showAll: 'files',
+      });
+      for (const file of recent.files.slice(0, SECTION_LIMIT)) {
         next.push({ type: 'file', key: `file:${file.file_id}`, file });
       }
     }
@@ -631,7 +662,12 @@ function Palette({
     return () => window.clearTimeout(timer);
   }, [collapsing]);
 
-  const firstSelectable = useMemo(() => rows.findIndex(isSelectable), [rows]);
+  /* A section's "Show all" is reachable by the arrows, but never the resting
+     highlight: Enter straight after opening should pick a row, not a dialog. */
+  const firstSelectable = useMemo(() => {
+    const firstRow = rows.findIndex((row) => row.type !== 'header');
+    return firstRow === -1 ? rows.findIndex(isSelectable) : firstRow;
+  }, [rows]);
 
   /** Where the active row sits now, falling back to the first row that can be
    *  chosen once the query has filtered the old one away. */
@@ -654,12 +690,17 @@ function Palette({
 
   /* Cleared on unmount rather than on close: the popup stays up through its
      leave animation, so clearing on close emptied the field and repopulated the
-     list in full view of the user. */
+     list in full view of the user.
+     The highlight goes with it. It follows the pointer as well as the arrows,
+     so keeping it made the next opening light up whatever row or "Show all"
+     the pointer last crossed, wherever the pointer now is. */
   const [wasMounted, setWasMounted] = useState(false);
   if (mounted !== wasMounted) {
     setWasMounted(mounted);
     if (!mounted) {
       setSearch('');
+      setActiveKey('');
+      setScrollToActive(false);
     }
   }
 
@@ -684,7 +725,18 @@ function Palette({
   const activate = useCallback(
     (index: number) => {
       const row = rows[index];
-      if (!row || row.type === 'header') {
+      if (!row) {
+        return;
+      }
+      if (row.type === 'header') {
+        if (row.showAll == null) {
+          return;
+        }
+        openingCatalogRef.current = true;
+        catalogReturnRef.current =
+          anchorRef.current?.querySelector<HTMLElement>('[data-testid="text-input"]') ?? null;
+        popover.hide();
+        setCatalog(row.showAll);
         return;
       }
       if (row.type === 'attach') {
@@ -715,7 +767,7 @@ function Palette({
          a file picker, dismisses it. */
       row.entry.onSelect();
     },
-    [rows, popover, recent, showAllAttach],
+    [rows, popover, recent, showAllAttach, anchorRef],
   );
 
   /**
@@ -815,6 +867,32 @@ function Palette({
             >
               {row.label}
             </div>
+            {row.showAll != null && (
+              <div
+                id={paletteRowId(row.key)}
+                role="gridcell"
+                aria-selected={index === activeIndex}
+                onMouseEnter={() => {
+                  setActiveKey(row.key);
+                  setScrollToActive(false);
+                }}
+                className={cn(
+                  'text-text-secondary flex shrink-0 items-end self-end rounded-md',
+                  index === activeIndex && 'bg-surface-hover',
+                )}
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  tabIndex={-1}
+                  aria-label={localize('com_ui_composer_show_all_label', { 0: row.label })}
+                  onClick={(event) => handleRowClick(event, index)}
+                >
+                  {localize('com_ui_show_all')}
+                </Button>
+              </div>
+            )}
           </div>
         );
       }
@@ -941,6 +1019,7 @@ function Palette({
       const departing = row.type === 'attach' && row.entry.primary !== true && collapsing;
       const { label, icon } = row.entry;
       const description = isEntry ? row.entry.description : undefined;
+      const status = isEntry ? row.entry.status : undefined;
       const checked = isEntry ? row.entry.active : false;
       const favorited = isEntry && row.isFavorite;
       const canFavorite = isEntry && row.entry.favoritable !== false;
@@ -989,11 +1068,24 @@ function Palette({
               }
               className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg px-2 text-left"
             >
-              <span className="shrink-0" aria-hidden="true">
+              <span className="relative flex shrink-0" aria-hidden="true">
                 {icon}
+                {status != null && (
+                  /* Sits on the icon's corner like the MCP menu's server items;
+                     the ring takes the popup's surface so the dot reads as cut
+                     out of the glyph. */
+                  <span
+                    className={cn(
+                      'border-presentation absolute -right-1 -bottom-1 size-2.5 rounded-full border-2',
+                      status.tone,
+                    )}
+                  />
+                )}
               </span>
               <span className="flex min-w-0 flex-1 flex-col justify-center">
                 <span className={cn('truncate', checked && 'font-medium')}>{label}</span>
+                {/* The dot is color only, so the status is still said aloud. */}
+                {status != null && <span className="sr-only">{status.label}</span>}
                 {description != null && description !== '' && (
                   <span className="text-text-secondary truncate text-xs opacity-80">
                     {description}
@@ -1010,6 +1102,7 @@ function Palette({
                     <IconButton
                       size="xs"
                       shape="square"
+                      variant="row-action"
                       label={mode.label}
                       className="group"
                       onClick={(event) => {
@@ -1053,6 +1146,7 @@ function Palette({
                 <IconButton
                   size="xs"
                   shape="square"
+                  variant="row-action"
                   label={localize(favorited ? 'com_ui_unfavorite' : 'com_ui_favorite')}
                   aria-pressed={favorited}
                   onClick={(event) => {
@@ -1065,7 +1159,7 @@ function Palette({
                     className={cn(
                       'h-4 w-4',
                       favorited
-                        ? 'text-accent-primary group-hover:text-accent-primary-hover'
+                        ? 'text-series-4 group-hover:text-series-4'
                         : 'text-text-secondary group-hover:text-text-primary',
                     )}
                     fill={favorited ? 'currentColor' : 'none'}
@@ -1098,8 +1192,9 @@ function Palette({
   return (
     <>
       <FileUpload ref={attach.inputRef} handleFileChange={attach.onFileChange}>
-        {/* Opens downward like the thinking popup; Ariakit flips it above on
-            its own once the composer sits too low for it to fit below. */}
+        {/* Opens downward like the thinking popup on wider screens, and above
+            on a phone; Ariakit flips a downward one above on its own once the
+            composer sits too low for it to fit below. */}
         <Ariakit.PopoverProvider store={popover}>
           {/* The disclosure is the outer component and the tooltip is what it
               renders through, not the other way round: passing a
@@ -1180,8 +1275,10 @@ function Palette({
             onClose={() => {
               window.requestAnimationFrame(() => {
                 /* Reopened within the frame: that session owns the input and
-                   the field must not take focus from it. */
-                if (popover.getState().open) {
+                   the field must not take focus from it. Handed over to a
+                   "Show all" dialog: the dialog owns focus now. */
+                if (popover.getState().open || openingCatalogRef.current) {
+                  openingCatalogRef.current = false;
                   return;
                 }
                 const touch =
@@ -1317,6 +1414,16 @@ function Palette({
         isDownloading={attach.isProcessing}
         downloadProgress={attach.downloadProgress}
         maxSelectionCount={attach.maxSelectionCount}
+      />
+      <Catalog
+        section={catalog}
+        onClose={() => setCatalog(null)}
+        entries={entries}
+        returnFocusRef={catalogReturnRef}
+        onAttach={(file) => {
+          setCatalog(null);
+          recent.attach(file);
+        }}
       />
     </>
   );

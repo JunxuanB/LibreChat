@@ -83,6 +83,8 @@ jest.mock('~/Providers', () => ({
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, options?: Record<string, string | number>) =>
     options ? `${key}:${options['0'] ?? options.count}` : key,
+  useAuthContext: () => ({ user: { id: 'user-1' } }),
+  useToolFavorites: () => ({ favoriteKeys: new Set<string>(), toggle: jest.fn() }),
 }));
 
 let mockFavoriteKeys: string[] = [];
@@ -185,7 +187,9 @@ const rows = () =>
 /** Just the section headers, which is what carries the order. */
 const headers = () =>
   Array.from(
-    document.querySelectorAll<HTMLElement>('[id^="composer-palette-list"] [data-row-key^="h:"]'),
+    document.querySelectorAll<HTMLElement>(
+      '[id^="composer-palette-list"] [data-row-key^="h:"] [role="columnheader"]',
+    ),
   ).map((row) => row.textContent?.trim() ?? '');
 
 /** Row identities in list order, which is what the model actually decides. */
@@ -310,6 +314,105 @@ describe('Palette', () => {
         '0',
       ),
     );
+  });
+
+  describe('show all', () => {
+    const many = (section: 'skill' | 'mcp', count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        entry({ key: `${section}:item${i}`, itemId: `item${i}`, label: `item${i}`, section }),
+      );
+
+    it('caps skills, servers and files at five rows each', () => {
+      mockRecentFiles = Array.from({ length: 7 }, (_, i) => ({
+        file_id: `f${i}`,
+        filename: `file${i}.pdf`,
+        type: 'application/pdf',
+      }));
+      /* Rendered one section at a time: the list is virtualized, so rows past
+         its height are not in the DOM to count. */
+      const { unmount } = renderPalette({ entries: [...many('skill', 8), ...many('mcp', 8)] });
+      const listed = keys();
+      expect(listed.filter((key) => key.startsWith('skill:'))).toHaveLength(5);
+      expect(listed.filter((key) => key.startsWith('mcp:'))).toHaveLength(5);
+      unmount();
+      renderPalette({ entries: [] });
+      expect(keys().filter((key) => key.startsWith('file:'))).toHaveLength(5);
+    });
+
+    it('keeps the resting highlight on a row, not on a header action', () => {
+      renderPalette({ canAttach: false, entries: many('mcp', 2) });
+      expect(screen.getByTestId('composer-palette-search')).toHaveAttribute(
+        'aria-activedescendant',
+        expect.stringContaining(
+          Array.from('mcp:item0', (c) => c.charCodeAt(0).toString(16).padStart(4, '0')).join(''),
+        ),
+      );
+    });
+
+    it('opens the section dialog, whose cards toggle the same entries', async () => {
+      const servers = many('mcp', 7);
+      renderPalette({ entries: servers });
+      fireEvent.click(
+        screen.getByRole('button', { name: 'com_ui_composer_show_all_label:com_ui_composer_mcp' }),
+      );
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog).toHaveTextContent('com_ui_mcp_servers');
+      fireEvent.click(screen.getByRole('button', { name: /item6/ }));
+      expect(servers[6].onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows each server status on its row and on its card', async () => {
+      const servers = [
+        entry({
+          key: 'mcp:up',
+          itemId: 'up',
+          label: 'Up server',
+          section: 'mcp',
+          status: { label: 'Connected', tone: 'bg-status-success' },
+        }),
+        entry({
+          key: 'mcp:auth',
+          itemId: 'auth',
+          label: 'Auth server',
+          section: 'mcp',
+          status: { label: 'Needs Auth', tone: 'bg-status-warning' },
+        }),
+      ];
+      renderPalette({ entries: servers });
+      expect(rows()).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('Up serverConnected'),
+          expect.stringContaining('Auth serverNeeds Auth'),
+        ]),
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: 'com_ui_composer_show_all_label:com_ui_composer_mcp' }),
+      );
+      const dialog = await screen.findByRole('dialog');
+      const cards = Array.from(dialog.querySelectorAll('li')).map((card) => card.textContent);
+      expect(cards).toEqual([
+        expect.stringContaining('Connected'),
+        expect.stringContaining('Needs Auth'),
+      ]);
+    });
+
+    it('narrows the dialog to servers the user made', async () => {
+      const servers = many('mcp', 7).map((server, i) => ({ ...server, ownedByUser: i < 2 }));
+      renderPalette({ entries: servers });
+      fireEvent.click(
+        screen.getByRole('button', { name: 'com_ui_composer_show_all_label:com_ui_composer_mcp' }),
+      );
+      const dialog = await screen.findByRole('dialog');
+      const cards = () =>
+        Array.from(dialog.querySelectorAll('li > div > button[aria-pressed]')).map(
+          (card) => card.textContent?.match(/item\d/)?.[0],
+        );
+      expect(cards()).toHaveLength(7);
+      fireEvent.click(screen.getByText('com_ui_tools_view_made_by_you'));
+      expect(cards()).toEqual(['item0', 'item1']);
+      fireEvent.click(screen.getByText('com_ui_tools_view_favorites'));
+      expect(cards()).toEqual([]);
+    });
   });
 
   describe('section order', () => {
@@ -590,6 +693,26 @@ describe('Palette', () => {
       expect(input.getAttribute('aria-activedescendant')).toBe(
         'palette-row-0-006c006f00630061006c003a00700072006f00760069006400650072',
       );
+    });
+
+    /* The highlight follows the pointer too, so a kept one lit up whatever the
+       pointer last crossed (a star's row, "Show all") on the next opening. */
+    it('starts each opening fresh rather than where the last one was left', async () => {
+      renderPalette();
+      const input = screen.getByTestId('composer-palette-search');
+      const first = input.getAttribute('aria-activedescendant');
+      const webRow = document.querySelector('[data-row-key="web_search"]');
+      fireEvent.mouseEnter(webRow as Element);
+      expect(input.getAttribute('aria-activedescendant')).not.toBe(first);
+
+      fireEvent.keyDown(input, { key: 'Escape' });
+      await waitFor(() =>
+        expect(screen.queryByTestId('composer-palette-search')).not.toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByTestId('composer-palette-button'));
+
+      const reopened = await screen.findByTestId('composer-palette-search');
+      expect(reopened.getAttribute('aria-activedescendant')).toBe(first);
     });
 
     /* An id that names nothing is the failure mode here: screen readers lose
