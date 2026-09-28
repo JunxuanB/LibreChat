@@ -1894,7 +1894,8 @@ function createInitializeClient(dependencies = {}) {
   return async (params) => {
     const upstreamTokenProviderResolver = createScheduleUpstreamTokenProviderResolver(
       params.req,
-      dependencies.resolveUpstreamTokenProvider,
+      dependencies.resolveUpstreamTokenProvider ??
+        require('~/server/services/Schedules/obo').resolve,
       params.signal,
       params.scheduledTokenContext,
     );
