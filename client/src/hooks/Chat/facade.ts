@@ -8,6 +8,8 @@ import {
   toUIMessage,
 } from 'librechat-data-provider';
 import type { TMessage, UIMessage, TAttachment, UIMappingOptions } from 'librechat-data-provider';
+import type { QueryCacheNotifyEvent } from '@tanstack/react-query';
+import type { ChatContract } from './contract';
 import type { TAskFunction } from '~/common';
 import { isMemoryFailureOutput } from '~/components/Chat/Messages/Content/Parts/MemoryCall';
 import { getToolMeta } from '~/components/Chat/Messages/Content/outcome';
@@ -225,6 +227,9 @@ export const getChatStatus = (isSubmitting: boolean, latest: TMessage | undefine
   return latest && isErrorMessage(latest) ? 'error' : 'ready';
 };
 
+/** Cache events that add, drop or rewrite a query's data. */
+const dataEvents = new Set<QueryCacheNotifyEvent['type']>(['added', 'removed', 'updated']);
+
 /** Ids on the active branch: the contract's tail and its ancestors. */
 const getActiveBranch = (byId: Map<string, TMessage>, tailId: string | undefined) => {
   const branch = new Set<string>();
@@ -235,6 +240,110 @@ const getActiveBranch = (byId: Map<string, TMessage>, tailId: string | undefined
   }
   return branch;
 };
+
+/**
+ * Subscribes to writes of one conversation's cached messages. Only events that can change the
+ * data count: observers mount inside other components' renders and the cache notifies
+ * synchronously, so the change is delivered after the current task instead of inside someone
+ * else's render.
+ */
+const useMessagesSubscription = (messagesKey: string) => {
+  const queryClient = useQueryClient();
+  const queryHash = useMemo(() => hashQueryKey([QueryKeys.messages, messagesKey]), [messagesKey]);
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      let active = true;
+      const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+        if (event.query.queryHash !== queryHash || !dataEvents.has(event.type)) {
+          return;
+        }
+        queueMicrotask(() => {
+          if (active) {
+            onChange();
+          }
+        });
+      });
+      return () => {
+        active = false;
+        unsubscribe();
+      };
+    },
+    [queryClient, queryHash],
+  );
+  return { queryClient, queryHash, subscribe };
+};
+
+/** Regenerates the response to `messageId`, or the latest message of the branch. */
+const useRegenerate = (
+  getMessages: ChatContract['getMessages'],
+  latestMessageId: string | undefined,
+  regenerateTarget: ChatContract['regenerate'],
+) =>
+  useCallback(
+    (options?: { messageId?: string }) => {
+      const messageId = options?.messageId ?? latestMessageId;
+      const target = getMessages()?.find((message) => message.messageId === messageId);
+      regenerateTarget(
+        target
+          ? {
+              messageId: target.messageId,
+              parentMessageId: target.parentMessageId,
+              isCreatedByUser: target.isCreatedByUser,
+            }
+          : { messageId },
+      );
+    },
+    [getMessages, latestMessageId, regenerateTarget],
+  );
+
+/** The latest message, searched from the tail, where it almost always is. */
+const findLatest = (stored: TMessage[] | undefined, latestMessageId: string | undefined) => {
+  if (!stored || latestMessageId == null) {
+    return undefined;
+  }
+  for (let i = stored.length - 1; i >= 0; i--) {
+    if (stored[i].messageId === latestMessageId) {
+      return stored[i];
+    }
+  }
+  return undefined;
+};
+
+/** The `useChat` members that need no message list. */
+export type ChatActions = Pick<
+  UseChatHelpers,
+  'id' | 'status' | 'sendMessage' | 'regenerate' | 'stop'
+>;
+
+/**
+ * `useChat` without `messages`, for controls that submit or read status: it re-renders when the
+ * status changes, not on every stream frame, and never maps the conversation.
+ */
+export function useChatActions(): ChatActions {
+  const {
+    conversation,
+    getMessages,
+    messagesKey,
+    latestMessageId,
+    isSubmitting,
+    ask,
+    regenerate: regenerateTarget,
+    stopGenerating,
+  } = useChatContext();
+  const { subscribe } = useMessagesSubscription(messagesKey);
+  const readStatus = useCallback(
+    () => getChatStatus(isSubmitting, findLatest(getMessages(), latestMessageId)),
+    [getMessages, isSubmitting, latestMessageId],
+  );
+  const status = useSyncExternalStore(subscribe, readStatus, readStatus);
+  const regenerate = useRegenerate(getMessages, latestMessageId, regenerateTarget);
+  const id = messagesKey || conversation?.conversationId || undefined;
+
+  return useMemo(
+    () => ({ id, status, sendMessage: ask, regenerate, stop: stopGenerating }),
+    [id, status, ask, regenerate, stopGenerating],
+  );
+}
 
 /**
  * AI SDK `useChat`, read and called through `ChatContext`. It holds no state of its own:
@@ -254,17 +363,7 @@ export function useChat(): UseChatHelpers {
     stopGenerating,
   } = useChatContext();
 
-  const queryClient = useQueryClient();
-  const queryHash = useMemo(() => hashQueryKey([QueryKeys.messages, messagesKey]), [messagesKey]);
-  const subscribe = useCallback(
-    (onChange: () => void) =>
-      queryClient.getQueryCache().subscribe((event) => {
-        if (event.query.queryHash === queryHash) {
-          onChange();
-        }
-      }),
-    [queryClient, queryHash],
-  );
+  const { queryClient, queryHash, subscribe } = useMessagesSubscription(messagesKey);
   const snapshot = useRef<{ writes: number; stored?: TMessage[] }>();
   /**
    * A stream frame replaces a response's content on the same object, so structural sharing can
@@ -304,22 +403,7 @@ export function useChat(): UseChatHelpers {
     [errorText],
   );
 
-  const regenerate = useCallback(
-    (options?: { messageId?: string }) => {
-      const messageId = options?.messageId ?? latestMessageId;
-      const target = getMessages()?.find((message) => message.messageId === messageId);
-      regenerateTarget(
-        target
-          ? {
-              messageId: target.messageId,
-              parentMessageId: target.parentMessageId,
-              isCreatedByUser: target.isCreatedByUser,
-            }
-          : { messageId },
-      );
-    },
-    [getMessages, latestMessageId, regenerateTarget],
-  );
+  const regenerate = useRegenerate(getMessages, latestMessageId, regenerateTarget);
 
   const setMessages = useCallback(
     (update: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => {
