@@ -98,6 +98,13 @@ fileConfig:
           'text/markdown': 'provider'
 
 endpoints:
+  # The Assistants endpoint drives the classic (non-resumable) SSE client path,
+  # which the fake provider server (ASSISTANTS_BASE_URL) serves with streamed
+  # runs, a slow-run prompt marker, and run cancellation.
+  assistants:
+    models:
+      default:
+        - 'gpt-4o-mini'
   # Default capabilities plus run_in_background (off by default upstream) so the
   # background tool-call e2e can opt an MCP tool into detached dispatch.
   agents:
@@ -246,6 +253,7 @@ modelSpecs:
     - 'Mock Provider E'
     - 'Mock Provider F'
     - 'agents'
+    - 'assistants'
   list:
     - name: 'e2e-mock-provider-a'
       label: 'Mock Provider A'

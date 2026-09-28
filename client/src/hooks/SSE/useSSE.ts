@@ -61,6 +61,7 @@ export default function useSSE(
     contentHandler,
     createdHandler,
     titleHandler,
+    settlePane,
     attachmentHandler,
     abortConversation,
     cancelPendingDeltaFlush,
@@ -226,7 +227,7 @@ export default function useSSE(
       flushPendingDeltas();
       const streamKey = (submission as TSubmission | null)?.['initialResponse']?.messageId;
       if (completed.has(streamKey)) {
-        setIsSubmitting(false);
+        settlePane(submission);
         setCompleted((prev) => {
           prev.delete(streamKey);
           return new Set(prev);
@@ -255,8 +256,7 @@ export default function useSSE(
         );
       } catch (error) {
         console.error('Error during abort:', error);
-        setIsSubmitting(false);
-        setShowStopButton(false);
+        settlePane(submission);
       }
     });
 

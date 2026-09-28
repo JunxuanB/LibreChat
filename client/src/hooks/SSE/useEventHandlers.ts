@@ -16,6 +16,7 @@ import {
 import type {
   TPreset,
   TMessage,
+  TSubmission,
   TConversation,
   TStartupConfig,
   EventSubmission,
@@ -521,6 +522,28 @@ export default function useEventHandlers({
    *  would inherit a stale baseline. Navigation teardown deliberately does not
    *  clear it — a reattach to a still-live run keeps its original start. */
   const setSubmissionStart = useSetRecoilState(store.submissionStartFamily(runIndex));
+  const getPaneSubmission = useRecoilCallback(
+    ({ snapshot }) =>
+      () =>
+        snapshot.getLoadable(store.submissionByIndex(runIndex)).valueMaybe(),
+    [runIndex],
+  );
+  /** A settlement that lands after an abort round trip must not touch the
+   * flags of a newer submission: navigation frees the pane before `/abort`
+   * resolves, so a re-send on the destination already owns `isSubmitting` by
+   * the time the stale response arrives. A cleared pane submission (stop or
+   * navigation teardown) still settles, which is the stop contract. */
+  const settlePane = useCallback(
+    (submission: TSubmission) => {
+      const current = getPaneSubmission();
+      if (current != null && current !== submission) {
+        return;
+      }
+      setIsSubmitting(false);
+      setShowStopButton(false);
+    },
+    [getPaneSubmission, setIsSubmitting, setShowStopButton],
+  );
   const { mutate: reconcileCodeDecision } =
     useReconcileConversationCodeEnvironmentMutation(setConversation);
   const reconcileFailedCodeDecision = useCallback(
@@ -737,9 +760,9 @@ export default function useEventHandlers({
         );
       }
 
-      setIsSubmitting(false);
+      settlePane(submission);
     },
-    [setMessages, setConversation, isAddedRequest, queryClient, setIsSubmitting],
+    [setMessages, setConversation, isAddedRequest, queryClient, settlePane],
   );
 
   const syncHandler = useCallback(
@@ -972,8 +995,7 @@ export default function useEventHandlers({
         // Handle early abort - aborted before any response message was saved.
         if ((data as Record<string, unknown>).earlyAbort) {
           console.log('[finalHandler] Early abort detected - no response message saved');
-          setShowStopButton(false);
-          setIsSubmitting(false);
+          settlePane(submission);
 
           const currentConvoId = submissionConvo.conversationId;
           const isInitialNewConvo = isInitialNewConversationSubmission(submission);
@@ -1204,8 +1226,7 @@ export default function useEventHandlers({
           }
         }
       } finally {
-        setShowStopButton(false);
-        setIsSubmitting(false);
+        settlePane(submission);
       }
     },
     [
@@ -1218,8 +1239,7 @@ export default function useEventHandlers({
       isAddedRequest,
       announcePolite,
       setConversation,
-      setIsSubmitting,
-      setShowStopButton,
+      settlePane,
       location.pathname,
       applyAgentTemplate,
       attachmentHandler,
@@ -1302,8 +1322,7 @@ export default function useEventHandlers({
           );
         } catch (error) {
           console.error('Error in finalHandler during abort:', error);
-          setShowStopButton(false);
-          setIsSubmitting(false);
+          settlePane(submission);
           setSubmissionStart(null);
         }
         return;
@@ -1311,7 +1330,7 @@ export default function useEventHandlers({
         const convoId = conversationId || `_${v4()}`;
         logger.log('conversation', 'Aborted conversation with minimal messages, ID: ' + convoId);
         recoverConversation(convoId, submission);
-        setIsSubmitting(false);
+        settlePane(submission);
         return;
       }
 
@@ -1333,7 +1352,7 @@ export default function useEventHandlers({
         if (contentType != null && contentType.includes('application/json')) {
           const data = await response.json();
           if (response.status === 404) {
-            setIsSubmitting(false);
+            settlePane(submission);
             return;
           }
           if (data.final === true) {
@@ -1342,7 +1361,7 @@ export default function useEventHandlers({
             cancelHandler(data, submission);
           }
         } else if (response.status === 204 || response.status === 200) {
-          setIsSubmitting(false);
+          settlePane(submission);
         } else {
           throw new Error(
             'Unexpected response from server; Status: ' +
@@ -1367,7 +1386,7 @@ export default function useEventHandlers({
             : [...submission.messages, submission.userMessage, errorResponse],
         );
         recoverConversation(conversationId || errorResponse.conversationId || v4(), submission);
-        setIsSubmitting(false);
+        settlePane(submission);
       }
     },
     [
@@ -1376,8 +1395,7 @@ export default function useEventHandlers({
       setMessages,
       finalHandler,
       cancelHandler,
-      setIsSubmitting,
-      setShowStopButton,
+      settlePane,
       setSubmissionStart,
       recoverConversation,
     ],
@@ -1395,6 +1413,7 @@ export default function useEventHandlers({
     titleHandler,
     syncStepMessage,
     prunePtcTraces,
+    settlePane,
     cancelPendingDeltaFlush,
     flushPendingDeltas,
     attachmentHandler,

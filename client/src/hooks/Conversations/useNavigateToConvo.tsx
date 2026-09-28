@@ -25,6 +25,7 @@ import {
   updateConvoInAllQueries,
   logger,
 } from '~/utils';
+import { useSettlePaneSubmission } from '~/hooks/Chat/settle';
 import { useApplyModelSpecEffects } from '~/hooks/Agents';
 import { startupConfigKey } from '~/data-provider';
 import store from '~/store';
@@ -95,6 +96,7 @@ const useNavigateToConvo = (index = 0) => {
   const queryClient = useQueryClient();
   const clearAllConversations = store.useClearConvoState();
   const applyModelSpecEffects = useApplyModelSpecEffects();
+  const settlePaneSubmission = useSettlePaneSubmission(index);
   const setSubmission = useSetRecoilState(store.submissionByIndex(index));
   const { hasSetConversation, setConversation: setConvo } = store.useSetConversationAtom(index);
 
@@ -236,6 +238,10 @@ const useNavigateToConvo = (index = 0) => {
      * still in flight for an earlier one cannot land on top of it. */
     const generation = ++navigationGeneration;
     setSubmission(null);
+    /** Tearing the submission down here leaves its in-flight flags raised
+     * until the departing run's /abort settles; the destination transcript
+     * owns nothing in flight, so the pane settles at the switch instead. */
+    settlePaneSubmission(conversation.conversationId ?? Constants.NEW_CONVO);
 
     let convo = { ...conversation };
     const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);

@@ -164,6 +164,60 @@ function assistantReply(thread) {
   return marker ? `E2E assistant reply ${marker}` : DEFAULT_REPLY;
 }
 
+/** Prompt marker that opts a run into a slow, cancellable stream, so specs can
+ *  navigate away or stop while the run is still live. */
+const SLOW_MARKER = /E2E_SLOW_ASSISTANT:([A-Za-z0-9._-]+)/;
+/** Long enough that a spec can navigate away, stop, or re-send while the run
+ *  is still live even on a loaded CI machine. */
+const SLOW_CHUNKS = 30;
+const SLOW_INTERVAL_MS = Number(process.env.E2E_ASSISTANTS_SLOW_INTERVAL_MS || 400);
+/** Deterministic cancel latency: the pane-flag window a spec exercises must
+ *  not depend on how fast the fixture answers a cancel. */
+const CANCEL_DELAY_MS = Number(process.env.E2E_ASSISTANTS_CANCEL_DELAY_MS || 1000);
+
+function latestUserText(thread) {
+  const latestUserMessage = [...thread.messages]
+    .reverse()
+    .find((message) => message.role === 'user');
+  return (
+    latestUserMessage?.content
+      ?.filter((part) => part?.type === 'text')
+      .map((part) => part.text?.value ?? '')
+      .join('\n') ?? ''
+  );
+}
+
+function slowRun(thread) {
+  const label = latestUserText(thread).match(SLOW_MARKER)?.[1];
+  if (!label) {
+    return null;
+  }
+  const chunks = Array.from(
+    { length: SLOW_CHUNKS },
+    (_unused, index) => `slow-${label}-${String(index + 1).padStart(3, '0')} `,
+  );
+  return { label, chunks, full: `E2E slow assistant ${label}` };
+}
+
+/** Slow runs by run id, so a cancel can stop their pending deltas. */
+const activeStreams = new Map();
+
+function messageDelta(messageId, value) {
+  return {
+    id: messageId,
+    object: 'thread.message.delta',
+    delta: {
+      content: [
+        {
+          index: 0,
+          type: 'text',
+          text: { value, annotations: [] },
+        },
+      ],
+    },
+  };
+}
+
 function runObject({ id, threadId, assistant, status, usage = null }) {
   const timestamp = now();
   return {
@@ -265,22 +319,6 @@ function sendAssistantStream(res, { assistant, thread }) {
     status: 'completed',
   });
   const createdMessage = { ...message, content: [], status: 'in_progress', completed_at: null };
-  const messageDelta = {
-    id: message.id,
-    object: 'thread.message.delta',
-    delta: {
-      content: [
-        {
-          index: 0,
-          type: 'text',
-          text: { value: reply, annotations: [] },
-        },
-      ],
-    },
-  };
-
-  runs.set(runId, completedRun);
-  thread.messages.push(message);
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -288,16 +326,89 @@ function sendAssistantStream(res, { assistant, thread }) {
     Connection: 'keep-alive',
   });
   const sendEvent = (event, data) => {
+    if (res.writableEnded || res.destroyed) {
+      return;
+    }
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
+
+  const slow = slowRun(thread);
+  if (slow == null) {
+    runs.set(runId, completedRun);
+    thread.messages.push(message);
+    sendEvent('thread.run.created', createdRun);
+    sendEvent('thread.run.step.created', createdStep);
+    sendEvent('thread.message.created', createdMessage);
+    sendEvent('thread.message.delta', messageDelta(message.id, reply));
+    sendEvent('thread.message.completed', message);
+    sendEvent('thread.run.step.completed', completedStep);
+    sendEvent('thread.run.completed', completedRun);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+
+  /** The slow run completes on a timer and can be cancelled mid-stream, so the
+   *  run object starts in progress and the thread's message only becomes
+   *  complete when the stream says so. */
+  const inProgressRun = runObject({
+    id: runId,
+    threadId: thread.id,
+    assistant,
+    status: 'in_progress',
+  });
+  runs.set(runId, inProgressRun);
+  thread.messages.push(message);
+  const timers = [];
+  const stream = { res, timers, message, delivered: '' };
+  activeStreams.set(runId, stream);
   sendEvent('thread.run.created', createdRun);
   sendEvent('thread.run.step.created', createdStep);
   sendEvent('thread.message.created', createdMessage);
-  sendEvent('thread.message.delta', messageDelta);
-  sendEvent('thread.message.completed', message);
-  sendEvent('thread.run.step.completed', completedStep);
-  sendEvent('thread.run.completed', completedRun);
+  slow.chunks.forEach((chunk, index) => {
+    timers.push(
+      setTimeout(
+        () => {
+          stream.delivered += chunk;
+          sendEvent('thread.message.delta', messageDelta(message.id, chunk));
+        },
+        SLOW_INTERVAL_MS * (index + 1),
+      ),
+    );
+  });
+  timers.push(
+    setTimeout(
+      () => {
+        runs.set(runId, completedRun);
+        activeStreams.delete(runId);
+        sendEvent('thread.message.completed', message);
+        sendEvent('thread.run.step.completed', completedStep);
+        sendEvent('thread.run.completed', completedRun);
+        res.write('data: [DONE]\n\n');
+        res.end();
+      },
+      SLOW_INTERVAL_MS * (slow.chunks.length + 1),
+    ),
+  );
+}
+
+/** Stops a slow run's pending deltas and closes its stream as cancelled. The
+ *  thread message keeps only the chunks that were actually delivered. */
+function cancelActiveStream(runId, cancelledRun) {
+  const stream = activeStreams.get(runId);
+  if (stream == null) {
+    return;
+  }
+  activeStreams.delete(runId);
+  for (const timer of stream.timers) {
+    clearTimeout(timer);
+  }
+  stream.message.content = asTextContent(stream.delivered);
+  stream.message.status = 'incomplete';
+  const { res } = stream;
+  res.write(`event: thread.run.cancelled\n`);
+  res.write(`data: ${JSON.stringify(cancelledRun)}\n\n`);
   res.write('data: [DONE]\n\n');
   res.end();
 }
@@ -330,6 +441,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/__e2e/reset') {
+    for (const stream of activeStreams.values()) {
+      for (const timer of stream.timers) {
+        clearTimeout(timer);
+      }
+      if (!stream.res.writableEnded) {
+        stream.res.end();
+      }
+    }
+    activeStreams.clear();
     assistants.clear();
     threads.clear();
     runs.clear();
@@ -501,6 +621,34 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendJson(res, 200, run);
+      return;
+    }
+
+    const cancelRunPath = pathMatch(
+      url.pathname,
+      /^\/v1\/threads\/([^/]+)\/runs\/([^/]+)\/cancel$/,
+    );
+    if (cancelRunPath && req.method === 'POST') {
+      const [threadId, runId] = cancelRunPath;
+      const run = runs.get(runId);
+      if (!run || run.thread_id !== threadId) {
+        sendError(res, 404, `No run found with id '${runId}'`);
+        return;
+      }
+      /** Answers on a delay so a spec's window (pane flags that must not wait
+       *  on the cancel round trip) is deterministic, not a race with the
+       *  fixture's own responsiveness. */
+      setTimeout(() => {
+        const latest = runs.get(runId) ?? run;
+        if (latest.status !== 'completed') {
+          const cancelledRun = { ...latest, status: 'cancelled', cancelled_at: now() };
+          runs.set(runId, cancelledRun);
+          cancelActiveStream(runId, cancelledRun);
+          sendJson(res, 200, cancelledRun);
+          return;
+        }
+        sendJson(res, 200, { ...latest, status: 'cancelled', cancelled_at: now() });
+      }, CANCEL_DELAY_MS);
       return;
     }
 

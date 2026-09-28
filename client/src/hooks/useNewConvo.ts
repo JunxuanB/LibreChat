@@ -51,6 +51,7 @@ import { supersedeNavigation } from './Conversations/useNavigateToConvo';
 import useGetConversation from './Conversations/useGetConversation';
 import useAssistantListMap from './Assistants/useAssistantListMap';
 import { clearUploadRecovery } from './Files/useFileHandling';
+import { useSettlePaneSubmission } from './Chat/settle';
 import { useResetChatBadges } from './useChatBadges';
 import { useApplyModelSpecEffects } from './Agents';
 import { useAgentsMapContext } from '~/Providers';
@@ -106,6 +107,8 @@ const useNewConvo = (index = 0) => {
       console.log('Error deleting files:', error);
     },
   });
+
+  const settlePaneSubmission = useSettlePaneSubmission(index);
 
   const switchToConversation = useRecoilCallback(
     () =>
@@ -248,10 +251,19 @@ const useNewConvo = (index = 0) => {
           conversation.disableParams = true;
         }
 
+        const isCancelled = conversation.conversationId?.startsWith('_');
+        /** Reads the departing conversation, so it must run before this
+         * function's own state writes land: `clearAllConversations` resets the
+         * conversation atoms of every pane but the first, and the destination
+         * comparison needs the pane's pre-switch conversation. An unsaved '_'
+         * template renders as the new-chat route, which is the destination the
+         * pane's in-flight flags are settled for. */
+        settlePaneSubmission(
+          isCancelled ? Constants.NEW_CONVO : (conversation.conversationId ?? Constants.NEW_CONVO),
+        );
         if (!(keepAddedConvos ?? false)) {
           clearAllConversations(true);
         }
-        const isCancelled = conversation.conversationId?.startsWith('_');
         if (isCancelled) {
           logger.log(
             'conversation',
@@ -314,6 +326,7 @@ const useNewConvo = (index = 0) => {
       modelsQuery.data,
       hasAgentAccess,
       searchParams,
+      settlePaneSubmission,
     ],
   );
 

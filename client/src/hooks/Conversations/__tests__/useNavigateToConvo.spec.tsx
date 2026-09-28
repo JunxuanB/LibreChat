@@ -1,6 +1,6 @@
-import { RecoilRoot, useRecoilValue } from 'recoil';
-import { QueryKeys } from 'librechat-data-provider';
+import { EModelEndpoint, QueryKeys } from 'librechat-data-provider';
 import { render, screen, act, waitFor } from '@testing-library/react';
+import { RecoilRoot, useRecoilValue, useSetRecoilState } from 'recoil';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import type { TConversation, TEndpointsConfig } from 'librechat-data-provider';
@@ -75,6 +75,10 @@ function Harness() {
   const { navigateToConvo } = useNavigateToConvo();
   const conversation = useRecoilValue(store.conversationByIndex(0));
   const { setConversation } = store.useSetConversationAtom(0);
+  const isSubmitting = useRecoilValue(store.isSubmittingFamily(0));
+  const showStopButton = useRecoilValue(store.showStopButtonByIndex(0));
+  const setIsSubmitting = useSetRecoilState(store.isSubmittingFamily(0));
+  const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(0));
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -85,6 +89,33 @@ function Harness() {
         onClick={() => navigateToConvo(rowB, { currentConvoId: 'convo-a' })}
       />
       <button data-testid="go-c" onClick={() => navigateToConvo(rowC, { currentConvoId: B })} />
+      {/* Re-entering the conversation already on screen: the row a second
+          click on the same conversation produces. */}
+      <button
+        data-testid="go-b-again"
+        onClick={() => navigateToConvo(rowB, { currentConvoId: B })}
+      />
+      {/* What a live run leaves behind when the user navigates away: the
+          pane's flags stay raised until the departing run's /abort settles.
+          A running pane always has its conversation atom set, so the button
+          stands one up before raising the flags. */}
+      <button
+        data-testid="raise-flags"
+        onClick={() => {
+          if (conversation == null) {
+            setConversation({
+              conversationId: 'convo-a',
+              title: 'Alpha',
+              endpoint: EModelEndpoint.openAI,
+              model: 'gpt-4o-mini',
+              createdAt: '',
+              updatedAt: '',
+            });
+          }
+          setIsSubmitting(true);
+          setShowStopButton(true);
+        }}
+      />
       {/* Every other way out of a conversation — "New chat", a link, a
           redirect, the back button — moves the route without going through
           `navigateToConvo`, exactly like `useNewConvo` does. */}
@@ -119,6 +150,8 @@ function Harness() {
       />
       <div data-testid="path">{location.pathname}</div>
       <div data-testid="convo">{JSON.stringify(conversation ?? null)}</div>
+      <div data-testid="submitting">{String(isSubmitting)}</div>
+      <div data-testid="stop-button">{String(showStopButton)}</div>
     </div>
   );
 }
@@ -156,6 +189,8 @@ function renderHarness(cached: TConversation[] = []) {
 const currentConvo = (): TConversation | null =>
   JSON.parse(screen.getByTestId('convo').textContent ?? 'null');
 const currentPath = () => screen.getByTestId('path').textContent;
+const submitting = () => screen.getByTestId('submitting').textContent;
+const stopButton = () => screen.getByTestId('stop-button').textContent;
 
 const sidebarRow = (queryClient: QueryClient, id: string) =>
   queryClient
@@ -459,6 +494,50 @@ describe('useNavigateToConvo', () => {
       await waitFor(() =>
         expect(queryClient.getQueryData([QueryKeys.messages, B])).toBeUndefined(),
       );
+    });
+  });
+
+  describe('the pane in-flight flags when leaving a running conversation', () => {
+    it('settles isSubmitting and the stop button at the switch, not when /abort settles', () => {
+      renderHarness([recordB]);
+      click('raise-flags');
+      expect(submitting()).toBe('true');
+
+      click('go-b');
+
+      /** The departing run's /abort bookkeeping is still pending here; the
+       *  destination transcript owns nothing in flight, so neither flag may
+       *  describe it as live for that window. */
+      expect(currentPath()).toBe(`/c/${B}`);
+      expect(submitting()).toBe('false');
+      expect(stopButton()).toBe('false');
+    });
+
+    it('keeps the flags when the destination is the conversation already on screen', async () => {
+      renderHarness([recordB]);
+      click('go-b');
+      await waitFor(() => expect(currentConvo()?.conversationId).toBe(B));
+      click('raise-flags');
+
+      /** Same-conversation teardown is the stop contract: the flags come down
+       *  when the abort response lands, not at the navigation call. */
+      click('go-b-again');
+
+      expect(submitting()).toBe('true');
+      expect(stopButton()).toBe('true');
+    });
+
+    it('settles the flags on a first visit too, before the record lands', () => {
+      renderHarness();
+      click('raise-flags');
+      click('go-b');
+
+      /** The route has not moved yet (no cached record), but the switch is
+       *  already decided: the pane must not carry the departed run's flags
+       *  into the conversation that is about to mount. */
+      expect(currentPath()).toBe('/c/convo-a');
+      expect(submitting()).toBe('false');
+      expect(stopButton()).toBe('false');
     });
   });
 });
