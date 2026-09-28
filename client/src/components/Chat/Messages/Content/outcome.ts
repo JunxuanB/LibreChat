@@ -1,4 +1,4 @@
-import { Tools, ContentTypes, ToolCallTypes } from 'librechat-data-provider';
+import { Tools, Constants, ContentTypes, ToolCallTypes } from 'librechat-data-provider';
 import type {
   Agents,
   TAttachment,
@@ -6,6 +6,7 @@ import type {
   FunctionToolCall,
   TMessageContentParts,
 } from 'librechat-data-provider';
+import { backgroundTaskOutcome, parseBackgroundTaskOutput } from './Parts/background';
 import { parseBackgroundHandle, splitBackgroundAttachments } from './Parts/handle';
 import { resolveToolCallPhase } from '~/utils/toolCallPhase';
 import { isMemoryFailureOutput } from './Parts/MemoryCall';
@@ -35,6 +36,19 @@ export interface ToolMeta {
 
 function hasFailedOutput(output: unknown): boolean {
   return typeof output === 'string' && isError(output);
+}
+
+/** A create_file overwrite displays the edit glyph in its own row. Headers use
+ *  the same identity, without changing the tool name used for labels/counts. */
+export function getToolIconName(
+  name: string,
+  args?: string | Record<string, unknown>,
+  output?: string | null,
+): string {
+  if (name === 'create_file' && output?.startsWith('Updated ')) {
+    return 'edit_file';
+  }
+  return isBashProgrammaticToolCall(name, args) ? Tools.bash_tool : name;
 }
 
 /**
@@ -104,7 +118,7 @@ export function getToolMeta(
      *  agents" on completion even when the child returned no text. */
     const completed = !!tc.output || tc.progress === 1;
     const name = tc.name ?? '';
-    const iconName = isBashProgrammaticToolCall(name, tc.args) ? Tools.bash_tool : name;
+    const iconName = getToolIconName(name, tc.args, tc.output);
     /** Memory tools report failure in prose ("Invalid key ...") that generic
      *  `isError` parsing does not recognize, so `MemoryCall` classifies it with
      *  its own predicate. Reuse that here or a persisted call with no terminal
@@ -133,9 +147,13 @@ export function getToolMeta(
     const { backgroundStatus, fileAttachments } = splitBackgroundAttachments(ownAttachments, tc.id);
     const backgroundSettled = backgroundStatus != null || (fileAttachments?.length ?? 0) > 0;
     const backgroundFailed = backgroundHandle != null && backgroundStatus === 'error';
+    const polled =
+      name === Constants.CHECK_BACKGROUND_TASK ? parseBackgroundTaskOutput(tc.output) : null;
+    const polledOutcome = backgroundTaskOutcome(polled);
     const backgroundCancelled =
       tc.backgroundTask?.cancelled === true ||
-      (backgroundHandle != null && backgroundStatus === 'cancelled');
+      (backgroundHandle != null && backgroundStatus === 'cancelled') ||
+      polledOutcome === 'cancelled';
     return {
       name,
       iconName,
@@ -145,7 +163,7 @@ export function getToolMeta(
       ...resolveOutcome(
         backgroundCancelled ? 'cancelled' : runStepStatus,
         completed,
-        failedOutput || backgroundFailed,
+        failedOutput || backgroundFailed || polledOutcome === 'failed',
       ),
     };
   }
