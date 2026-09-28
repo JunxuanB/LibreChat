@@ -10,7 +10,7 @@ import {
   NEW_CHAT_PATH,
   MOCK_ENDPOINTS,
 } from '../helpers';
-import { withMongo } from '../db';
+import { seedMessages, withMongo } from '../db';
 import { getE2EUser } from '../../../setup/user';
 
 /**
@@ -120,8 +120,9 @@ async function startSlowAssistantRun(page: Page, label: string) {
  *  pinned fixtures seed theirs: rows carry the conversation title, and a
  *  conversation created through the composer keeps "New Chat" for its title
  *  under the mock endpoints (they disable title generation). */
-async function seedDestinationChat(page: Page): Promise<{ row: Locator; title: string }> {
-  const title = `Destination dest-${Math.random().toString(36).slice(2, 8)}`;
+async function seedDestinationChat(page: Page): Promise<{ row: Locator; marker: string }> {
+  const marker = `dest-${Math.random().toString(36).slice(2, 8)}`;
+  const title = `Destination ${marker}`;
   const conversationId = randomUUID();
   const userEmail = getE2EUser().email;
   const now = new Date();
@@ -144,12 +145,30 @@ async function seedDestinationChat(page: Page): Promise<{ row: Locator; title: s
       __v: 0,
     });
   });
+  /** A warm transcript: a stale abort final for the departed run must not
+   *  replace it, which an empty destination would never catch. */
+  await seedMessages(userEmail, conversationId, [
+    {
+      messageId: `${conversationId}-user`,
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+      text: `Warm turn ${marker}`,
+      isCreatedByUser: true,
+      sender: 'User',
+    },
+    {
+      messageId: `${conversationId}-reply`,
+      parentMessageId: `${conversationId}-user`,
+      text: `Warm reply ${marker}`,
+      isCreatedByUser: false,
+      sender: 'Assistant',
+    },
+  ]);
 
   await page.goto(NEW_CHAT_PATH, { timeout: 10_000 });
   await openSidebar(page);
   const row = page.getByTestId('convo-item').filter({ hasText: title }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
-  return { row, title };
+  return { row, marker };
 }
 
 /** Opens a new chat on the Assistants endpoint, ready for a slow run. */
@@ -169,7 +188,7 @@ test.describe('pane in-flight flags across a conversation switch', () => {
     page,
   }) => {
     const label = uniqueName('navigate-away');
-    const { row: destinationRow } = await seedDestinationChat(page);
+    const { row: destinationRow, marker } = await seedDestinationChat(page);
     await openAssistantsNewChat(page);
     await startSlowAssistantRun(page, label);
 
@@ -183,14 +202,14 @@ test.describe('pane in-flight flags across a conversation switch', () => {
      *  abort cannot hide within this bound. */
     await expect(stopButton(page)).toBeHidden({ timeout: 2_000 });
 
-    /** The abort request fires after the switch; its status is not the
-     *  contract here (a run started on a new chat sends an abortKey the server
-     *  rejects, and the server-side disconnect handler still cancels the run).
-     */
+    /** The abort request fires after the switch and its final reconciliation
+     *  writes only the departed conversation's cache: the warm destination
+     *  transcript keeps its own turn and never shows the departed run's
+     *  chunks. */
     await abortSettled;
-
-    /** The destination stays itself: the departed run's streamed chunks never
-     *  land in its transcript. */
+    await expect(messagesView(page).getByText(`Warm reply ${marker}`)).toBeVisible({
+      timeout: 10_000,
+    });
     await expect(messagesView(page).getByText(/slow-/)).toHaveCount(0);
   });
 

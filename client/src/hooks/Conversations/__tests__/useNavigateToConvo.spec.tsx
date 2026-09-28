@@ -627,6 +627,28 @@ describe('useNavigateToConvo', () => {
       expect(screen.getByTestId('submission').textContent).toContain('user-2');
     });
 
+    it('keeps the run until the latest pending navigation commits', async () => {
+      renderHarness();
+      click('raise-flags');
+      /** The pane holds a live run when both first-visit clicks happen. */
+      click('resend-during-fetch');
+      click('go-b');
+      click('go-c');
+      /** Both records are still pending and the route has not moved; B's
+       *  record answering first is superseded only by C's still-pending click,
+       *  so B's continuation must not tear the visible run down. */
+      await settle(B, recordB);
+
+      expect(currentPath()).toBe('/c/convo-a');
+      expect(screen.getByTestId('submission').textContent).toContain('user-2');
+
+      await settle(C, recordC);
+
+      /** The latest navigation commits and owns the teardown. */
+      await waitFor(() => expect(currentPath()).toBe(`/c/${C}`));
+      expect(screen.getByTestId('submission').textContent).toBe('null');
+    });
+
     it('settles the flags when a project-scoped draft switches projects mid-run', () => {
       renderHarness();
       click('raise-flags-project-one');

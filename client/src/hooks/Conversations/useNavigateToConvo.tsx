@@ -239,11 +239,14 @@ const useNavigateToConvo = (index = 0) => {
       queryClient.removeQueries([QueryKeys.messages, conversationId]);
     }
     if (generation !== navigationGeneration || currentRoute() !== routeAtStart) {
+      const routeLeft = currentRoute() !== routeAtStart;
       logger.log('conversation', 'Discarding superseded navigation', conversationId);
-      /** The user is still on the departing conversation, so the run torn down
-       *  here settles through its abort, exactly like an in-place stop; a newer
-       *  submission that already replaced it owns the pane and must survive. */
-      if (stillOwnsPane(submissionAtClick)) {
+      /** Only a navigation whose ROUTE actually moved may tear the run down
+       *  here: superseded by a still-pending newer click, the user is watching
+       *  the departing conversation and the newest navigation's own commit owns
+       *  the teardown. A newer submission that already replaced it owns the
+       *  pane and must survive either way. */
+      if (routeLeft && stillOwnsPane(submissionAtClick)) {
         setSubmission(null);
       }
       return;

@@ -528,6 +528,12 @@ export default function useEventHandlers({
         snapshot.getLoadable(store.submissionByIndex(runIndex)).valueMaybe(),
     [runIndex],
   );
+  const getPaneConversationId = useRecoilCallback(
+    ({ snapshot }) =>
+      () =>
+        snapshot.getLoadable(store.conversationByIndex(runIndex)).valueMaybe()?.conversationId,
+    [runIndex],
+  );
   /** A newer, non-empty pane submission that is not this one: the user re-sent
    *  after this run was torn down, and that run owns the pane now. */
   const paneReplaced = useCallback(
@@ -999,10 +1005,17 @@ export default function useEventHandlers({
   const finalHandler = useCallback(
     (data: TFinalResData, submission: EventSubmission, options?: { fromAbort?: boolean }) => {
       const { requestMessage, responseMessage, conversation, runMessages } = data;
-      /** A stale abort final arriving after the pane re-sent: the newer run
-       *  owns the pane, so this reconciliation may only write the DEPARTING
-       *  conversation's cache, never the pane's live conversation state. */
-      const staleForPane = options?.fromAbort === true && paneReplaced(submission);
+      /** A stale abort final must not write the pane. That is not only the
+       *  re-sent pane: a navigation that switched to another conversation
+       *  leaves the pane submission cleared, and the pane now shows a
+       *  conversation this final's data does not belong to. Reconciliation
+       *  still writes the DEPARTING conversation's cache either way. */
+      const staleForPane =
+        options?.fromAbort === true &&
+        (paneReplaced(submission) ||
+          (conversation.conversationId != null &&
+            getPaneConversationId() != null &&
+            getPaneConversationId() !== conversation.conversationId));
       const {
         messages,
         conversation: submissionConvo,
@@ -1010,7 +1023,9 @@ export default function useEventHandlers({
         isTemporary: _isTemporary = false,
       } = submission;
       const serverConversation = conversation as TConversation;
-      setSubmissionStart(null);
+      if (!staleForPane) {
+        setSubmissionStart(null);
+      }
 
       try {
         // Handle early abort - aborted before any response message was saved.
@@ -1274,6 +1289,7 @@ export default function useEventHandlers({
       setConversation,
       settlePane,
       paneReplaced,
+      getPaneConversationId,
       location.pathname,
       applyAgentTemplate,
       attachmentHandler,

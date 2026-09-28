@@ -31,6 +31,10 @@ jest.mock('~/store', () => {
         key: 'settle-spec-submission',
         default: null,
       }),
+      conversationByIndex: atomFamily({
+        key: 'settle-spec-conversation',
+        default: null,
+      }),
     },
   };
 });
@@ -147,6 +151,18 @@ describe('post-abort settlement fences on the pane submission', () => {
               set(store.submissionByIndex(0), value),
           [],
         ),
+        setPaneConversationId: useRecoilCallback(
+          ({ set }) =>
+            (conversationId: string | null) =>
+              set(store.conversationByIndex(0), {
+                conversationId,
+                title: 'Pane',
+                endpoint: EModelEndpoint.agents,
+                createdAt: '',
+                updatedAt: '',
+              }),
+          [],
+        ),
       }),
       { wrapper },
     );
@@ -157,6 +173,9 @@ describe('post-abort settlement fences on the pane submission', () => {
       setConversation,
       setPaneSubmission: (value: TSubmission | null) => {
         act(() => result.current.setPaneSubmission(value));
+      },
+      setPaneConversationId: (conversationId: string | null) => {
+        act(() => result.current.setPaneConversationId(conversationId));
       },
       abort: () =>
         act(async () => {
@@ -266,6 +285,31 @@ describe('post-abort settlement fences on the pane submission', () => {
     expect(harness.setMessages).not.toHaveBeenCalled();
     expect(harness.setConversation).not.toHaveBeenCalled();
     expect(harness.setIsSubmitting).not.toHaveBeenCalledWith(false);
+  });
+
+  it('writes only the departing cache for an abort final on a switched pane', async () => {
+    const harness = await renderSettleHarness();
+    /** A cached destination left the pane submission cleared, and the pane now
+     *  shows a different conversation: the abort final's reconciliation must
+     *  not write this pane even though no newer submission exists. */
+    harness.setPaneSubmission(null);
+    harness.setPaneConversationId('other-destination');
+
+    await harness.finalFromAbort(submission);
+
+    expect(harness.setMessages).not.toHaveBeenCalled();
+    expect(harness.setConversation).not.toHaveBeenCalled();
+  });
+
+  it('still writes the pane it never left, matching the stop contract', async () => {
+    const harness = await renderSettleHarness();
+    harness.setPaneSubmission(null);
+    harness.setPaneConversationId('saved');
+
+    await harness.finalFromAbort(submission);
+
+    expect(harness.setMessages).toHaveBeenCalled();
+    expect(harness.setConversation).toHaveBeenCalled();
   });
 
   it('recovers only its own pane when an abort request fails', async () => {
