@@ -271,13 +271,20 @@ function writeRuntimeMockConfig() {
         ].join('\n'),
       }
     : { allowedDomain: '', stdioEnv: '', networkServers: '' };
+  /** Longer than the 30s default, so no fixture can time out sooner, and distinct from it, so the
+   *  startup config shows whether the deployment's operation limits reach the client. */
+  const mcpAppOperationLimits = ['  operationLimits:', '    timeoutMs: 45000'];
   const mcpAppsConfig = enableMcpApps
     ? {
         setting:
           mcpAppsPolicy === 'omitted'
             ? ''
             : `apps: ${mcpAppsPolicy === 'false' ? 'false' : 'true'}`,
-        sandbox: ['mcpAppSandbox:', `  url: ${JSON.stringify(mcpSandboxUrl)}`].join('\n'),
+        sandbox: [
+          'mcpAppSandbox:',
+          `  url: ${JSON.stringify(mcpSandboxUrl)}`,
+          ...mcpAppOperationLimits,
+        ].join('\n'),
         allowedDomain: `- http://127.0.0.1:${MCP_APP_PORT}`,
         server: [
           'e2e-app:',
@@ -288,7 +295,12 @@ function writeRuntimeMockConfig() {
           '  timeout: 30000',
         ].join('\n  '),
       }
-    : { setting: '', sandbox: '', allowedDomain: '', server: '' };
+    : {
+        setting: '',
+        sandbox: ['mcpAppSandbox:', ...mcpAppOperationLimits].join('\n'),
+        allowedDomain: '',
+        server: '',
+      };
   const mcpAppsRateLimits =
     mcpAppResourceLimit != null && mcpAppToolCallLimit != null
       ? [
