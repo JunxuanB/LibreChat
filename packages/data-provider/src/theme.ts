@@ -116,6 +116,7 @@ export const themeColorTokens = Object.freeze([
   'rgb-series-7',
   'rgb-series-8',
   'rgb-switch-unchecked',
+  'rgb-switch-thumb',
   'rgb-presentation',
 ] as const);
 
@@ -185,6 +186,12 @@ export const isThemeRGB = (value: unknown): value is string => {
 const isLength = (value: unknown): value is string =>
   typeof value === 'string' &&
   (cssLengthPattern.test(value) || cssLengthDifferencePattern.test(value));
+/**
+ * A switch dimension is a positive px or rem length: `em` would follow the component's own font
+ * size, and the pair is only comparable when both sides share one unit.
+ */
+const isSwitchLength = (value: unknown): value is string =>
+  typeof value === 'string' && /^\d*\.?\d+(px|rem)$/.test(value) && parseFloat(value) > 0;
 const isFontFamily = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && !/[;{}]/.test(value);
 
@@ -293,6 +300,8 @@ const appearanceValidators = {
   radius2xl: isLength,
   radius3xl: isLength,
   controlHeight: isLength,
+  switchWidth: isSwitchLength,
+  switchHeight: isSwitchLength,
   spaceCompact: isLength,
   spaceNormal: isLength,
   /** `dim` fades a disabled control to half opacity; `fill` paints it in the disabled roles. */
@@ -369,6 +378,64 @@ export interface ThemeReadOptions {
    * with its own token list, so there an unknown role is a typo and stays an error.
    */
   ignoreFutureColors?: boolean;
+}
+
+/** LibreChat's own switch, which a theme naming only one of the two dimensions keeps for the other. */
+export const defaultSwitchSize = Object.freeze({ switchWidth: '2.75rem', switchHeight: '1.5rem' });
+
+const switchLength = (value: unknown): [number, 'px' | 'rem'] | undefined => {
+  const match = typeof value === 'string' ? /^(\d*\.?\d+)(px|rem)$/.exec(value) : null;
+  return match ? [Number(match[1]), match[2] as 'px' | 'rem'] : undefined;
+};
+
+/**
+ * The switch knob is the height less the track's 4px of border, and it travels the width less the
+ * height, so the pair the switch will draw (a missing side taken from the default) has to leave a
+ * knob and a forward travel at any root size. That only holds when both sides share a unit, so a
+ * pair is compared in its own unit and a mixed pair is rejected. A rem height of at least 0.5rem
+ * clears the border at any root above 8px; below that the preset clamps the knob at zero.
+ */
+function collectSwitchIssues(appearance: Record<string, unknown>, base: string[]): ThemeIssue[] {
+  if (appearance.switchWidth === undefined && appearance.switchHeight === undefined) {
+    return [];
+  }
+  const widthValue = appearance.switchWidth ?? defaultSwitchSize.switchWidth;
+  const heightValue = appearance.switchHeight ?? defaultSwitchSize.switchHeight;
+  const width = switchLength(widthValue);
+  const height = switchLength(heightValue);
+  if (!width || !height) {
+    return [];
+  }
+  if (width[1] !== height[1]) {
+    return [
+      issue(
+        [...base, 'switchWidth'],
+        `switchWidth and switchHeight must share a unit (the default is rem): ${widthValue}, ${heightValue}`,
+      ),
+    ];
+  }
+  const issues: ThemeIssue[] = [];
+  const minimumHeight = height[1] === 'px' ? 4 : 0.5;
+  const tooShort = height[1] === 'px' ? height[0] <= minimumHeight : height[0] < minimumHeight;
+  if (tooShort) {
+    issues.push(
+      issue(
+        [...base, 'switchHeight'],
+        height[1] === 'px'
+          ? `switchHeight must exceed the 4px track border: ${heightValue}`
+          : `switchHeight must be at least 0.5rem to clear the 4px track border: ${heightValue}`,
+      ),
+    );
+  }
+  if (width[0] <= height[0]) {
+    issues.push(
+      issue(
+        [...base, 'switchWidth'],
+        `switchWidth must exceed switchHeight so the knob can travel: ${widthValue}, ${heightValue}`,
+      ),
+    );
+  }
+  return issues;
 }
 
 /** The color and appearance tokens this reader does not know, which a resolved theme leaves out. */
@@ -479,6 +546,9 @@ function collectModeIssues(
         );
       }
     });
+    if (isPlainThemeRecord(appearance)) {
+      issues.push(...collectSwitchIssues(appearance, [...base, 'appearance']));
+    }
   }
 
   if (brands !== undefined && !isPlainThemeRecord(brands)) {
