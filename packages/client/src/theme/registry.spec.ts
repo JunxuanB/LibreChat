@@ -291,6 +291,81 @@ describe('theme registry', () => {
     expect(resolved.colors['rgb-border-control']).toBe(darkTheme['rgb-border-control']);
   });
 
+  it('presses a theme that predates the pressed roles in the hover fills it painted', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'hover-only-reference',
+        modes: {
+          dark: {
+            colors: {
+              'rgb-surface-hover': '70 71 72',
+              'rgb-surface-inverted-hover': '200 201 202',
+            },
+          },
+        },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe('70 71 72');
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe('200 201 202');
+  });
+
+  it('keeps the bundled pressed fills, equal to the bundled hovers, for a theme that paints none', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'pressless-reference',
+        modes: { light: { colors: { 'rgb-accent-primary': '1 2 3' } } },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe(defaultTheme['rgb-surface-hover']);
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe(
+      defaultTheme['rgb-surface-inverted-hover'],
+    );
+  });
+
+  it('preserves explicit pressed fills over the hovers they would follow', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'pressed-reference',
+        modes: {
+          light: {
+            colors: {
+              'rgb-surface-hover': '10 20 30',
+              'rgb-surface-pressed': '40 50 60',
+              'rgb-surface-inverted-pressed': '70 80 90',
+            },
+          },
+        },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe('40 50 60');
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe('70 80 90');
+  });
+
+  it('dims disabled controls unless a theme chooses to fill them', () => {
+    const base = { version: 1, name: 'disabled-reference' } as const;
+
+    expect(resolveTheme({ ...base, modes: {} }, 'light').appearance.disabledStyle).toBe('dim');
+    expect(
+      resolveTheme({ ...base, modes: { dark: { appearance: { disabledStyle: 'fill' } } } }, 'dark')
+        .appearance.disabledStyle,
+    ).toBe('fill');
+    expect(
+      validateThemeDefinition({
+        ...base,
+        modes: { light: { appearance: { disabledStyle: 'fade' as 'dim' } } },
+      }),
+    ).toEqual(['Invalid appearance value for disabledStyle: fade']);
+  });
+
   it('draws the focus outline in the ring of a theme that predates the role', () => {
     const resolved = resolveTheme(
       {
@@ -604,7 +679,7 @@ describe('theme registry', () => {
         light: {
           colors: {
             'rgb-text-primary': '999 0 0',
-            'rgb-unknown': '1 2 3',
+            'rgb-unknown': 'red',
           },
           appearance: {
             controlRadius: 'url(theme.css)',
@@ -682,16 +757,39 @@ describe('theme registry', () => {
       expect(() => resolveTheme(theme, 'light')).toThrow(TypeError);
     });
 
-    it('still rejects an unknown colour token', () => {
+    it('ignores a well-formed colour role it predates and paints the rest', () => {
       const theme = {
         version: 1,
         name: 'colour',
         modes: {
-          light: { colors: { 'rgb-future': '1 2 3' }, appearance: { futureSpacing: '1rem' } },
+          light: {
+            colors: { 'rgb-future': '1 2 3', 'rgb-accent-primary': '4 5 6' },
+            appearance: { futureSpacing: '1rem' },
+          },
         },
       } as ThemeDefinition;
 
-      expect(validateThemeDefinition(theme)).toEqual(['Unknown color token: rgb-future']);
+      expect(validateThemeDefinition(theme)).toEqual([]);
+      expect(collectThemeWarnings(theme)).toEqual([
+        'Unknown light color token ignored: rgb-future',
+        'Unknown light appearance token ignored: futureSpacing',
+      ]);
+      const resolved = resolveTheme(theme, 'light');
+      expect(resolved.colors['rgb-accent-primary']).toBe('4 5 6');
+      expect(resolved.colors).not.toHaveProperty('rgb-future');
+    });
+
+    it('still rejects an unknown colour token that is not a well-formed role', () => {
+      const theme = {
+        version: 1,
+        name: 'colour',
+        modes: { light: { colors: { 'rgb-future': 'red', future: '1 2 3' } } },
+      } as ThemeDefinition;
+
+      expect(validateThemeDefinition(theme)).toEqual([
+        'Unknown color token: rgb-future',
+        'Unknown color token: future',
+      ]);
     });
 
     it('still rejects an injection attempt carried by an unknown key', () => {

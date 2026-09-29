@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { cn } from '~/utils';
+import { cn, disabledFillClasses, peerDisabledInkClasses } from '~/utils';
 
 export interface FilterInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'placeholder'> {
@@ -48,13 +48,17 @@ const FilterInput: React.ForwardRefExoticComponent<
           aria-label={label}
           className={cn(
             'peer border-border-light text-text-primary ring-offset-surface-primary placeholder:text-text-secondary flex h-9 w-full rounded-lg border bg-transparent px-3 py-2 text-sm focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50',
+            disabledFillClasses,
             className,
           )}
           {...props}
         />
         <label
           htmlFor={inputId}
-          className="text-text-secondary pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm transition-all duration-200 peer-focus:top-0 peer-focus:bg-inherit peer-focus:px-1 peer-focus:text-xs peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-inherit peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-xs"
+          className={cn(
+            peerDisabledInkClasses,
+            'text-text-secondary pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm transition-all duration-200 peer-focus:top-0 peer-focus:bg-inherit peer-focus:px-1 peer-focus:text-xs peer-[:not(:placeholder-shown)]:top-0 peer-[:not(:placeholder-shown)]:bg-inherit peer-[:not(:placeholder-shown)]:px-1 peer-[:not(:placeholder-shown)]:text-xs',
+          )}
         >
           {label}
         </label>
