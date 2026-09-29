@@ -137,6 +137,8 @@ export const themeAppearanceProperties: Readonly<
   controlHeight: '--theme-control-height',
   switchWidth: '--theme-switch-width',
   switchHeight: '--theme-switch-height',
+  tableCellSpaceY: '--theme-table-cell-space-y',
+  tableRowStroke: '--theme-table-row-stroke',
   spaceCompact: '--theme-space-compact',
   spaceNormal: '--theme-space-normal',
   disabledStyle: '--theme-disabled-style',
@@ -183,6 +185,8 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   radius3xl: '1.5rem',
   controlHeight: '2.25rem',
   ...defaultSwitchSize,
+  tableCellSpaceY: '1rem',
+  tableRowStroke: '0px',
   spaceCompact: '0.375rem',
   spaceNormal: '0.75rem',
   disabledStyle: 'dim',
@@ -448,6 +452,18 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors?.['rgb-surface-primary'] !== undefined
       ? { 'rgb-switch-thumb': customColors['rgb-surface-primary'] }
       : {};
+  /** Table column names were `text-secondary` before they had a role. */
+  const tableHeaderTextFallback =
+    customColors?.['rgb-table-header-text'] === undefined &&
+    customColors?.['rgb-text-secondary'] !== undefined
+      ? { 'rgb-table-header-text': customColors['rgb-text-secondary'] }
+      : {};
+  /** Self-sticking table headers were the dialog surface before they had a role. */
+  const tableHeaderFillFallback =
+    customColors?.['rgb-table-header-fill'] === undefined &&
+    customColors?.['rgb-surface-dialog'] !== undefined
+      ? { 'rgb-table-header-fill': customColors['rgb-surface-dialog'] }
+      : {};
   const chartWidgetStrokeFallback =
     customColors?.['rgb-chart-widget-stroke'] === undefined &&
     customColors?.['rgb-border-light'] !== undefined
@@ -520,6 +536,8 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...chartWidgetSurfaceFallback,
       ...chartWidgetStrokeFallback,
       ...switchThumbFallback,
+      ...tableHeaderTextFallback,
+      ...tableHeaderFillFallback,
       ...borderControlFallback,
       ...focusFallback,
       ...pressedFallback,
