@@ -27,6 +27,7 @@ import {
 import ApprovalProvider from './Messages/Content/ApprovalContext';
 import ConversationStarters from './Input/ConversationStarters';
 import { pendingApprovalActionFamily } from './approval/state';
+import ProjectBadge from '~/components/Projects/ProjectBadge';
 import { composerLiftFamily } from './Input/Composer/state';
 import { showComposerTipsAtom } from '~/store/composerTips';
 import { useGetMessagesByConvoId } from '~/data-provider';
@@ -112,6 +113,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
       ? chatHelpers.conversation
       : undefined;
   const activeSubagentThread = activeConversation?.subagentThread;
+  const chatProjectId = activeConversation?.chatProjectId || undefined;
 
   useAdaptiveSSE(rootSubmission, chatHelpers, false, index);
 
@@ -182,24 +184,27 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                     <h1 className="sr-only">{pageHeading}</h1>
                     {/* Marks the header's controls as this pane's, so a pane-scoped
                         shortcut pressed from them acts here, not on the first pane. */}
-                    <div data-chat-pane-portal={index} className="contents">
-                      <Header
-                        parentConversationId={parentConversationId}
-                        readOnly={isSubagentThreadReadOnly}
-                      />
-                    </div>
-                    <>
-                      <div
-                        data-chat-pane={index}
-                        style={
-                          isLandingPage && composerLift > 0
-                            ? { transform: `translateY(-${composerLift}px)` }
-                            : undefined
-                        }
-                        className={cn(
-                          'flex flex-col',
-                          isLandingPage
-                            ? /* The gutter is reserved once per state, wherever the
+                      <div data-chat-pane-portal={index} className="contents">
+                        <Header
+                          parentConversationId={parentConversationId}
+                          readOnly={isSubagentThreadReadOnly}
+                        />
+                      </div>
+                      {!isLandingPage && chatProjectId && (
+                        <ProjectBadge projectId={chatProjectId} />
+                      )}
+                      <>
+                        <div
+                          data-chat-pane={index}
+                          style={
+                            isLandingPage && composerLift > 0
+                              ? { transform: `translateY(-${composerLift}px)` }
+                              : undefined
+                          }
+                          className={cn(
+                            'flex flex-col',
+                            isLandingPage
+                              ? /* The gutter is reserved once per state, wherever the
                                centring happens. A conversation centres the composer
                                inside the band below, against a message column that
                                holds the scrollbar band back; the landing page centres
@@ -207,12 +212,13 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                                together, so it holds the same band back here. Without
                                it the composer lands 4px right of where a conversation
                                puts it and slides sideways on the way in. */
-                              'scrollbar-gutter-spacer flex-1 items-center justify-end sm:justify-center'
-                            : 'h-full overflow-y-auto',
-                        )}
-                      >
-                        {content}
-                        {/* Named + opaque so a view transition (the ask_user_question
+                                'scrollbar-gutter-spacer flex-1 items-center justify-end sm:justify-center'
+                              : 'h-full overflow-y-auto',
+                            !isLandingPage && chatProjectId && 'pt-9',
+                          )}
+                        >
+                          {content}
+                          {/* Named + opaque so a view transition (the ask_user_question
                         popover ⇄ chat-card morph) paints the whole composer band
                         over the travelling card instead of letting it show
                         through below the composer. The background matches the

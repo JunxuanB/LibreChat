@@ -156,6 +156,7 @@ function buildPostLoginPayload(appConfig) {
     sharedLinksEnabled,
     publicSharedLinksEnabled,
     openidReuseTokens,
+    ragEnabled: Boolean(process.env.RAG_API_URL?.trim()),
     /** Read inline (not module-level) for per-request evaluation and test isolation */
     allowAccountDeletion:
       process.env.ALLOW_ACCOUNT_DELETION === undefined ||
@@ -303,6 +304,7 @@ router.get('/', async function (req, res) {
       conversationListLimits,
       sharedLinksSnapshotFilesEnabled: sharedLinksEnabled && isFileSnapshotEnabled(appConfig),
       socialLogins: appConfig?.registration?.socialLogins ?? defaultSocialLogins,
+      projects: appConfig?.projects,
       interface: appConfig?.interfaceConfig,
       titleGenerationTiming: resolveTitleTiming({
         appConfig,
