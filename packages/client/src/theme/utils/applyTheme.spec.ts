@@ -19,6 +19,8 @@ const semanticProperties = [
   '--chart-widget-surface',
   '--chart-widget-stroke',
   '--switch-thumb',
+  '--table-header-text',
+  '--table-header-fill',
   '--border-destructive',
   '--border-control',
   '--status-success',
@@ -380,6 +382,22 @@ describe('applyTheme', () => {
     applyTheme({ 'rgb-surface-primary': '20 21 22', 'rgb-switch-thumb': '1 2 3' }, root);
 
     expect(root.style.getPropertyValue('--switch-thumb')).toBe('1 2 3');
+  });
+
+  it('keeps table column names of a legacy theme on its secondary text', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-text-secondary': '20 21 22' }, root);
+
+    expect(root.style.getPropertyValue('--table-header-text')).toBe('20 21 22');
+  });
+
+  it('keeps a legacy self-sticking table header on its dialog surface', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-dialog': '20 21 22' }, root);
+
+    expect(root.style.getPropertyValue('--table-header-fill')).toBe('20 21 22');
   });
 
   it('carries a legacy light border onto the control outline', () => {
