@@ -120,6 +120,18 @@ describe('handoff run snapshot', () => {
     expect(record).toHaveBeenCalledWith(result);
   });
 
+  it('propagates an unverifiable database admission outage to the generation owner', async () => {
+    const admit = jest.fn().mockRejectedValue(new Error('write unavailable'));
+    read.mockRejectedValueOnce(new Error('read unavailable'));
+    const snapshot = resolveInitialHandoffRunSnapshot(valid)!;
+    await expect(
+      admitAgentHandoffRun(
+        { identity, agentId: 'agent_a', generation: 100, snapshot },
+        { admit, read, record: jest.fn() },
+      ),
+    ).rejects.toThrow('Agent routing admission could not be verified');
+  });
+
   it('degrades a stale admission to an unpromotable turn, including same-agent revisions', async () => {
     const admit = jest.fn().mockResolvedValue(null);
     const record = jest.fn();
@@ -193,31 +205,29 @@ describe('handoff run snapshot', () => {
     expect(record).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['false', 'reject'] as const)(
-    'declines to promote when recording the admitted job returns %s',
-    async (recordOutcome) => {
-      const admit = jest.fn().mockResolvedValue({
-        agentId: 'agent_a',
-        revision: 1,
-        generation: 100,
-        automaticHandoffsEnabled: true,
-      });
-      const record = jest
-        .fn()
-        .mockImplementation(() =>
-          recordOutcome === 'false'
-            ? Promise.resolve(false)
-            : Promise.reject(new Error('job lost')),
-        );
-      const snapshot = resolveInitialHandoffRunSnapshot(valid)!;
-      await expect(
-        admitAgentHandoffRun(
-          { identity, agentId: 'agent_a', generation: 100, snapshot },
-          { admit, read, record },
-        ),
-      ).resolves.toBe(snapshot);
-    },
-  );
+  it.each([false, true])('handles a failed job recording (throws=%s)', async (throws) => {
+    const admit = jest.fn().mockResolvedValue({
+      agentId: 'agent_a',
+      revision: 1,
+      generation: 100,
+      automaticHandoffsEnabled: true,
+    });
+    const record = jest
+      .fn()
+      .mockImplementation(() =>
+        throws ? Promise.reject(new Error('job unavailable')) : Promise.resolve(false),
+      );
+    const snapshot = resolveInitialHandoffRunSnapshot(valid)!;
+    const attempt = admitAgentHandoffRun(
+      { identity, agentId: 'agent_a', generation: 100, snapshot },
+      { admit, read, record },
+    );
+    if (throws) {
+      await expect(attempt).rejects.toThrow('Agent routing admission could not be recorded');
+    } else {
+      await expect(attempt).resolves.toBe(snapshot);
+    }
+  });
 
   it('refuses an admission if the job record was replaced before durable recording', async () => {
     const snapshot = { ...resolveInitialHandoffRunSnapshot(valid)!, admission };
@@ -264,7 +274,11 @@ describe('terminal conversation handoff promotion', () => {
       transitionId: transition.id,
       revision: 2,
     });
-    expect(conversation).toEqual({ agent_id: 'agent_b', agentRoutingRevision: 2 });
+    expect(conversation).toEqual({
+      agent_id: 'agent_b',
+      agentRoutingRevision: 2,
+      automaticHandoffsEnabled: true,
+    });
   });
 
   it('never publishes a winning switch after a manual selection beats the terminal CAS', async () => {
@@ -276,7 +290,32 @@ describe('terminal conversation handoff promotion', () => {
     await expect(
       reconcileTerminalAgentHandoff({ ...input(), conversation }, deps),
     ).resolves.toBeNull();
-    expect(conversation).toEqual({ agent_id: 'agent_c', agentRoutingRevision: 2 });
+    expect(conversation).toEqual({
+      agent_id: 'agent_c',
+      agentRoutingRevision: 2,
+      automaticHandoffsEnabled: true,
+    });
+  });
+
+  it('projects the winning opt-out preference when the toggle races terminal promotion', async () => {
+    const conversation = {
+      agent_id: 'agent_a',
+      agentRoutingRevision: 1,
+      automaticHandoffsEnabled: true,
+    };
+    commit.mockResolvedValueOnce({
+      status: 'conflict',
+      decision: { agentId: 'agent_a', revision: 2, automaticHandoffsEnabled: false },
+    });
+    finish.mockResolvedValueOnce(null);
+    await expect(
+      reconcileTerminalAgentHandoff({ ...input(), conversation }, deps),
+    ).resolves.toBeNull();
+    expect(conversation).toEqual({
+      agent_id: 'agent_a',
+      agentRoutingRevision: 2,
+      automaticHandoffsEnabled: false,
+    });
   });
 
   it('ignores an error response with an SDK candidate left behind', async () => {

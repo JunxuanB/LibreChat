@@ -289,13 +289,8 @@ jest.mock('@librechat/api', () => ({
   recoverTurnMessageReference: jest.requireActual('@librechat/api').recoverTurnMessageReference,
   resolveConversationAnchor: jest.requireActual('@librechat/api').resolveConversationAnchor,
   resolveRunCodeWorkspaces: jest.requireActual('@librechat/api').resolveRunCodeWorkspaces,
-  resolveInitialHandoffRunSnapshot:
-    jest.requireActual('@librechat/api').resolveInitialHandoffRunSnapshot,
-  beginAgentHandoffAdmission: jest.requireActual('@librechat/api').beginAgentHandoffAdmission,
-  recordAgentHandoffSnapshot: jest.requireActual('@librechat/api').recordAgentHandoffSnapshot,
-  createAgentHandoffAuthorization:
-    jest.requireActual('@librechat/api').createAgentHandoffAuthorization,
-  reconcileTerminalAgentHandoff: jest.requireActual('@librechat/api').reconcileTerminalAgentHandoff,
+  resolveAgentHandoffStartup: jest.requireActual('@librechat/api').resolveAgentHandoffStartup,
+  createAgentHandoffLifecycle: jest.requireActual('@librechat/api').createAgentHandoffLifecycle,
   resolveRequestTenantId: jest.requireActual('@librechat/api').resolveRequestTenantId,
   AttachmentStorageError: jest.requireActual('@librechat/api').AttachmentStorageError,
   encodeAndFormatImages: jest.requireActual('@librechat/api').encodeAndFormatImages,

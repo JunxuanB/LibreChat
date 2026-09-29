@@ -1,7 +1,13 @@
 import { useEffect, useMemo } from 'react';
 import { Button, ControlCombobox, Switch } from '@librechat/client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Constants, EModelEndpoint, QueryKeys, dataService } from 'librechat-data-provider';
+import {
+  Constants,
+  DynamicQueryKeys,
+  EModelEndpoint,
+  QueryKeys,
+  dataService,
+} from 'librechat-data-provider';
 import type {
   AgentRoutingAction,
   AgentRoutingDecisionView,
@@ -12,9 +18,6 @@ import type { OptionWithIcon } from '~/common';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import { useAgentsMapContext } from '~/Providers/AgentsMapContext';
 import { useLocalize } from '~/hooks';
-
-export const agentRoutingKey = (conversationId: string, revision: number) =>
-  [QueryKeys.conversation, conversationId, 'agent-routing', revision] as const;
 
 export default function AgentRoutingNotice({
   conversation,
@@ -30,6 +33,8 @@ export default function AgentRoutingNotice({
   const { data: startupConfig } = useGetStartupConfig();
   const conversationId = conversation?.conversationId ?? '';
   const revision = conversation?.agentRoutingRevision ?? 0;
+  const automaticAvailable =
+    endpoints?.[EModelEndpoint.agents]?.conversationHandoffsEnabled === true;
   const enabled =
     conversation?.endpoint === EModelEndpoint.agents &&
     conversationId !== '' &&
@@ -37,9 +42,13 @@ export default function AgentRoutingNotice({
     conversationId !== Constants.PENDING_CONVO &&
     startupConfig != null &&
     startupConfig.modelSpecs?.enforce !== true &&
-    (revision > 0 || endpoints?.[EModelEndpoint.agents]?.conversationHandoffsEnabled === true);
-  const { data: decision, isError } = useQuery<AgentRoutingDecisionView>(
-    agentRoutingKey(conversationId, revision),
+    (revision > 0 || automaticAvailable);
+  const {
+    data: decision,
+    isError,
+    refetch,
+  } = useQuery<AgentRoutingDecisionView>(
+    DynamicQueryKeys.agentRouting(conversationId, revision),
     () => dataService.getConversationAgentRouting(conversationId),
     { enabled, refetchOnMount: true },
   );
@@ -76,7 +85,7 @@ export default function AgentRoutingNotice({
         automaticHandoffsEnabled: next.automaticHandoffsEnabled,
       };
     });
-    queryClient.setQueryData(agentRoutingKey(conversationId, next.revision), next);
+    queryClient.setQueryData(DynamicQueryKeys.agentRouting(conversationId, next.revision), next);
   };
   useEffect(() => {
     if (decision != null && decision.revision > revision) {
@@ -91,11 +100,22 @@ export default function AgentRoutingNotice({
       onSuccess: applyDecision,
       onError: () => {
         void queryClient.invalidateQueries([QueryKeys.conversation, conversationId]);
-        void queryClient.invalidateQueries(agentRoutingKey(conversationId, revision));
+        void queryClient.invalidateQueries(DynamicQueryKeys.agentRouting(conversationId, revision));
       },
     },
   );
-  if (!enabled || decision == null || decision.revision < revision) return null;
+  if (!enabled) return null;
+  if (isError && decision == null) {
+    return (
+      <section aria-label={localize('com_ui_agent_handoff_future_turns')}>
+        <p role="alert">{localize('com_ui_agent_handoff_update_failed')}</p>
+        <Button variant="ghost" size="sm" onClick={() => void refetch()}>
+          {localize('com_ui_retry')}
+        </Button>
+      </section>
+    );
+  }
+  if (decision == null || decision.revision < revision) return null;
   const previous = decision.previousAgentId ? agents?.[decision.previousAgentId] : undefined;
   const selected = decision.agentId ? agents?.[decision.agentId] : undefined;
   const canSwitchBack =
@@ -162,7 +182,7 @@ export default function AgentRoutingNotice({
           id="automatic-handoffs"
           aria-label={localize('com_ui_agent_handoff_automatic')}
           checked={decision.automaticHandoffsEnabled}
-          disabled={update.isLoading}
+          disabled={update.isLoading || (!automaticAvailable && !decision.automaticHandoffsEnabled)}
           onCheckedChange={(next) =>
             update.mutate({
               action: 'automatic',

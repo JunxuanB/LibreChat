@@ -67,6 +67,7 @@ export * from './run';
 export * from './routing';
 export * from './routingHttp';
 export * from './promotion';
+export * from './handoff/lifecycle';
 export * from './fading';
 export * from './publication';
 export * from './runtime';

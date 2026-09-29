@@ -135,8 +135,10 @@ export async function admitAgentHandoffRun(
         current.revision === (snapshot.expectedRevision ?? 0) + 1
           ? current
           : null;
-    } catch {
-      return snapshot;
+    } catch (error) {
+      throw Object.assign(new Error('Agent routing admission could not be verified'), {
+        cause: error,
+      });
     }
   }
   if (
@@ -158,9 +160,10 @@ export async function admitAgentHandoffRun(
   };
   try {
     return (await deps.record(result)) ? result : snapshot;
-  } catch {
-    /** The assistant turn remains valid. An unconfirmed ticket may not promote it. */
-    return snapshot;
+  } catch (error) {
+    throw Object.assign(new Error('Agent routing admission could not be recorded'), {
+      cause: error,
+    });
   }
 }
 
@@ -325,7 +328,11 @@ export function getCommittableAgentHandoff(
 
 async function releaseUncommittedHandoff(
   input: CommitAgentHandoffInput & {
-    conversation: { agent_id?: string; agentRoutingRevision?: number };
+    conversation: {
+      agent_id?: string;
+      agentRoutingRevision?: number;
+      automaticHandoffsEnabled?: boolean;
+    };
   },
   deps: CommitAgentHandoffDeps,
 ): Promise<void> {
@@ -342,6 +349,7 @@ async function releaseUncommittedHandoff(
     if (decision != null && decision.revision >= (input.conversation.agentRoutingRevision ?? 0)) {
       input.conversation.agent_id = decision.agentId ?? undefined;
       input.conversation.agentRoutingRevision = decision.revision;
+      input.conversation.automaticHandoffsEnabled = decision.automaticHandoffsEnabled;
     }
   } catch {
     /** A failed cleanup may not hide an otherwise durable assistant response. */
@@ -351,7 +359,11 @@ async function releaseUncommittedHandoff(
 /** Mutates the outgoing conversation only after Mongo confirms the exact route decision. */
 export async function reconcileTerminalAgentHandoff(
   input: CommitAgentHandoffInput & {
-    conversation: { agent_id?: string; agentRoutingRevision?: number };
+    conversation: {
+      agent_id?: string;
+      agentRoutingRevision?: number;
+      automaticHandoffsEnabled?: boolean;
+    };
   },
   deps: CommitAgentHandoffDeps,
 ): Promise<CommittedAgentHandoff | null> {
@@ -370,6 +382,7 @@ export async function reconcileTerminalAgentHandoff(
     input.conversation.agent_id = decision.agentId;
   }
   input.conversation.agentRoutingRevision = decision.revision;
+  input.conversation.automaticHandoffsEnabled = decision.automaticHandoffsEnabled;
   if (
     (result.status !== 'committed' && result.status !== 'already_committed') ||
     decision.agentId !== outcome.agentId ||

@@ -50,10 +50,7 @@ const {
   restoreScheduledTokenContext,
   isAgentHandoffRunSnapshot,
   resolveRequestTenantId,
-  admitAgentHandoffRun,
-  recordAgentHandoffSnapshot,
-  createAgentHandoffAuthorization,
-  reconcileTerminalAgentHandoff,
+  createAgentHandoffLifecycle,
   recoverTurnMessageReference,
 } = require('@librechat/api');
 const { disposeClient } = require('~/server/cleanup');
@@ -658,70 +655,34 @@ async function finalizeResumedTurn({
       });
     }
 
-    if (
-      req._agentHandoffRun != null &&
-      req._agentHandoffRun.admission == null &&
-      typeof meta.agent_id === 'string' &&
-      req.config?.endpoints?.[EModelEndpoint.agents]?.conversationHandoffs?.enabled === true &&
-      terminalClaim.status === 'complete' &&
-      !preemptIncomplete &&
-      !stepLimitReached &&
-      responseMessage.error !== true
-    ) {
-      req._agentHandoffRun = await admitAgentHandoffRun(
-        {
-          identity: { user: userId, conversationId, tenantId: resolveRequestTenantId(req) ?? null },
-          agentId: meta.agent_id,
-          generation: job.createdAt,
-          snapshot: req._agentHandoffRun,
-        },
-        {
-          admit: admitConvoAgentRoutingGeneration,
-          read: getConvoAgentRoutingDecision,
-          record: (snapshot) =>
-            recordAgentHandoffSnapshot(snapshot, job.createdAt, {
-              write: (value) =>
-                GenerationJobManager.updateMetadata(
-                  streamId,
-                  { agentHandoffRun: value },
-                  job.createdAt,
-                ),
-              read: () => GenerationJobManager.getJob(streamId),
-            }),
-        },
-      );
-    }
-    const terminalHandoff = await reconcileTerminalAgentHandoff(
+    const terminalHandoff = await createAgentHandoffLifecycle(
       {
-        identity: {
-          user: userId,
-          conversationId,
-          tenantId: resolveRequestTenantId(req) ?? null,
-        },
-        admission: req._agentHandoffRun?.admission ?? null,
-        run: client?.run,
+        identity: { user: userId, conversationId, tenantId: resolveRequestTenantId(req) ?? null },
+        agentId: meta.agent_id,
+        generation: job.createdAt,
+        role: req.user.role,
         enabled:
           req.config?.endpoints?.[EModelEndpoint.agents]?.conversationHandoffs?.enabled === true,
-        completed:
-          terminalClaim.status === 'complete' &&
-          !preemptIncomplete &&
-          !stepLimitReached &&
-          responseMessage.error !== true,
-        responseContent: content,
-        conversation,
+        snapshot: req._agentHandoffRun,
       },
       {
-        canAccessDestination: createAgentHandoffAuthorization({
-          userId,
-          role: req.user.role,
-          getAgent,
-          checkPermission,
-        }),
+        admit: admitConvoAgentRoutingGeneration,
+        read: getConvoAgentRoutingDecision,
         commit: commitConvoAgentHandoff,
         finish: finishConvoAgentRoutingGeneration,
-        read: getConvoAgentRoutingDecision,
+        getAgent,
+        checkPermission,
+        updateMetadata: (id, value, epoch) => GenerationJobManager.updateMetadata(id, value, epoch),
+        getJob: (id) => GenerationJobManager.getJob(id),
       },
-    );
+    ).complete({
+      run: client?.run,
+      status: terminalClaim.status,
+      unfinished: preemptIncomplete || stepLimitReached,
+      responseError: responseMessage.error,
+      responseContent: content,
+      conversation,
+    });
     const pendingSteers = terminalClaim.drainedSteers.map(toPendingSteer);
     const finalEvent = {
       final: true,

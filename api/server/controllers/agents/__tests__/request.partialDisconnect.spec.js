@@ -47,8 +47,9 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
-  resolveInitialHandoffRunSnapshot:
-    jest.requireActual('@librechat/api').resolveInitialHandoffRunSnapshot,
+  resolveAgentHandoffStartup: jest.requireActual('@librechat/api').resolveAgentHandoffStartup,
+  createAgentHandoffLifecycle: jest.requireActual('@librechat/api').createAgentHandoffLifecycle,
+  resolveRequestTenantId: jest.requireActual('@librechat/api').resolveRequestTenantId,
   getAgentErrorMetadata: (...args) =>
     jest.requireActual('@librechat/api').getAgentErrorMetadata(...args),
   sendEvent: jest.fn(),
