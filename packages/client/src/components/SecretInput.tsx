@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { useState, useCallback } from 'react';
 import { Eye, EyeOff, Copy, Check } from 'lucide';
+import { cn, disabledFillClasses, disabledInkClasses } from '~/utils';
 import { MorphIcon } from './MorphIcon';
-import { cn } from '~/utils';
 
 export interface SecretInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'> {
@@ -84,6 +84,7 @@ const SecretInput: React.ForwardRefExoticComponent<
           type={isVisible ? 'text' : 'password'}
           className={cn(
             'border-border-control placeholder:text-text-secondary flex h-10 w-full rounded-lg border bg-transparent py-2 pl-3 text-sm focus-visible:outline-hidden disabled:cursor-not-allowed disabled:opacity-50',
+            disabledFillClasses,
             colorTransition && 'transition-colors',
             className ?? '',
             copyButton != null || showCopy ? 'pr-20' : 'pr-11',
@@ -119,6 +120,7 @@ const SecretInput: React.ForwardRefExoticComponent<
                 disabled || !value
                   ? 'cursor-not-allowed opacity-50'
                   : 'hover:bg-surface-hover hover:text-text-primary',
+                disabledInkClasses,
                 buttonClassName,
               )}
               aria-label={isCopied ? 'Copied' : 'Copy to clipboard'}
@@ -135,6 +137,7 @@ const SecretInput: React.ForwardRefExoticComponent<
               disabled
                 ? 'cursor-not-allowed opacity-50'
                 : 'hover:bg-surface-hover hover:text-text-primary',
+              disabledInkClasses,
               buttonClassName,
             )}
             aria-label={isVisible ? 'Hide secret' : 'Show secret'}
