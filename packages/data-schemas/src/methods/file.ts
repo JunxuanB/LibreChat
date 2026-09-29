@@ -136,8 +136,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     selectFields?: Record<string, 0 | 1> | string | null,
   ) => Promise<IMongoFile[] | null>;
   getExpiredFiles: (limit?: number, options?: ExpiredFileQueryOptions) => Promise<IMongoFile[]>;
-  incrementFileDeletionAttempts: (file_id: string) => Promise<number>;
-  deferExpiredFile: (file_id: string, deletionRetryAt: Date) => Promise<void>;
+  countFilesById: (file_id: string) => Promise<number>;
+  incrementFileDeletionAttempts: (file_id: string, recordId?: IMongoFile['_id']) => Promise<number>;
+  deferExpiredFile: (
+    file_id: string,
+    deletionRetryAt: Date,
+    recordId?: IMongoFile['_id'],
+  ) => Promise<void>;
   getToolFilesByIds: (
     fileIds: string[],
     toolResourceSet?: Set<EToolResources>,
@@ -416,6 +421,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       .lean<IMongoFile[]>();
   }
 
+  /** Counts every record sharing a storage identifier, across system scope. */
+  async function countFilesById(file_id: string): Promise<number> {
+    const File = mongoose.models.File as Model<IMongoFile>;
+    return await File.countDocuments({ file_id }).exec();
+  }
+
   /**
    * Records one failed sweep deletion and returns the file's resulting
    * consecutive-failure count.
@@ -427,10 +438,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    * both still think it is below — so the give-up would never be reported.
    * Returning it here gives every caller a distinct attempt number.
    */
-  async function incrementFileDeletionAttempts(file_id: string): Promise<number> {
+  async function incrementFileDeletionAttempts(
+    file_id: string,
+    recordId?: IMongoFile['_id'],
+  ): Promise<number> {
     const File = mongoose.models.File as Model<IMongoFile>;
     const file = await File.findOneAndUpdate(
-      { file_id },
+      recordId == null ? { file_id } : { _id: recordId, file_id },
       { $inc: { deletionAttempts: 1 } },
       /** `timestamps: false`: sweep bookkeeping is not a content write.
        *  `processCodeOutput` falls back to `updatedAt` as the writer-order
@@ -451,9 +465,17 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
    * computed a shorter backoff from a lower attempt count cannot pull the
    * file forward past a longer one another node already committed.
    */
-  async function deferExpiredFile(file_id: string, deletionRetryAt: Date): Promise<void> {
+  async function deferExpiredFile(
+    file_id: string,
+    deletionRetryAt: Date,
+    recordId?: IMongoFile['_id'],
+  ): Promise<void> {
     const File = mongoose.models.File as Model<IMongoFile>;
-    await File.updateOne({ file_id }, { $max: { deletionRetryAt } }, { timestamps: false }).exec();
+    await File.updateOne(
+      recordId == null ? { file_id } : { _id: recordId, file_id },
+      { $max: { deletionRetryAt } },
+      { timestamps: false },
+    ).exec();
   }
 
   /**
@@ -1208,6 +1230,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     findFileById,
     getFiles,
     getExpiredFiles,
+    countFilesById,
     incrementFileDeletionAttempts,
     deferExpiredFile,
     getToolFilesByIds,

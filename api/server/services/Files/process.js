@@ -350,6 +350,7 @@ const processDeleteRequest = async ({ req, files }) => {
 async function sweepExpiredFiles(options = {}) {
   return sweepExpiredFilesWithDeps(options, {
     getExpiredFiles: db.getExpiredFiles,
+    countFilesById: db.countFilesById,
     processDeleteRequest,
     incrementFileDeletionAttempts: db.incrementFileDeletionAttempts,
     deferExpiredFile: db.deferExpiredFile,

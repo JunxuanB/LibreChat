@@ -385,6 +385,47 @@ describe('File Methods', () => {
       expect(files.map((file) => file.file_id)).toEqual([expiredFileId]);
     });
 
+    it('counts duplicate identifiers and scopes retry bookkeeping to the selected record', async () => {
+      const fileId = uuidv4();
+      const DuplicateFile = mongoose.models.File as mongoose.Model<{
+        file_id: string;
+        deletionAttempts?: number;
+        deletionRetryAt?: Date;
+      }>;
+      const [selected, duplicate] = await DuplicateFile.create([
+        {
+          file_id: fileId,
+          user: new mongoose.Types.ObjectId(),
+          filename: 'selected.txt',
+          filepath: '/uploads/selected.txt',
+          type: 'text/plain',
+          bytes: 100,
+          expiredAt: new Date('2029-01-01T00:00:00.000Z'),
+        },
+        {
+          file_id: fileId,
+          user: new mongoose.Types.ObjectId(),
+          filename: 'duplicate.txt',
+          filepath: '/uploads/duplicate.txt',
+          type: 'text/plain',
+          bytes: 100,
+          expiredAt: new Date('2029-01-02T00:00:00.000Z'),
+        },
+      ]);
+      const retryAt = new Date('2030-02-01T00:00:00.000Z');
+
+      expect(await fileMethods.countFilesById(fileId)).toBe(2);
+      expect(await fileMethods.incrementFileDeletionAttempts(fileId, selected._id)).toBe(1);
+      await fileMethods.deferExpiredFile(fileId, retryAt, selected._id);
+
+      const selectedAfter = await DuplicateFile.findById(selected._id).lean();
+      const duplicateAfter = await DuplicateFile.findById(duplicate._id).lean();
+      expect(selectedAfter?.deletionAttempts).toBe(1);
+      expect(selectedAfter?.deletionRetryAt).toEqual(retryAt);
+      expect(duplicateAfter?.deletionAttempts).toBeUndefined();
+      expect(duplicateAfter?.deletionRetryAt).toBeUndefined();
+    });
+
     /** Seeds a sweep-eligible file, then drives its retry state through the
      *  same methods the sweep itself uses. */
     const seedExpiredFile = async ({

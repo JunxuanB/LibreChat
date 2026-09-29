@@ -7,12 +7,15 @@ import {
 import type { AppConfig } from '@librechat/data-schemas';
 
 const DEFAULT_FILE_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_FILE_RETENTION_SWEEP_BATCH_SIZE = 100;
+const MAX_FILE_RETENTION_SWEEP_BATCH_SIZE = 100;
 const DEFAULT_FILE_RETENTION_MAX_ATTEMPTS = 10;
 const MIN_FILE_RETENTION_RETRY_BASE_MS = 60 * 1000;
 const FILE_RETENTION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 const FILE_RETENTION_PARK_MS = 30 * 24 * 60 * 60 * 1000;
 
 type ExpiredFile = {
+  _id?: unknown;
   file_id: string;
   source?: string;
   user?: string | { toString?: () => string };
@@ -51,12 +54,13 @@ type VersionedEndpointConfig = {
 
 type SweepDependencies = {
   getExpiredFiles: (limit: number) => Promise<ExpiredFile[] | null | undefined>;
+  countFilesById: (file_id: string) => Promise<number>;
   processDeleteRequest: (params: {
     req: SweepRequest;
     files: ExpiredFile[];
   }) => Promise<{ deletedFileIds: string[]; failedFileIds: string[] }>;
-  incrementFileDeletionAttempts: (file_id: string) => Promise<number>;
-  deferExpiredFile: (file_id: string, deletionRetryAt: Date) => Promise<void>;
+  incrementFileDeletionAttempts: (file_id: string, recordId?: unknown) => Promise<number>;
+  deferExpiredFile: (file_id: string, deletionRetryAt: Date, recordId?: unknown) => Promise<void>;
   logger: SweepLogger;
 };
 
@@ -89,6 +93,26 @@ export function getFileRetentionSweepInterval(
   const value = Number(interval);
   if (!Number.isFinite(value) || value < 0 || (value > 0 && value < 1)) {
     return DEFAULT_FILE_RETENTION_SWEEP_INTERVAL_MS;
+  }
+  return value;
+}
+
+/**
+ * Maximum number of expired files processed by one sweep pass.
+ *
+ * The upper bound preserves the existing batch-size ceiling while allowing
+ * operators to canary the destructive path with a much smaller batch.
+ */
+export function getFileRetentionSweepBatchSize(
+  batchSize: string | undefined = process.env.FILE_RETENTION_SWEEP_BATCH_SIZE,
+): number {
+  if (batchSize == null || batchSize.trim() === '') {
+    return DEFAULT_FILE_RETENTION_SWEEP_BATCH_SIZE;
+  }
+
+  const value = Number(batchSize);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_FILE_RETENTION_SWEEP_BATCH_SIZE) {
+    return DEFAULT_FILE_RETENTION_SWEEP_BATCH_SIZE;
   }
   return value;
 }
@@ -266,9 +290,14 @@ export async function resolveExpiredFileSweepConfig({
 }
 
 export async function sweepExpiredFiles(
-  { appConfig, limit = 100, loadAppConfig }: ExpiredFileSweepOptions | undefined = {},
+  {
+    appConfig,
+    limit = getFileRetentionSweepBatchSize(),
+    loadAppConfig,
+  }: ExpiredFileSweepOptions | undefined = {},
   {
     getExpiredFiles,
+    countFilesById,
     processDeleteRequest,
     incrementFileDeletionAttempts,
     deferExpiredFile,
@@ -297,7 +326,10 @@ export async function sweepExpiredFiles(
       /* The attempt number comes from the increment rather than from the
        * snapshot this batch queried, so two nodes sweeping the same file
        * each get a distinct one. */
-      attempts = await incrementFileDeletionAttempts(file.file_id);
+      attempts =
+        file._id == null
+          ? await incrementFileDeletionAttempts(file.file_id)
+          : await incrementFileDeletionAttempts(file.file_id, file._id);
     } catch (error) {
       logger.error(
         `[sweepExpiredFiles] Error recording failed deletion of expired file ${file.file_id}:`,
@@ -316,10 +348,14 @@ export async function sweepExpiredFiles(
     }
 
     try {
-      await deferExpiredFile(
-        file.file_id,
-        new Date(sweepStartedAt + getExpiredFileRetryDelay(attempts, maxAttempts)),
+      const deletionRetryAt = new Date(
+        sweepStartedAt + getExpiredFileRetryDelay(attempts, maxAttempts),
       );
+      if (file._id == null) {
+        await deferExpiredFile(file.file_id, deletionRetryAt);
+      } else {
+        await deferExpiredFile(file.file_id, deletionRetryAt, file._id);
+      }
     } catch (error) {
       logger.error(`[sweepExpiredFiles] Error deferring expired file ${file.file_id}:`, error);
     }
@@ -334,6 +370,15 @@ export async function sweepExpiredFiles(
     }
 
     try {
+      const matchingRecords = await countFilesById(file.file_id);
+      if (matchingRecords !== 1) {
+        logger.error(
+          `[sweepExpiredFiles] Refusing deletion because the file identifier matched ${matchingRecords} records`,
+        );
+        await recordFailure(file);
+        continue;
+      }
+
       resolvedAppConfig = await resolveExpiredFileSweepConfig({
         appConfig: resolvedAppConfig,
         file,
