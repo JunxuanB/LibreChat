@@ -298,6 +298,13 @@ export const clickHouseDarkTheme: IThemeRGB = {
  * (latin 400 and 700). The tail is the same metric-matched stack the default theme uses (Click
  * UI's own tail names `"SFMono Regular"`, which no platform installs).
  *
+ * Click UI's display family leads with Basier Square, a commercial face ClickHouse licenses for
+ * its own sites. It is named here but not self-hosted: a browser that has it installed renders
+ * headings in it, and every other one falls through to the same Inter stack as the body. The
+ * `text-*` scale takes Click UI's `font.sizes` 1 to 5 at its product line height of 1.5. Click UI
+ * has no step between 1.25rem and 2rem, and 2rem would overtake Tailwind's unthemed `text-3xl`
+ * (1.875rem), so `2xl` keeps LibreChat's 1.5rem at Click UI's line height.
+ *
  * Click UI raises every elevated surface (card, dialog, menu, panel, popover, toast) with
  * `shadow.1`, and its only lighter step is the hairline `shadow.5`. Steps 2 to 4 are the flyout's
  * inset and directional edges, which do not belong on a general scale. `shadow.1` darkens from
@@ -319,6 +326,20 @@ const clickHouseShape = {
     '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif',
   monoFontFamily:
     '"Inconsolata", ui-monospace, SFMono-Regular, Menlo, "Cascadia Mono", "Liberation Mono", Consolas, monospace',
+  displayFontFamily:
+    '\'Basier Square\', "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif', // typography.font.families.display
+  textXs: '0.75rem', // typography.font.sizes.1
+  textSm: '0.875rem', // typography.font.sizes.2
+  textBase: '1rem', // typography.font.sizes.3
+  textLg: '1.125rem', // typography.font.sizes.4
+  textXl: '1.25rem', // typography.font.sizes.5
+  text2xl: '1.5rem', // LibreChat's: Click UI's next step (sizes.6, 2rem) passes the unthemed text-3xl
+  leadingXs: '1.5', // typography.font.line-height.1
+  leadingSm: '1.5', // typography.font.line-height.1
+  leadingBase: '1.5', // typography.font.line-height.1
+  leadingLg: '1.5', // typography.font.line-height.1
+  leadingXl: '1.5', // typography.font.line-height.1
+  leading2xl: '1.5', // typography.font.line-height.1
   shadow2xs: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
   shadowXs: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
   shadowSm: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
