@@ -104,7 +104,7 @@ const OGDialogTemplate: ForwardRefExoticComponent<
   const { selectHandler, selectClasses, selectText, isLoading } = legacySelection ?? {};
 
   const defaultSelect =
-    'bg-surface-inverted text-text-inverted transition-colors hover:bg-surface-inverted-hover disabled:cursor-not-allowed disabled:opacity-50';
+    'bg-button-primary text-text-inverted transition-colors hover:bg-button-primary-hover disabled:cursor-not-allowed disabled:opacity-50';
 
   let selectionContent = null;
   if (isLegacySelection) {
@@ -114,7 +114,7 @@ const OGDialogTemplate: ForwardRefExoticComponent<
         disabled={isLoading}
         className={`${
           selectClasses ?? defaultSelect
-        } flex h-10 items-center justify-center rounded-lg border-none px-4 py-2 text-sm disabled:opacity-80 max-sm:order-first max-sm:w-full sm:order-none`}
+        } h-theme-button flex items-center justify-center rounded-lg border-none px-4 py-2 text-sm disabled:opacity-80 max-sm:order-first max-sm:w-full sm:order-none`}
       >
         {isLoading === true ? (
           <Spinner className="text-text-primary size-4" />
@@ -136,12 +136,7 @@ const OGDialogTemplate: ForwardRefExoticComponent<
       onEscapeKeyDown={onEscapeKeyDown}
       onInteractOutside={onInteractOutside}
       ref={ref}
-      className={cn(
-        /** `border-none` clears the default edge; the contrast variant has to
-         *  restore the style as well as the width to survive it. */
-        'bg-surface-dialog text-text-primary high-contrast:border high-contrast:border-solid high-contrast:border-border-medium high-contrast:shadow-none w-11/12 border-none',
-        className ?? '',
-      )}
+      className={cn('bg-surface-dialog text-text-primary w-11/12', className ?? '')}
       onClick={(e) => e.stopPropagation()}
     >
       <OGDialogHeader className={cn(headerClassName ?? '')}>
