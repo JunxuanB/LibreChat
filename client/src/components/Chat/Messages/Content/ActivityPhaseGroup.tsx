@@ -483,7 +483,7 @@ function FailedPeek({
       type="button"
       className={cn(
         TOOL_ROW_CLASSES,
-        'w-full pl-6 text-left text-text-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-border-heavy',
+        'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy w-full pl-6 text-left focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset',
       )}
       onClick={onReveal}
       data-testid="activity-phase-failed-peek"
@@ -492,7 +492,7 @@ function FailedPeek({
         <TriangleAlert size={14} />
       </span>
       <span className="tool-status-text flex min-w-0 items-center gap-2">
-        <span className="min-w-0 max-w-full shrink-0 truncate font-medium text-status-error">
+        <span className="text-status-error max-w-full min-w-0 shrink-0 truncate font-medium">
           {first.text}
         </span>
         {first.detail !== '' && (
@@ -808,7 +808,12 @@ export default function ActivityPhaseGroup({
              *  keyboard users with no focus indicator. The ghost variant
              *  supplies it today; stating it here keeps the requirement with
              *  the element that depends on it. */
-            className="text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy flex h-auto min-h-7 w-full items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 text-left font-medium hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:ring-inset"
+            className={cn(
+              'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy flex h-auto min-h-7 min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 text-left font-medium hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none focus-visible:ring-inset',
+              /** The open card's title: the one semibold, primary-colour line
+               *  in the fold, so the rows under it read as its contents. */
+              isExpanded && 'text-text-primary font-semibold',
+            )}
             onClick={handleToggle}
             aria-expanded={isExpanded}
             aria-controls={panelId}

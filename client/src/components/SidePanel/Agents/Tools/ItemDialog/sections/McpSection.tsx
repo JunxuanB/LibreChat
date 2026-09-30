@@ -440,7 +440,7 @@ export default function McpSection({ item }: Props) {
   return (
     <div className="flex flex-col gap-5">
       {item.description && (
-        <p className="text-text-secondary max-h-40 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed">
+        <p className="text-text-secondary max-h-40 overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap">
           {item.description}
         </p>
       )}
@@ -489,7 +489,7 @@ export default function McpSection({ item }: Props) {
 
       <div className="flex flex-col gap-2">
         <div className="flex min-h-7 items-center justify-between">
-          <span className="text-text-secondary text-[11px] font-medium uppercase tracking-wide">
+          <span className="text-text-secondary text-[11px] font-medium tracking-wide uppercase">
             {localize('com_ui_tools_mcp_tools_section')}
           </span>
           {(hasTools || runtimeToolsAvailable) && (

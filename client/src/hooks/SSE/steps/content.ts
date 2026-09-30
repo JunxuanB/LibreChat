@@ -299,7 +299,9 @@ export function updateContent(
     };
   } else if (contentType === ContentTypes.TOOL_CALL && 'tool_call' in contentPart) {
     const existingContent = updatedContent[index] as Agents.ToolCallContent | undefined;
-    const existingToolCall = existingContent?.tool_call;
+    const existingToolCall = existingContent?.tool_call as
+      | (Agents.ToolCall & PartMetadata)
+      | undefined;
     const toolCallArgs = (contentPart.tool_call as Agents.ToolCall).args;
     /** When args are a valid object, they are likely already invoked */
     let args =

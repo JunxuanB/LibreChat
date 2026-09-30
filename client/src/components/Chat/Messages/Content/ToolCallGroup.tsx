@@ -515,25 +515,66 @@ export default function ToolCallGroup({
 
   return (
     <div className="mt-1 mb-2" ref={rootRef}>
-      <Button
-        variant="ghost"
-        type="button"
-        className="text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto w-full items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0"
-        onClick={handleToggle}
-        aria-expanded={isExpanded}
-        aria-label={groupAriaLabel}
-      >
-        {iconStatus == null && (allSubagents || allAskQuestions) ? (
-          /** Homogeneous category groups get a single category glyph instead
-           *  of StackedToolIcons' generic wrenches: a Users glyph for
-           *  subagents, a question glyph for ask_user_question — matching
-           *  their individual card headers and reading as the category
-           *  rather than "tools". */
-          <div
+      <div className="flex w-full items-center gap-2">
+        <button
+          type="button"
+          className={cn(
+            'text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none',
+            /** An open header is the title of the rows under it, so it is the
+             *  one line in the fold set in the primary colour. */
+            isExpanded && 'text-text-primary hover:text-text-primary',
+          )}
+          onClick={handleToggle}
+          aria-expanded={isExpanded}
+          aria-label={groupAriaLabel}
+        >
+          {iconStatus == null && (allSubagents || allAskQuestions || allTaskChecks) ? (
+            /** Homogeneous categories keep the same glyph as their individual
+             *  cards instead of stacking identical tool icons. */
+            <div
+              className={cn(
+                ROW_GLYPH_SLOT,
+                'text-text-secondary',
+                isGroupLive && 'text-text-primary animate-pulse',
+              )}
+              aria-hidden="true"
+            >
+              <CategoryIcon size={14} />
+            </div>
+          ) : (
+            <div className={ROW_GLYPH_SLOT} aria-hidden="true">
+              <StackedToolIcons
+                toolNames={iconToolNames}
+                mcpIconMap={mcpIconMap}
+                maxIcons={4}
+                sourceDomains={sourceDomains}
+                status={iconStatus}
+                isAnimating={isGroupLive}
+              />
+            </div>
+          )}
+          <span
             className={cn(
-              ROW_GLYPH_SLOT,
-              'text-text-secondary',
-              isGroupLive && 'text-text-primary animate-pulse',
+              'tool-status-text min-w-0 truncate font-medium',
+              activityFailed && 'text-text-warning',
+            )}
+            role="status"
+            title={groupLabel}
+          >
+            {groupLabel}
+          </span>
+          {visibleGroupDetail && (
+            <span
+              className="text-text-secondary max-w-[40%] min-w-0 truncate text-xs font-normal"
+              title={visibleGroupDetail}
+            >
+              · {visibleGroupDetail}
+            </span>
+          )}
+          <ChevronDown
+            className={cn(
+              'text-text-secondary size-4 shrink-0 transition-transform duration-200 ease-out',
+              isExpanded && 'rotate-180',
             )}
             aria-hidden="true"
           />

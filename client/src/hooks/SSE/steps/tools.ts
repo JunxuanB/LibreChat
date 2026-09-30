@@ -2,6 +2,11 @@ import { StepTypes, ContentTypes, getRunStepDurationMs } from 'librechat-data-pr
 import type { Agents, TMessage, PartMetadata } from 'librechat-data-provider';
 import { getStepMetadata, updateContent } from './content';
 
+type ToolTimingLookup = (
+  callId: string,
+  index?: number,
+) => Pick<PartMetadata, 'toolPreparationStartedAt' | 'toolDispatchedAt'>;
+
 /** Mirrors `SKILL_FILE_PREFIX` in `@librechat/api` file-authoring handlers. */
 const SKILL_FILE_PREFIX = 'skills/';
 const FILE_AUTHORING_TOOLS = new Set(['create_file', 'edit_file']);
@@ -150,6 +155,7 @@ export function applyRunStepClosed(
   runStep: Agents.RunStep,
   closed: Agents.RunStepClosedEvent,
   editPrefixOffset: number,
+  timing: Pick<PartMetadata, 'toolPreparationDurationMs' | 'toolExecutionDurationMs'> = {},
 ): TMessage | undefined {
   const index = runStep.index + editPrefixOffset;
   const existing = message.content?.[index];
