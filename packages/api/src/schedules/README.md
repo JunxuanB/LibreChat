@@ -105,6 +105,23 @@ admission snapshot cannot select the consumed generation. Revocation fences
 credential snapshots before publishing its pause and holds that fence through
 deletion, so activations arriving during teardown cannot use the new revision.
 
+Microsoft Entra `resource/.default` is a resource permission selector, not a
+literal returned permission. For supported Microsoft authority metadata, initial
+enrollment normalizes the provider's concrete resource scopes and stores that
+permission set with the encrypted client information. Renewal must retain every
+enrolled permission; resource-qualified and bare Entra names normalize to the
+same binding. The configured selector is still sent to the IdP and bound to the
+same issuer, client and MCP destination. Other providers retain literal-scope
+semantics; `.default` is never treated as an arbitrary wildcard.
+
+When initial selector scope is omitted, a provider-returned JWT with a matching
+resource audience and delegated `scp` can establish the permission projection.
+An opaque initial selector response with no concrete scope cannot establish that
+set and is refused rather than guessed. Subsequent omitted scope retains the
+stored set unless an observable matching JWT shows narrowing. Existing literal
+grants remain compatible. Older unbound selector grants require owner enrollment
+again; no database migration or browser-login refresh credential is introduced.
+
 Owner updates validate the prospective root agent while the persisted row still
 has its old agent. The write preflight carries the persisted agent and revision
 read by the handler; that snapshot must still match, and the prospective agent's

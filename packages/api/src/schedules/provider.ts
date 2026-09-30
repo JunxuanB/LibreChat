@@ -38,8 +38,8 @@ export function createSignalBoundGrantRequest<C extends object, T>(deps: {
   };
 }
 
-/** OAuth scope omission retains the requested grant scope. An explicit response
- * must contain every required MCP scope; offline_access is not a resource scope. */
+/** Literal-scope validation only. Provider selectors are interpreted by the
+ * scheduled consent policy. Scope omission retains the requested literal scope. */
 export function hasScheduledOboScopes(granted: string | undefined, required: string): boolean {
   if (granted === undefined) return true;
   const scopes = new Set(granted.split(/\s+/).filter(Boolean));

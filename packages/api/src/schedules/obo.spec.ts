@@ -19,6 +19,7 @@ import { MCPConnectionFactory } from '../mcp/MCPConnectionFactory';
 import { MCPTokenStorage } from '../mcp/oauth/tokens';
 import { resolveScheduledOboServer } from './target';
 import { FlowStateManager } from '../flow/manager';
+import { MCPConnection } from '../mcp/connection';
 
 jest.mock('@librechat/data-schemas', () => ({
   ...jest.requireActual('@librechat/data-schemas'),
@@ -93,6 +94,8 @@ function harness(
   let baseAvailable = true;
   let server = config;
   let variables: Record<string, string> = {};
+  let providerIssuer = user.openidIssuer;
+  let providerEndpoint = 'https://login.test/token';
   const inspect = jest.fn(async (_agent, _user, _id, _server, onSelected) =>
     onSelected(resolveScheduledOboServer(server, user, variables)),
   );
@@ -133,9 +136,9 @@ function harness(
     getOpenIdConfig: () => ({
       clientMetadata: () => ({ client_id: 'client' }),
       serverMetadata: () => ({
-        issuer: user.openidIssuer,
+        issuer: providerIssuer,
         authorization_endpoint: 'https://login.test/authorize',
-        token_endpoint: 'https://login.test/token',
+        token_endpoint: providerEndpoint,
       }),
     }),
     requestGrant,
@@ -171,6 +174,10 @@ function harness(
     },
     setBaseAvailable: (available: boolean) => {
       baseAvailable = available;
+    },
+    setProvider: (issuer: string, tokenEndpoint: string) => {
+      providerIssuer = issuer;
+      providerEndpoint = tokenEndpoint;
     },
     setVariables: (values: Record<string, string>) => {
       variables = values;
@@ -745,77 +752,96 @@ describe('separately authorized scheduled OBO grants', () => {
     }
   }, 30_000);
 
-  it('calls a real MCP SDK server before and after offline OBO access-token renewal', async () => {
-    const sentBearers: string[] = [];
-    const mcp = await createOAuthMCPServer({
-      onResourceRequest: (request) => {
-        if (request.method === 'POST' && request.headers.authorization) {
-          sentBearers.push(request.headers.authorization);
-        }
-      },
-    });
-    const { service, row, setServer, requestGrant, tokenStore, flow } = harness();
-    const liveServer = { ...config, url: mcp.url };
-    setServer(liveServer);
-    requestGrant.mockImplementation(async (_provider, grantType, params) => {
-      const fresh = grantType === 'refresh_token';
-      if (fresh && params.refresh_token !== 'offline-mcp-refresh') {
-        throw new Error('Wrong refresh grant');
-      }
-      const token = fresh ? 'mcp-renewed' : 'mcp-first';
-      mcp.issuedTokens.add(token);
-      mcp.tokenIssueTimes.set(token, Date.now());
-      return {
-        access_token: token,
-        refresh_token: 'offline-mcp-refresh',
-        expires_in: 3600,
+  it.each([false, true])(
+    'calls a real MCP SDK server across offline renewal with default selector=%s',
+    async (selector) => {
+      MCPConnection.clearCooldown('Files');
+      const sentBearers: string[] = [];
+      const mcp = await createOAuthMCPServer({
+        onResourceRequest: (request) => {
+          if (request.method === 'POST' && request.headers.authorization) {
+            sentBearers.push(request.headers.authorization);
+          }
+        },
+      });
+      const { service, row, setServer, requestGrant, tokenStore, flow, setProvider } = harness();
+      const liveServer = {
+        ...config,
+        url: mcp.url,
+        obo: { scopes: selector ? 'api://resource/.default' : config.obo!.scopes },
       };
-    });
-    try {
-      await service.enroll(user.id, row.id, 'Files', 'one-time-user-assertion');
-      row.enabled = true;
-      const options = {
-        user,
-        useOAuth: true as const,
-        flowManager: flow,
-        tokenMethods: tokenStore,
-        oboTokenResolver: jest.fn(async () => {
-          throw new Error('A downstream token must not be exchanged as an upstream assertion');
-        }),
-        oboTrustChecker: jest.fn(async () => true),
-        upstreamTokenProviderResolver: (input?: { target?: UpstreamTokenTarget }) =>
-          service.resolve(user, { context, target: input?.target }),
-      };
-      const call = async (message: string) => {
-        const connection = await MCPConnectionFactory.create(
-          { serverName: 'Files', serverConfig: liveServer },
-          options,
+      setServer(liveServer);
+      if (selector)
+        setProvider(
+          'https://login.microsoftonline.com/tenant/v2.0',
+          'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
         );
-        try {
-          expect((await connection.fetchTools()).map((tool) => tool.name)).toContain('echo');
-          const reply = await connection.client.callTool({ name: 'echo', arguments: { message } });
-          expect(reply.content).toEqual([{ type: 'text', text: `echo: ${message}` }]);
-        } finally {
-          await connection.dispose();
+      requestGrant.mockImplementation(async (_provider, grantType, params) => {
+        const fresh = grantType === 'refresh_token';
+        if (fresh && params.refresh_token !== 'offline-mcp-refresh') {
+          throw new Error('Wrong refresh grant');
         }
-      };
-      await call('first run');
-      const access = tokenStore.getAll().find((record) => record.type === 'mcp_oauth')!;
-      await tokenStore.updateToken(
-        { userId: user.id, type: 'mcp_oauth', identifier: access.identifier },
-        { expiresAt: new Date(Date.now() - 12 * 60 * 60_000) },
-      );
-      await call('later run');
-      expect(sentBearers).toContain('Bearer mcp-first');
-      expect(sentBearers).toContain('Bearer mcp-renewed');
-      expect(options.oboTokenResolver).not.toHaveBeenCalled();
-      expect(requestGrant.mock.calls.filter(([, kind]) => kind === 'refresh_token')).toHaveLength(
-        1,
-      );
-    } finally {
-      await mcp.close();
-    }
-  }, 30_000);
+        const token = fresh ? 'mcp-renewed' : 'mcp-first';
+        mcp.issuedTokens.add(token);
+        mcp.tokenIssueTimes.set(token, Date.now());
+        return {
+          access_token: token,
+          refresh_token: 'offline-mcp-refresh',
+          expires_in: 3600,
+          ...(selector && { scope: fresh ? 'Read' : 'api://resource/Read' }),
+        };
+      });
+      try {
+        await service.enroll(user.id, row.id, 'Files', 'one-time-user-assertion');
+        row.enabled = true;
+        const options = {
+          user,
+          useOAuth: true as const,
+          flowManager: flow,
+          tokenMethods: tokenStore,
+          oboTokenResolver: jest.fn(async () => {
+            throw new Error('A downstream token must not be exchanged as an upstream assertion');
+          }),
+          oboTrustChecker: jest.fn(async () => true),
+          upstreamTokenProviderResolver: (input?: { target?: UpstreamTokenTarget }) =>
+            service.resolve(user, { context, target: input?.target }),
+        };
+        const call = async (message: string) => {
+          const connection = await MCPConnectionFactory.create(
+            { serverName: 'Files', serverConfig: liveServer },
+            options,
+          );
+          try {
+            expect((await connection.fetchTools()).map((tool) => tool.name)).toContain('echo');
+            const reply = await connection.client.callTool({
+              name: 'echo',
+              arguments: { message },
+            });
+            expect(reply.content).toEqual([{ type: 'text', text: `echo: ${message}` }]);
+          } finally {
+            await connection.dispose();
+          }
+        };
+        await call('first run');
+        const access = tokenStore.getAll().find((record) => record.type === 'mcp_oauth')!;
+        await tokenStore.updateToken(
+          { userId: user.id, type: 'mcp_oauth', identifier: access.identifier },
+          { expiresAt: new Date(Date.now() - 12 * 60 * 60_000) },
+        );
+        await call('later run');
+        expect(sentBearers).toContain('Bearer mcp-first');
+        expect(sentBearers).toContain('Bearer mcp-renewed');
+        expect(options.oboTokenResolver).not.toHaveBeenCalled();
+        expect(requestGrant.mock.calls.filter(([, kind]) => kind === 'refresh_token')).toHaveLength(
+          1,
+        );
+      } finally {
+        await mcp.close();
+        MCPConnection.clearCooldown('Files');
+      }
+    },
+    30_000,
+  );
 
   it('requires the connection destination instead of guessing the latest configured endpoint', async () => {
     const { service, row, setServer, requestGrant } = harness();
@@ -1390,6 +1416,225 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(providerSignal?.aborted).toBe(true);
     expect(await outcome).toBeInstanceOf(Error);
     expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    'enrolls and renews Entra default-selector consent with initial scope omitted=%s',
+    async (omitted) => {
+      const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+      setProvider(
+        'https://login.microsoftonline.com/tenant/v2.0',
+        'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+      );
+      setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+      const scoped = { ...target, scopes: 'api://resource/.default' };
+      requestGrant.mockResolvedValueOnce({
+        access_token: omitted
+          ? jwt.sign(
+              {
+                aud: 'api://resource',
+                scp: 'Files.Read Files.Write',
+                exp: Math.floor(Date.now() / 1000) + 3600,
+              },
+              'test-only',
+            )
+          : 'initial-default',
+        refresh_token: 'initial-default-grant',
+        expires_in: 3600,
+        ...(omitted ? {} : { scope: 'api://resource/Files.Read api://resource/Files.Write' }),
+      });
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      const client = tokenStore.getAll().find((r) => r.type === 'mcp_oauth_client')!;
+      expect(JSON.parse(client.token.slice(4))).toMatchObject({
+        scope: 'api://resource/.default offline_access',
+        scheduled_obo_scope_binding: {
+          version: 1,
+          resource: 'api://resource',
+          permissions: ['Files.Read', 'Files.Write'],
+        },
+      });
+      row.enabled = true;
+      const provider = (await service.resolve(user, { context, target: scoped }))!;
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'renewed-default',
+        refresh_token: 'rotated-default-grant',
+        expires_in: 3600,
+        scope: 'Files.Write Files.Read',
+      });
+      await expect(provider({ forceRefresh: true })).resolves.toMatchObject({
+        access_token: 'renewed-default',
+      });
+      expect(tokenStore.getAll().find((r) => r.type === 'mcp_oauth_refresh')?.token).toBe(
+        'enc:rotated-default-grant',
+      );
+      expect(
+        JSON.parse(
+          tokenStore
+            .getAll()
+            .find((r) => r.type === 'mcp_oauth_client')!
+            .token.slice(4),
+        ).scheduled_obo_scope_binding,
+      ).toEqual({
+        version: 1,
+        resource: 'api://resource',
+        permissions: ['Files.Read', 'Files.Write'],
+      });
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'narrow-default',
+        refresh_token: 'consumed-default',
+        expires_in: 3600,
+        scope: 'Files.Read',
+      });
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+      expect(tokenStore.getAll()).toEqual([]);
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+      expect(requestGrant).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it('does not fabricate an effective permission set for an opaque selector response or unknown provider', async () => {
+    const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+    setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'opaque',
+      refresh_token: 'grant',
+      expires_in: 3600,
+      scope: 'Files.Read',
+    });
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      retryable: false,
+    });
+    setProvider(
+      'https://login.microsoftonline.com/tenant/v2.0',
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    );
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'opaque',
+      refresh_token: 'grant',
+      expires_in: 3600,
+    });
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      retryable: false,
+    });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('retains stored selector permissions when an opaque renewal omits scope', async () => {
+    const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+    setProvider(
+      'https://login.microsoftonline.com/tenant/v2.0',
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    );
+    setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'first',
+      refresh_token: 'grant',
+      expires_in: 3600,
+      scope: 'Files.Read Files.Write',
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'renewed-opaque',
+      refresh_token: 'rotated',
+      expires_in: 3600,
+    });
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, scopes: 'api://resource/.default' },
+    }))!;
+    await expect(provider({ forceRefresh: true })).resolves.toMatchObject({
+      access_token: 'renewed-opaque',
+    });
+    expect(
+      JSON.parse(
+        tokenStore
+          .getAll()
+          .find((r) => r.type === 'mcp_oauth_client')!
+          .token.slice(4),
+      ).scheduled_obo_scope_binding.permissions,
+    ).toEqual(['Files.Read', 'Files.Write']);
+    expect(requestGrant.mock.lastCall?.[2].scope).toBe('api://resource/.default');
+  });
+
+  it('fails closed on legacy selector consent lacking a concrete binding without deleting its records', async () => {
+    const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+    setProvider(
+      'https://login.microsoftonline.com/tenant/v2.0',
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    );
+    setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'first',
+      refresh_token: 'grant',
+      expires_in: 3600,
+      scope: 'Files.Read',
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const client = tokenStore.getAll().find((r) => r.type === 'mcp_oauth_client')!;
+    const decoded = JSON.parse(client.token.slice(4));
+    delete decoded.scheduled_obo_scope_binding;
+    await tokenStore.updateToken(
+      { userId: user.id, type: client.type, identifier: client.identifier },
+      { token: `enc:${JSON.stringify(decoded)}` },
+    );
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, scopes: 'api://resource/.default' },
+    }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+      retryable: false,
+    });
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+    expect(tokenStore.getAll()).toHaveLength(3);
+  });
+
+  it('preserves newer selector consent when an obsolete renewal returns narrower effective permissions', async () => {
+    const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+    setProvider(
+      'https://login.microsoftonline.com/tenant/v2.0',
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    );
+    setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'initial',
+      refresh_token: 'initial-grant',
+      expires_in: 3600,
+      scope: 'Files.Read Files.Write',
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, scopes: 'api://resource/.default' },
+    }))!;
+    requestGrant.mockImplementationOnce(async () => {
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'new-consent',
+        refresh_token: 'new-grant',
+        expires_in: 3600,
+        scope: 'Files.Read Files.List',
+      });
+      await service.enroll(user.id, row.id, 'Files', 'new-assertion');
+      return {
+        access_token: 'obsolete',
+        refresh_token: 'obsolete-grant',
+        expires_in: 3600,
+        scope: 'Files.Read',
+      };
+    });
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: true });
+    await expect(provider()).resolves.toMatchObject({ access_token: 'new-consent' });
+    expect(
+      JSON.parse(
+        tokenStore
+          .getAll()
+          .find((r) => r.type === 'mcp_oauth_client')!
+          .token.slice(4),
+      ).scheduled_obo_scope_binding.permissions,
+    ).toEqual(['Files.List', 'Files.Read']);
   });
 
   it('does not enroll a ClickHouse Cloud direct-OAuth MCP server as an OBO grant', async () => {

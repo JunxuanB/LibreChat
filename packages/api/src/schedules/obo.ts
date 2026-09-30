@@ -8,13 +8,14 @@ import type {
   PluginAuthMethods,
 } from '@librechat/data-schemas';
 import type { Response } from 'express';
+import type { MCPOAuthTokens, OAuthClientInformation } from '../mcp/oauth/types';
 import type { ScheduledTokenContext, ScheduleWritePreflight } from './context';
 import type { SessionOpenIDTokens } from '../auth/openid/types';
 import type { HostUpstreamTokenProviderResolver } from './mcp';
 import type { UpstreamTokenTarget } from '../mcp/oauth/obo';
 import type { MCPTokenStorage } from '../mcp/oauth/tokens';
 import type { GetAppConfigOptions } from '../app/service';
-import type { MCPOAuthTokens } from '../mcp/oauth/types';
+import type { ScheduledOboScopeBinding } from './scopes';
 import type { FlowStateManager } from '../flow/manager';
 import type { ParsedServerConfig } from '../mcp/types';
 import type { ScheduleMCPPreflight } from './types';
@@ -25,11 +26,15 @@ import {
   MCPTokenRefreshUnavailableError,
   ReauthenticationRequiredError,
 } from '../mcp/oauth/tokens';
+import {
+  hasScheduledOboScopeBinding,
+  readScheduledOboScopeBinding,
+  resolveScheduledOboScopes,
+} from './scopes';
 import { OboTokenResolutionError, isRetryableOboExchangeError } from '../mcp/oauth/obo';
 import { getAppConfigOptionsFromUser } from '../app/service';
 import { resolveScheduledOboServer } from './target';
 import { checkAccess } from '../middleware/access';
-import { hasScheduledOboScopes } from './provider';
 import { getPluginAuthMap } from '../agents/auth';
 import { isEnabled } from '../utils/common';
 import { ScheduleMCPError } from './mcp';
@@ -64,6 +69,9 @@ interface GrantResponse {
   expires_in?: number;
   refresh_token_expires_in?: number;
   scope?: string;
+}
+interface ScheduledOboClientInfo extends OAuthClientInformation {
+  scheduled_obo_scope_binding?: ScheduledOboScopeBinding;
 }
 interface GrantDeps {
   tokens: TokenMethods & ScheduledOboGrantMethods;
@@ -442,6 +450,15 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             `${target.scopes} offline_access`
         )
           throw missingGrant();
+        const info: ScheduledOboClientInfo = client.clientInfo;
+        if (
+          !hasScheduledOboScopeBinding(
+            target.scopes,
+            provider,
+            readScheduledOboScopeBinding(info.scheduled_obo_scope_binding),
+          )
+        )
+          throw missingGrant();
         assertMetadata(client.clientMetadata);
         if (
           generation !== client.clientMetadata.credential_set_id ||
@@ -539,9 +556,16 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         throw error;
       }
       signal?.throwIfAborted();
+      const info: ScheduledOboClientInfo | undefined = stored.clientInfo;
+      const consent = resolveScheduledOboScopes(
+        next,
+        target.scopes,
+        provider,
+        readScheduledOboScopeBinding(info?.scheduled_obo_scope_binding),
+      );
       let expiresIn: number;
       try {
-        if (!next.access_token || !hasScheduledOboScopes(next.scope, target.scopes))
+        if (!next.access_token || !consent.ok)
           throw new ReauthenticationRequiredError(key, 'expired');
         expiresIn = expiresInSeconds(next);
       } catch {
@@ -719,12 +743,8 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           throw new MCPTokenRefreshUnavailableError(key, error);
         throw missingGrant();
       }
-      if (
-        !response.access_token ||
-        !response.refresh_token ||
-        !hasScheduledOboScopes(response.scope, target.scopes)
-      )
-        throw missingGrant();
+      const consent = resolveScheduledOboScopes(response, target.scopes, provider);
+      if (!response.access_token || !response.refresh_token || !consent.ok) throw missingGrant();
       let expiresIn: number;
       try {
         expiresIn = expiresInSeconds(response);
@@ -768,9 +788,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             if (currentServer?.url !== expectedUrl || currentServer.obo?.scopes !== expectedScopes)
               throw missingGrant();
           }
-          const clientInfo = {
+          const clientInfo: ScheduledOboClientInfo = {
             client_id: provider.clientId,
             scope: `${target.scopes} offline_access`,
+            ...(consent.binding && { scheduled_obo_scope_binding: consent.binding }),
           };
           await deps.tokenStorage.storeTokens({
             withPersistence: withOwnerPersistence(userId, ownerGeneration),
