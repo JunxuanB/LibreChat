@@ -226,7 +226,7 @@ export default function ProgressText({
           <span
             className={cn(
               showShimmer ? 'shimmer' : '',
-              'min-w-0 max-w-full truncate font-medium',
+              'max-w-full min-w-0 truncate font-medium',
               subtitle && 'shrink-0',
             )}
           >

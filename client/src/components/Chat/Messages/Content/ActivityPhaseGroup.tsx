@@ -486,7 +486,7 @@ function FailedPeek({
       type="button"
       className={cn(
         TOOL_ROW_CLASSES,
-        'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy w-full pl-6 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+        'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy w-full pl-6 text-left focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset',
       )}
       onClick={onReveal}
       data-testid="activity-phase-failed-peek"
@@ -495,7 +495,7 @@ function FailedPeek({
         <TriangleAlert size={14} />
       </span>
       <span className="tool-status-text flex min-w-0 items-center gap-2">
-        <span className="text-status-error min-w-0 max-w-full shrink-0 truncate font-medium">
+        <span className="text-status-error max-w-full min-w-0 shrink-0 truncate font-medium">
           {first.text}
         </span>
         {first.detail !== '' && (
@@ -768,7 +768,7 @@ export default function ActivityPhaseGroup({
   const group = !hasContent ? (
     <div
       className={cn(
-        'text-text-secondary mb-2 mt-1 flex min-h-7 w-full items-center gap-2 py-1',
+        'text-text-secondary mt-1 mb-2 flex min-h-7 w-full items-center gap-2 py-1',
         shouldAnimateEntrance && `animate-in fade-in-0 motion-reduce:animate-none ${FOLD_EASING}`,
       )}
       data-testid="activity-phase-card"
@@ -790,7 +790,7 @@ export default function ActivityPhaseGroup({
      *  groups it stands for, so it carries the same geometry: 16px glyph, 8px
      *  gap, no inset. Boxing it was what put its text on a third left edge and
      *  forced every folded row 13px sideways as the box materialized. */
-    <div className="mb-2 mt-1 w-full" ref={rootRef} data-testid="activity-phase-card">
+    <div className="mt-1 mb-2 w-full" ref={rootRef} data-testid="activity-phase-card">
       <span className="sr-only" role="status" data-testid="activity-phase-announcer">
         {announcement}
       </span>
@@ -811,7 +811,7 @@ export default function ActivityPhaseGroup({
              *  supplies it today; stating it here keeps the requirement with
              *  the element that depends on it. */
             className={cn(
-              'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy flex h-auto min-h-7 min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 text-left font-medium hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-offset-0',
+              'text-text-secondary hover:text-text-primary focus-visible:ring-border-heavy flex h-auto min-h-7 min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 text-left font-medium hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none focus-visible:ring-inset',
               /** The open card's title: the one semibold, primary-colour line
                *  in the fold, so the rows under it read as its contents. */
               isExpanded && 'text-text-primary font-semibold',

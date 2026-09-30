@@ -514,12 +514,12 @@ export default function ToolCallGroup({
   }, [hasActiveToolCall, userOverride, suppressAutoExpand]);
 
   return (
-    <div className="mb-2 mt-1" ref={rootRef}>
+    <div className="mt-1 mb-2" ref={rootRef}>
       <div className="flex w-full items-center gap-2">
         <button
           type="button"
           className={cn(
-            'text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0',
+            'text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none',
             /** An open header is the title of the rows under it, so it is the
              *  one line in the fold set in the primary colour. */
             isExpanded && 'text-text-primary hover:text-text-primary',
@@ -565,7 +565,7 @@ export default function ToolCallGroup({
           </span>
           {visibleGroupDetail && (
             <span
-              className="text-text-secondary min-w-0 max-w-[40%] truncate text-xs font-normal"
+              className="text-text-secondary max-w-[40%] min-w-0 truncate text-xs font-normal"
               title={visibleGroupDetail}
             >
               · {visibleGroupDetail}
@@ -647,7 +647,7 @@ export default function ToolCallGroup({
                 </div>
               </FailedRevealContext.Provider>
             </ToolAuthWarningContext.Provider>
-            {hasPendingAuthRequest && <ToolAuthWarning className="mb-1 mt-2.5" />}
+            {hasPendingAuthRequest && <ToolAuthWarning className="mt-2.5 mb-1" />}
           </div>
         )}
       </div>

@@ -53,10 +53,10 @@ const InterruptSteerButton = React.memo((props: InterruptSteerButtonProps) => {
             disabled={disabled}
             onClick={onClick}
             className={cn(
-              'border-border-light flex size-theme-control items-center justify-center rounded-theme-control-round border',
-              'text-text-secondary transition-colors duration-theme-normal',
+              'border-border-light size-theme-control rounded-theme-control-round flex items-center justify-center border',
+              'text-text-secondary duration-theme-normal transition-colors',
               'hover:bg-surface-composer-hover hover:text-text-primary',
-              'focus-visible:ring-border-xheavy focus-visible:outline-hidden focus-visible:ring-2',
+              'focus-visible:ring-border-xheavy focus-visible:ring-2 focus-visible:outline-hidden',
               'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
             )}
           >

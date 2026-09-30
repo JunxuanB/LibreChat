@@ -457,6 +457,42 @@ describe('steps', () => {
       expect(replayed.message.content).toEqual(closed.content);
     });
 
+    it('retains existing timing metadata when a delta and closure omit new timing', () => {
+      const stamps = { toolPreparationStartedAt: 1_000, toolDispatchedAt: 1_100 };
+      const opened = applyToolCallsStep(createResponse(), search, 0, () => stamps).message;
+      const streamed = applyToolCallDelta(
+        opened,
+        search,
+        argsDelta(search.id, '{}'),
+        'call-1',
+        0,
+      ) as TMessage;
+      const closed = applyRunStepClosed(
+        streamed,
+        search,
+        {
+          id: search.id,
+          index: 1,
+          type: StepTypes.TOOL_CALLS,
+          status: 'completed',
+          created_at: 1_000,
+          closed_at: 1_250,
+        },
+        0,
+      );
+      expect(closed?.content?.[1]).toMatchObject({
+        tool_call: {
+          ...stamps,
+          args: '{}',
+          runStepStatus: 'completed',
+          runStepDurationMs: 250,
+          runStepClosedAt: 1_250,
+        },
+      });
+      expect(closed?.content?.[1]).not.toHaveProperty('tool_call.toolPreparationDurationMs');
+      expect(closed?.content?.[1]).not.toHaveProperty('tool_call.toolExecutionDurationMs');
+    });
+
     it('preserves tool timing through completion and settled-step replay', () => {
       const getTiming = () => ({ toolPreparationStartedAt: 1_000, toolDispatchedAt: 1_100 });
       const opened = applyToolCallsStep(createResponse(), search, 0, getTiming).message;

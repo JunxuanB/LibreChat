@@ -127,7 +127,7 @@ export function FailedRevealPill({
     <button
       type="button"
       className={cn(
-        'bg-status-error-subtle text-status-error inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-transparent px-2 text-xs font-semibold leading-none',
+        'bg-status-error-subtle text-status-error inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-transparent px-2 text-xs leading-none font-semibold',
         'hover:border-status-error-border focus-visible:border-status-error focus-visible:outline-none',
         className,
       )}
