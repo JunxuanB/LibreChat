@@ -1004,7 +1004,7 @@
   },
   "client/src/components/Endpoints/Icon.tsx": {
     "shadcn/no-inline-styles": {
-      "count": 2
+      "count": 1
     }
   },
   "client/src/components/Endpoints/MessageEndpointIcon.tsx": {
@@ -1490,7 +1490,7 @@
   },
   "client/src/components/Share/MessageIcon.tsx": {
     "shadcn/no-inline-styles": {
-      "count": 2
+      "count": 1
     }
   },
   "client/src/components/Share/MessagesView.tsx": {
@@ -2203,7 +2203,7 @@
   },
   "packages/client/src/components/Avatar.tsx": {
     "shadcn/no-inline-styles": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/client/src/components/Badge.tsx": {

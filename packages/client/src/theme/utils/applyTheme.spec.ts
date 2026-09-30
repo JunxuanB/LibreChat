@@ -4,6 +4,7 @@ import applyTheme, {
   clearAppliedTheme,
   themeOwnedProperties,
   THEME_DISABLED_ATTRIBUTE,
+  THEME_SCOPE_ATTRIBUTE,
 } from './applyTheme';
 import { defaultAppearance, highContrastTheme, resolveTheme } from '../registry';
 import { defaultTheme } from '../themes/default';
@@ -19,6 +20,8 @@ const semanticProperties = [
   '--chart-widget-surface',
   '--chart-widget-stroke',
   '--switch-thumb',
+  '--avatar-placeholder',
+  '--avatar-text',
   '--table-header-text',
   '--table-header-fill',
   '--border-destructive',
@@ -379,6 +382,53 @@ describe('applyTheme', () => {
     applyResolvedTheme(resolveTheme(fill, 'light'), root);
     clearAppliedTheme(root);
     expect(root.hasAttribute(THEME_DISABLED_ATTRIBUTE)).toBe(false);
+  });
+
+  it('leaves the document root backdrop to the stylesheet alias so it follows the mode', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-secondary': '20 21 22', 'rgb-surface-tertiary': '30 31 32' }, root);
+
+    expect(root.style.getPropertyValue('--surface-secondary')).toBe('20 21 22');
+    expect(root.style.getPropertyValue('--avatar-placeholder')).toBe('');
+  });
+
+  it('marks a scoped root so the stylesheet derives its backdrop from its own surfaces', () => {
+    const scoped = document.createElement('div');
+    document.body.append(scoped);
+    try {
+      applyTheme(
+        { 'rgb-surface-secondary': '20 21 22', 'rgb-surface-tertiary': '30 31 32' },
+        scoped,
+      );
+
+      expect(scoped.hasAttribute(THEME_SCOPE_ATTRIBUTE)).toBe(true);
+      expect(scoped.style.getPropertyValue('--avatar-placeholder')).toBe('');
+      expect(document.documentElement.hasAttribute(THEME_SCOPE_ATTRIBUTE)).toBe(false);
+
+      clearAppliedTheme(scoped);
+      expect(scoped.hasAttribute(THEME_SCOPE_ATTRIBUTE)).toBe(false);
+    } finally {
+      scoped.remove();
+    }
+  });
+
+  it("inks a legacy theme's default avatar in its primary text", () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-text-primary': '10 11 12' }, root);
+    expect(root.style.getPropertyValue('--avatar-text')).toBe('10 11 12');
+
+    applyTheme({ 'rgb-text-primary': '10 11 12', 'rgb-avatar-text': '1 2 3' }, root);
+    expect(root.style.getPropertyValue('--avatar-text')).toBe('1 2 3');
+  });
+
+  it('leaves an explicit avatar backdrop alone', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-tertiary': '30 31 32', 'rgb-avatar-placeholder': '1 2 3' }, root);
+
+    expect(root.style.getPropertyValue('--avatar-placeholder')).toBe('1 2 3');
   });
 
   it('keeps the switch knob of a legacy theme on the surface it repainted', () => {

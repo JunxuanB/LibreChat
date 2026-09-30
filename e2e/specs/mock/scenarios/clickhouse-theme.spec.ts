@@ -128,6 +128,29 @@ const titleColor = (page: Page, title: string) =>
     .getByText(title, { exact: true })
     .evaluate((node) => getComputedStyle(node).color);
 
+const MISSING_AVATAR = 'https://avatar.e2e.invalid/missing.png';
+
+/** The e2e user has an avatar seed, so the default avatar only draws once its image fails:
+ *  the user payload points at an address the page refuses to load. */
+async function failUserAvatar(page: Page) {
+  await page.route(`${MISSING_AVATAR}*`, (route) => route.abort());
+  await page.route('**/api/user', async (route) => {
+    const response = await route.fetch();
+    const user = await response.json();
+    await route.fulfill({ response, json: { ...user, avatar: MISSING_AVATAR } });
+  });
+}
+
+/** The default avatar on the sidebar account button, the one a signed-in user always sees. */
+const navAvatarPaint = async (page: Page) => {
+  const avatar = page.getByTestId('nav-user').locator('div[aria-hidden="true"]').first();
+  await expect(avatar).toBeVisible({ timeout: 20000 });
+  return avatar.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { fill: style.backgroundColor, ink: style.color };
+  });
+};
+
 test.describe('clickhouse reference theme', () => {
   test('the ClickHouse definition repaints the chat and the settings dialog in both modes @scenario:clickhouse-definition-repaints-chat-sidebar-and-dialog', async ({
     page,
@@ -230,6 +253,111 @@ test.describe('clickhouse reference theme', () => {
           rgbCss(palette['rgb-text-primary']),
         );
       }
+    } finally {
+      await deleteConversations([conversationId]);
+    }
+  });
+
+  test('the default avatar keeps its fill and the placeholder its surface without a theme @scenario:default-avatar-keeps-its-fill', async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const conversationId = await seedChat('Default avatar');
+    await installThemeBridge(page, null);
+    await failUserAvatar(page);
+
+    try {
+      for (const [mode, placeholder, ink] of [
+        ['light', defaultTheme['rgb-surface-secondary'], 'rgb(33, 33, 33)'],
+        ['dark', darkTheme['rgb-surface-tertiary'], 'rgb(236, 236, 236)'],
+      ] as const) {
+        await page.goto(`/c/${conversationId}?${THEME_PARAM}=${mode}`);
+        await expect(page.getByText(REPLY_TEXT, { exact: true }).first()).toBeVisible({
+          timeout: 20000,
+        });
+
+        expect(await navAvatarPaint(page)).toEqual({ fill: 'rgb(121, 137, 255)', ink });
+        expect(await themeValue(page, '--avatar-placeholder')).toBe(placeholder);
+      }
+    } finally {
+      await deleteConversations([conversationId]);
+    }
+  });
+
+  test('the ClickHouse definition paints the default avatar from Click UI @scenario:clickhouse-avatar-follows-click-ui', async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const conversationId = await seedChat('ClickHouse avatar');
+    await installThemeBridge(page, clickHouseTheme);
+    await failUserAvatar(page);
+
+    try {
+      for (const mode of MODES) {
+        const colors = colorsFor(mode);
+        await page.goto(`/c/${conversationId}?${THEME_PARAM}=${mode}`);
+        await expect(page.getByText(REPLY_TEXT, { exact: true }).first()).toBeVisible({
+          timeout: 20000,
+        });
+        await expect(page.locator('html')).toHaveAttribute('data-theme', 'clickhouse');
+
+        expect(await navAvatarPaint(page)).toEqual({
+          fill: rgbCss(colors['rgb-avatar-fill']),
+          ink: rgbCss(colors['rgb-avatar-text']),
+        });
+        expect(await themeValue(page, '--avatar-placeholder')).toBe(
+          colors['rgb-avatar-placeholder'],
+        );
+      }
+    } finally {
+      await deleteConversations([conversationId]);
+    }
+  });
+
+  test('a legacy backdrop follows a dark toggle on the document root and on a scoped root @scenario:legacy-avatar-backdrop-follows-mode', async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const conversationId = await seedChat('Legacy avatar backdrop');
+    await installThemeBridge(page, null);
+
+    try {
+      await page.goto(`/c/${conversationId}?${THEME_PARAM}=light`);
+      await expect(page.getByText(REPLY_TEXT, { exact: true }).first()).toBeVisible({
+        timeout: 20000,
+      });
+
+      /** What a legacy palette leaves behind: surfaces set inline, applied once in light, and a
+       *  scoped root marked the way `applyTheme` marks one. The mode then flips with no reapply. */
+      const painted = await page.evaluate(() => {
+        const html = document.documentElement;
+        const read = (node: Element) => getComputedStyle(node).backgroundColor;
+        const backdrop = (host: Element) => {
+          const node = document.createElement('div');
+          node.className = 'bg-avatar-placeholder';
+          host.append(node);
+          return node;
+        };
+        html.classList.remove('dark');
+        html.style.setProperty('--surface-secondary', '20 21 22');
+        html.style.setProperty('--surface-tertiary', '30 31 32');
+        const scope = document.createElement('section');
+        scope.setAttribute('data-theme-scope', '');
+        scope.style.setProperty('--surface-secondary', '40 41 42');
+        scope.style.setProperty('--surface-tertiary', '50 51 52');
+        document.body.append(scope);
+        const onRoot = backdrop(document.body);
+        const onScope = backdrop(scope);
+        const light = { root: read(onRoot), scoped: read(onScope) };
+        html.classList.add('dark');
+        const dark = { root: read(onRoot), scoped: read(onScope) };
+        return { light, dark };
+      });
+
+      expect(painted).toEqual({
+        light: { root: 'rgb(20, 21, 22)', scoped: 'rgb(40, 41, 42)' },
+        dark: { root: 'rgb(30, 31, 32)', scoped: 'rgb(50, 51, 52)' },
+      });
     } finally {
       await deleteConversations([conversationId]);
     }

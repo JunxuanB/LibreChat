@@ -63,6 +63,10 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
     variables.push(['--text-muted', colors['rgb-text-tertiary']]);
   }
 
+  if (colors['rgb-avatar-text'] === undefined && colors['rgb-text-primary'] !== undefined) {
+    variables.push(['--avatar-text', colors['rgb-text-primary']]);
+  }
+
   if (
     colors['rgb-chart-widget-surface'] === undefined &&
     colors['rgb-surface-primary'] !== undefined
@@ -156,10 +160,18 @@ function mapAppearance(appearance: IThemeAppearance): Array<[string, string]> {
  */
 export const THEME_DISABLED_ATTRIBUTE = 'data-theme-disabled';
 
+/**
+ * Marks a root other than the document one that a legacy palette themes. The stylesheet points
+ * the avatar backdrop at that root's own secondary surface, or its tertiary one under a `.dark`
+ * ancestor, as the document root's alias does, so the backdrop follows a later mode change.
+ */
+export const THEME_SCOPE_ATTRIBUTE = 'data-theme-scope';
+
 export function clearAppliedTheme(root: HTMLElement = document.documentElement): void {
   themeOwnedProperties.forEach((property) => root.style.removeProperty(property));
   root.removeAttribute('data-theme');
   root.removeAttribute(THEME_DISABLED_ATTRIBUTE);
+  root.removeAttribute(THEME_SCOPE_ATTRIBUTE);
 }
 
 export function applyResolvedTheme(
@@ -196,6 +208,9 @@ export default function applyTheme(
     return;
   }
 
+  if (root !== root.ownerDocument.documentElement) {
+    root.setAttribute(THEME_SCOPE_ATTRIBUTE, '');
+  }
   mapColors(themeRGB, base).forEach(([property, value]) => {
     if (!validateRGB(value)) {
       console.error(`Invalid RGB value for ${property}: ${value}`);

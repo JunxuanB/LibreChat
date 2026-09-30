@@ -76,6 +76,9 @@
 
 html {
   --brand-purple: 126 34 206;
+  --avatar-fill: 121 137 255;
+  --avatar-text: var(--text-primary);
+  --avatar-placeholder: var(--surface-secondary);
   --presentation: var(--white);
   --text-primary: var(--gray-800);
   --text-secondary: var(--gray-600);
@@ -262,6 +265,9 @@ html {
 }
 .dark {
   --brand-purple: 171 104 255;
+  --avatar-fill: 121 137 255;
+  --avatar-text: var(--text-primary);
+  --avatar-placeholder: var(--surface-tertiary);
   --presentation: var(--gray-800);
   --text-primary: var(--gray-100);
   --focus-outline: 255 255 255;
@@ -382,4 +388,15 @@ html {
   --provider-azure: linear-gradient(0.375turn, #61bde2, #4389d0);
   --provider-bedrock: #268672;
   --provider-foreground: #ffffff;
+}
+
+/* A root other than the document one that a legacy palette themes (`THEME_SCOPE_ATTRIBUTE` in
+   utils/applyTheme.ts) keeps its avatar backdrop on its own surfaces, following the mode, as the
+   document root's alias above does. An explicit avatar-placeholder set inline still wins. */
+[data-theme-scope] {
+  --avatar-placeholder: var(--surface-secondary);
+}
+.dark [data-theme-scope],
+[data-theme-scope].dark {
+  --avatar-placeholder: var(--surface-tertiary);
 }
