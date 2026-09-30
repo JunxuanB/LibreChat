@@ -234,3 +234,17 @@ it('preserves an enrolled resource permission set on scope omission even when JW
     resolveScheduledOboScopes({ access_token }, 'api://custom-api/.default', authority, binding),
   ).toEqual({ ok: true, binding });
 });
+
+it('keeps unknown providers on exact literal scope validation, never treating default as a wildcard', () => {
+  const custom = {
+    issuer: 'https://login.example.test/tenant',
+    tokenEndpoint: 'https://login.example.test/token',
+  };
+  expect(
+    resolveScheduledOboScopes({ scope: 'api://resource/.default' }, requested, custom),
+  ).toEqual({ ok: true });
+  expect(resolveScheduledOboScopes({ scope: 'Files.Read' }, requested, custom)).toEqual({
+    ok: false,
+  });
+  expect(hasScheduledOboScopeBinding(requested, custom)).toBe(true);
+});

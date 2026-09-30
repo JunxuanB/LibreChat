@@ -103,10 +103,9 @@ export function hasScheduledOboScopeBinding(
   binding?: ScheduledOboScopeBinding,
 ): boolean {
   const resource = selectorResource(requested);
-  if (resource === undefined) return true;
+  if (resource === undefined || !isEntraAuthority(authority)) return true;
   return (
     resource != null &&
-    isEntraAuthority(authority) &&
     binding?.resource === resource &&
     binding.permissions.length > 0 &&
     binding.permissions.every(
@@ -125,12 +124,9 @@ export function resolveScheduledOboScopes(
   binding?: ScheduledOboScopeBinding,
 ): ScheduledOboScopeResult {
   const resource = selectorResource(requested);
-  if (resource === undefined) return { ok: hasScheduledOboScopes(response.scope, requested) };
-  if (
-    resource == null ||
-    !isEntraAuthority(authority) ||
-    (binding && !hasScheduledOboScopeBinding(requested, authority, binding))
-  )
+  if (resource === undefined || !isEntraAuthority(authority))
+    return { ok: hasScheduledOboScopes(response.scope, requested) };
+  if (resource == null || (binding && !hasScheduledOboScopeBinding(requested, authority, binding)))
     return { ok: false };
   const projected = response.scope ?? jwtPermissionProjection(response.access_token, resource);
   if (projected === false) return { ok: false };

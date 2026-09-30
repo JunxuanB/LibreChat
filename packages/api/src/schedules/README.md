@@ -111,8 +111,9 @@ enrollment normalizes the provider's concrete resource scopes and stores that
 permission set with the encrypted client information. Renewal must retain every
 enrolled permission; resource-qualified and bare Entra names normalize to the
 same binding. The configured selector is still sent to the IdP and bound to the
-same issuer, client and MCP destination. Other providers retain literal-scope
-semantics; `.default` is never treated as an arbitrary wildcard.
+same issuer, client and MCP destination. Other providers retain exact literal-scope
+semantics, including literal names ending in `.default`; their concrete responses
+cannot satisfy that name by wildcard matching.
 
 When initial selector scope is omitted, a provider-returned JWT with a matching
 resource audience and delegated `scp` can establish the permission projection.

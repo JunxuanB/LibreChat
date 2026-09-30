@@ -1492,6 +1492,48 @@ describe('separately authorized scheduled OBO grants', () => {
     },
   );
 
+  it('preserves literal default-named scopes for a custom provider without granting wildcard semantics', async () => {
+    const { service, row, requestGrant, tokenStore, setServer } = harness();
+    setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'literal-default',
+      refresh_token: 'grant',
+      expires_in: 3600,
+      scope: 'api://resource/.default',
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, scopes: 'api://resource/.default' },
+    }))!;
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'renewed-literal',
+      refresh_token: 'rotated',
+      expires_in: 3600,
+      scope: 'api://resource/.default',
+    });
+    await expect(provider({ forceRefresh: true })).resolves.toMatchObject({
+      access_token: 'renewed-literal',
+    });
+    expect(
+      JSON.parse(
+        tokenStore
+          .getAll()
+          .find((r) => r.type === 'mcp_oauth_client')!
+          .token.slice(4),
+      ).scheduled_obo_scope_binding,
+    ).toBeUndefined();
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'not-literal',
+      refresh_token: 'unused',
+      expires_in: 3600,
+      scope: 'Files.Read',
+    });
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
   it('does not fabricate an effective permission set for an opaque selector response or unknown provider', async () => {
     const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
     setServer({ ...config, obo: { scopes: 'api://resource/.default' } });
