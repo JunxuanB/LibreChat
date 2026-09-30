@@ -91,7 +91,7 @@ export function bindUpstreamTokenProviderResolver(
   return (options) => {
     signal?.throwIfAborted();
     const target = options?.target && Object.freeze({ ...options.target });
-    const key = JSON.stringify([target?.mcpServer, target?.scopes]);
+    const key = JSON.stringify([target?.mcpServer, target?.scopes, target?.url]);
     const cached = pending.get(key);
     if (cached) return cached;
     const lookup = Promise.resolve()

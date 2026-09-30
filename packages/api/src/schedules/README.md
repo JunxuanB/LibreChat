@@ -70,7 +70,12 @@ Preflight, execution and tool-call recovery use the scoped downstream credential
 An expired access token is renewed via the provider's refresh-token grant and
 rotated under the existing cross-replica MCP OAuth credential lease. Each use
 checks the current schedule owner, root agent, tenant, server, scopes and
-operator allowlist. An operator removing a name or changing scopes blocks
+operator allowlist. Credential reads are fenced against rotation, and the
+returned generation must still match the grant bound to the connection's exact
+MCP URL. Concurrent generation changes are retryable, not missing authorization.
+Account deletion drains enrollment/refresh persistence and rollback before its
+token sweep; network exchanges hold no account fence and cannot recreate grants
+after that fence advances. An operator removing a name or changing scopes blocks
 future use; the owner can revoke a grant explicitly from the card, which
 pauses the schedule. A missing
 or invalid grant never falls back to the browser session. Existing schedules
@@ -95,7 +100,7 @@ The host receives the persisted/authenticated user and these optional fields:
 resolveUpstreamTokenProvider(user, {
   signal,
   context: { scheduleId, ownerId, tenantId, agentId, invocationMode: 'delegated' },
-  target: { mcpServer, scopes },
+  target: { mcpServer, scopes, url },
 });
 ```
 
@@ -112,9 +117,10 @@ argument carries this restored context; resume body fields cannot replace it.
 The existing resolver closure is passed through tool discovery, execution, and reconnects;
 it never goes into tool arguments or durable job payloads.
 
-Each OBO consumer supplies its server name and configured scopes after its existing trust
-check. A run shares in-flight lookups and successful providers only for identical server
-and scope pairs. Failed or empty lookups may retry; cancellation belongs to the owning run,
+Each OBO consumer supplies its server name, configured scopes and actual transport URL
+after its existing trust check. A run shares in-flight lookups and successful providers
+only for identical server, scope and URL combinations. The scheduled-grant host refuses
+legacy targets without a URL rather than guessing a destination from newer configuration. Failed or empty lookups may retry; cancellation belongs to the owning run,
 so cancelling one child does not cancel a sibling's lookup.
 
 `tenantId` is absent in deployments without tenancy. `context` is absent for legacy callers

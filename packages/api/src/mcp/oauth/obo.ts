@@ -53,6 +53,8 @@ export type UpstreamTokenProvider = (options?: {
 export interface UpstreamTokenTarget {
   readonly mcpServer: string;
   readonly scopes: string;
+  /** Exact destination used by this connection. Required by the scheduled-grant host. */
+  readonly url?: string;
 }
 
 /** Lazily supplies a renewable upstream-token provider when an OBO server actually needs one. */

@@ -49,6 +49,7 @@ function makeService(
   getActiveRunsForUser: jest.Mock<Promise<ActiveRun[]>, [string]>,
   getAppConfig?: SchedulesServiceDeps['getAppConfig'],
   enqueueAgentTrigger: SchedulesServiceDeps['enqueueAgentTrigger'] = jest.fn(async () => undefined),
+  drainOboWrites?: SchedulesServiceDeps['drainOboWrites'],
 ): ReturnType<typeof createSchedulesService> {
   recordRunOutcome = jest.fn(async () => undefined);
   const methods = {
@@ -64,6 +65,7 @@ function makeService(
   };
   const deps = {
     methods,
+    drainOboWrites,
     getAppConfig: getAppConfig ?? jest.fn(async () => ({})),
     findUserById: jest.fn(async () => null),
     findBalance: jest.fn(async () => null),
@@ -1361,6 +1363,43 @@ describe('isScheduleLive policy recheck', () => {
 });
 
 describe('quiesceUserSchedules drain wait', () => {
+  it('drains credential persistence before suspending schedules or confirming account cleanup', async () => {
+    const order: string[] = [];
+    const drainOboWrites = jest.fn(async () => {
+      order.push('credentials');
+    });
+    const runs = jest.fn(async (_owner: string) => {
+      order.push('runs');
+      return [];
+    });
+    const service = makeService(
+      runs,
+      undefined,
+      jest.fn(async () => undefined),
+      drainOboWrites,
+    );
+    await expect(service.quiesceUserSchedules('user-1', 'deletion')).resolves.toBe(true);
+    expect(drainOboWrites).toHaveBeenCalledWith('user-1');
+    expect(order[0]).toBe('credentials');
+  });
+
+  it('refuses account cleanup if credential writers cannot be drained', async () => {
+    const runs = jest.fn(async (_owner: string) => []);
+    const service = makeService(
+      runs,
+      undefined,
+      jest.fn(async () => undefined),
+      async () => {
+        throw new Error('credential fence unavailable');
+      },
+    );
+    await expect(service.quiesceUserSchedules('user-1', 'deletion')).rejects.toThrow(
+      'credential fence unavailable',
+    );
+    expect(runs).not.toHaveBeenCalled();
+    expect(service.engineDeps.methods.suspendUserSchedulesForDeletion).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     mockJobStore = null;
     jest.useRealTimers();

@@ -117,6 +117,9 @@ export const scheduledOboGrantKey = (scheduleId: string, serverName: string): st
 const scheduleGrantLeaseId = (userId: string, scheduleId: string): string =>
   JSON.stringify(['scheduled-obo', getTenantId() ?? '', userId, scheduleId]);
 
+const ownerGrantLeaseId = (userId: string): string =>
+  JSON.stringify(['scheduled-obo-owner', getTenantId() ?? '', userId]);
+
 function missingGrant(): OboTokenResolutionError {
   return new OboTokenResolutionError(
     'missing_upstream_provider',
@@ -154,6 +157,8 @@ export interface ScheduledOboGrantService {
   ) => Promise<void>;
   revoke: (userId: string, scheduleId: string, serverName: string) => Promise<void>;
   listEnrolled: (userId: string) => Promise<Record<string, string[]>>;
+  /** Called after the durable account-deletion barrier, before the token sweep. */
+  drainOwnerWrites: (userId: string) => Promise<void>;
   enrollFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
   describeFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
   revokeFromRequest: (req: ServerRequest, res: Response) => Promise<void>;
@@ -167,6 +172,33 @@ export interface ScheduledOboGrantService {
 
 export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGrantService {
   const { tokens } = deps;
+  const withOwnerPersistence =
+    (userId: string, generation: number | null) =>
+    async (persist: () => Promise<MCPOAuthTokens>): Promise<MCPOAuthTokens> => {
+      if (generation == null) throw new ReauthenticationRequiredError('schedule-obo', 'expired');
+      const lease = await deps.flowManager.acquireLease(ownerGrantLeaseId(userId), {
+        expectedGeneration: generation,
+      });
+      if (!lease)
+        throw new MCPTokenRefreshUnavailableError(
+          'schedule-obo',
+          new Error('Owner grant fence changed'),
+        );
+      try {
+        if (!(await deps.isOwnerActive(userId)))
+          throw new ReauthenticationRequiredError('schedule-obo', 'expired');
+        return await persist();
+      } finally {
+        await lease.release();
+      }
+    };
+  const drainOwnerWrites = async (userId: string): Promise<void> => {
+    const lease = await deps.flowManager.acquireLease(ownerGrantLeaseId(userId), {
+      advanceGeneration: true,
+    });
+    if (!lease) throw new Error('Could not drain scheduled OBO credential writes');
+    await lease.release();
+  };
   let inspect = deps.inspect;
   const setInspector = (preflight: ScheduleMCPPreflight): void => {
     inspect = async (agentId, user, scheduleId, serverName, onSelected) => {
@@ -318,6 +350,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     forceRefresh = false,
     activationPreflight = false,
   ): Promise<MCPOAuthTokens> => {
+    if (!target.url) throw missingGrant();
     let authorized: Awaited<ReturnType<typeof validate>>;
     try {
       authorized = await validate(userId, context, target, activationPreflight);
@@ -330,56 +363,125 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       );
     }
     const { user, config, provider } = authorized;
+    if (config.url !== target.url) throw missingGrant();
     const key = scheduledOboGrantKey(context.scheduleId, target.mcpServer);
     const identifier = `mcp:${key}`;
-    let refreshRecord: Awaited<ReturnType<typeof tokens.findToken>>;
-    let client: Awaited<ReturnType<typeof deps.tokenStorage.getClientInfoAndMetadata>>;
+    const assertMetadata = (binding: Record<string, unknown>): void => {
+      if (
+        binding.server_url !== target.url ||
+        binding.issuer !== provider.issuer ||
+        binding.token_endpoint !== provider.tokenEndpoint ||
+        binding.openid_subject !== user.openidId ||
+        binding.openid_issuer !== user.openidIssuer ||
+        binding.tenant_id !== (user.tenantId ?? '')
+      )
+        throw missingGrant();
+    };
+    const boundFindToken: TokenMethods['findToken'] = async (...args) => {
+      const record = await tokens.findToken(...args);
+      if (record && args[0].type === 'mcp_oauth_client') assertMetadata(metadata(record));
+      return record;
+    };
+    // Hold only the persistence fence, never the network refresh flight. All writers
+    // of this namespace use it, so the two rows form one coherent observation.
+    const snapshot = async (expectedGeneration?: string): Promise<string> => {
+      const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
+      if (!lease)
+        throw new MCPTokenRefreshUnavailableError(
+          key,
+          new Error('Grant snapshot fence unavailable'),
+        );
+      try {
+        const [refresh, client] = await Promise.all([
+          tokens.findToken({
+            userId,
+            type: 'mcp_oauth_refresh',
+            identifier: `${identifier}:refresh`,
+          }),
+          deps.tokenStorage.getClientInfoAndMetadata({
+            userId,
+            serverName: key,
+            findToken: boundFindToken,
+          }),
+        ]);
+        const generation = refresh && metadata(refresh).credential_set_id;
+        if (
+          !refresh ||
+          !client ||
+          typeof generation !== 'string' ||
+          !generation ||
+          refresh.expiresAt <= new Date() ||
+          client.clientInfo.client_id !== provider.clientId ||
+          (client.clientInfo as typeof client.clientInfo & { scope?: string }).scope !==
+            `${target.scopes} offline_access`
+        )
+          throw missingGrant();
+        assertMetadata(client.clientMetadata);
+        if (
+          generation !== client.clientMetadata.credential_set_id ||
+          (expectedGeneration != null && generation !== expectedGeneration)
+        )
+          throw new MCPTokenRefreshUnavailableError(
+            key,
+            new Error('Credential generation changed during read'),
+          );
+        return generation;
+      } finally {
+        await lease.release();
+      }
+    };
+    let generation: string;
+    let ownerGeneration: number | null;
     try {
-      [refreshRecord, client] = await Promise.all([
-        tokens.findToken({
-          userId,
-          type: 'mcp_oauth_refresh',
-          identifier: `${identifier}:refresh`,
-        }),
-        deps.tokenStorage.getClientInfoAndMetadata({
-          userId,
-          serverName: key,
-          findToken: tokens.findToken,
-        }),
+      [generation, ownerGeneration] = await Promise.all([
+        snapshot(),
+        deps.flowManager.getLeaseGeneration(ownerGrantLeaseId(userId)),
       ]);
-    } catch {
+    } catch (error) {
+      if (error instanceof OboTokenResolutionError) throw error;
       throw new OboTokenResolutionError(
         'session_refresh_failed',
         'Temporary scheduled OBO credential-store failure.',
         true,
+        error,
       );
     }
-    const binding = client?.clientMetadata;
-    const generation = refreshRecord && metadata(refreshRecord).credential_set_id;
-    if (
-      !refreshRecord ||
-      !client ||
-      !generation ||
-      generation !== binding?.credential_set_id ||
-      refreshRecord.expiresAt <= new Date() ||
-      client.clientInfo.client_id !== provider.clientId ||
-      (client.clientInfo as typeof client.clientInfo & { scope?: string }).scope !==
-        `${target.scopes} offline_access` ||
-      binding?.server_url !== config.url ||
-      binding?.issuer !== provider.issuer ||
-      binding?.token_endpoint !== provider.tokenEndpoint ||
-      binding?.openid_subject !== user.openidId ||
-      binding?.openid_issuer !== user.openidIssuer ||
-      binding?.tenant_id !== (user.tenantId ?? '')
-    )
-      throw missingGrant();
-    const refreshTokens = async (secret: string): Promise<MCPOAuthTokens> => {
+    const refreshTokens: NonNullable<
+      Parameters<typeof deps.tokenStorage.getTokens>[0]['refreshTokens']
+    > = async (secret, stored) => {
+      if (
+        stored.storedServerUrl !== target.url ||
+        stored.storedTokenEndpoint !== provider.tokenEndpoint ||
+        stored.clientInfo?.client_id !== provider.clientId ||
+        (stored.clientInfo as typeof stored.clientInfo & { scope?: string })?.scope !==
+          `${target.scopes} offline_access`
+      )
+        throw new ReauthenticationRequiredError(key, 'binding');
       let next: GrantResponse;
       try {
         next = await provider.refresh(secret, target.scopes);
       } catch (error) {
         if (isRetryableOboExchangeError(error))
           throw new MCPTokenRefreshUnavailableError(key, error);
+        const code =
+          error && typeof error === 'object' && 'error' in error ? error.error : undefined;
+        if (
+          typeof code === 'string' &&
+          [
+            'invalid_grant',
+            'invalid_client',
+            'unauthorized_client',
+            'unsupported_grant_type',
+            'invalid_request',
+            'invalid_scope',
+            'invalid_target',
+            'access_denied',
+          ].includes(code)
+        )
+          throw new ReauthenticationRequiredError(
+            key,
+            code === 'invalid_client' ? 'invalid_client' : 'expired',
+          );
         throw error;
       }
       if (!next.access_token)
@@ -399,12 +501,21 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       const params = {
         userId,
         serverName: key,
-        findToken: tokens.findToken,
+        findToken: boundFindToken,
         createToken: tokens.createToken,
         updateToken: tokens.updateToken,
         deleteTokens: tokens.deleteTokens,
         flowManager: deps.flowManager,
         coordinateRefresh: true,
+        rejectedCredentialSetId: generation,
+        singleFlightScope: JSON.stringify([
+          target.url,
+          target.scopes,
+          user.openidId,
+          user.openidIssuer,
+          provider.clientId,
+        ]),
+        withPersistence: withOwnerPersistence(userId, ownerGeneration),
         refreshTokens,
       };
       let result = forceRefresh
@@ -415,10 +526,16 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       }
       if (!result?.access_token || !result.expires_at || result.expires_at <= Date.now())
         throw missingGrant();
+      if (!result.credential_set_id) throw missingGrant();
+      await snapshot(result.credential_set_id);
       return result;
     } catch (error) {
-      if (error instanceof ReauthenticationRequiredError) throw missingGrant();
-      if (error instanceof MCPTokenRefreshUnavailableError) {
+      if (error instanceof ReauthenticationRequiredError && error.reason !== 'binding')
+        throw missingGrant();
+      if (
+        error instanceof MCPTokenRefreshUnavailableError ||
+        error instanceof ReauthenticationRequiredError
+      ) {
         throw new OboTokenResolutionError(
           'session_refresh_failed',
           'Temporary OBO grant refresh failure.',
@@ -459,7 +576,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     expectedUrl?: string,
   ): Promise<void> => {
     const scheduleLease = scheduleGrantLeaseId(userId, scheduleId);
-    const scheduleGeneration = await deps.flowManager.getLeaseGeneration(scheduleLease);
+    const [scheduleGeneration, ownerGeneration] = await Promise.all([
+      deps.flowManager.getLeaseGeneration(scheduleLease),
+      deps.flowManager.getLeaseGeneration(ownerGrantLeaseId(userId)),
+    ]);
     if (scheduleGeneration == null)
       throw new MCPTokenRefreshUnavailableError(
         scheduledOboGrantKey(scheduleId, serverName),
@@ -563,6 +683,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             scope: `${target.scopes} offline_access`,
           };
           await deps.tokenStorage.storeTokens({
+            withPersistence: withOwnerPersistence(userId, ownerGeneration),
             userId,
             serverName: key,
             tokens: {
@@ -807,6 +928,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     enroll,
     revoke,
     listEnrolled,
+    drainOwnerWrites,
     enrollFromRequest,
     describeFromRequest,
     revokeFromRequest,
@@ -838,6 +960,7 @@ export function createLazyScheduledOboGrantService(
     enroll: (...args) => get().enroll(...args),
     revoke: (...args) => get().revoke(...args),
     listEnrolled: (...args) => get().listEnrolled(...args),
+    drainOwnerWrites: (...args) => get().drainOwnerWrites(...args),
     enrollFromRequest: (...args) => get().enrollFromRequest(...args),
     describeFromRequest: (...args) => get().describeFromRequest(...args),
     revokeFromRequest: (...args) => get().revokeFromRequest(...args),

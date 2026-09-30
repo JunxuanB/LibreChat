@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { AgentCapabilities, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type { AppConfig, IUser } from '@librechat/data-schemas';
 import type { Response } from 'express';
+import type { UpstreamTokenTarget } from '../mcp/oauth/obo';
 import type { MCPOAuthTokens } from '../mcp/oauth/types';
 import type { ParsedServerConfig } from '../mcp/types';
 import type { ServerRequest } from '../types/http';
@@ -47,7 +48,7 @@ const context = {
   agentId: 'root',
   invocationMode: 'delegated' as const,
 };
-const target = { mcpServer: 'Files', scopes: config.obo!.scopes };
+const target = { mcpServer: 'Files', scopes: config.obo!.scopes, url: config.url };
 
 function harness(
   tokenStorage: Parameters<
@@ -82,6 +83,7 @@ function harness(
         ? { access_token: 'fresh-after-12h', refresh_token: 'rotated-refresh', expires_in: 3600 }
         : { access_token: 'first', refresh_token: 'server-scoped-refresh', expires_in: 3600 },
   );
+  let ownerActive = true;
   let allowed = ['Files'];
   let agentAllowed = true;
   let baseAvailable = true;
@@ -97,7 +99,7 @@ function harness(
     tokenStorage,
     flowManager: flow,
     getUser: async () => user,
-    getSchedule: async () => row,
+    getSchedule: async () => ({ ...row }),
     getAppConfig: async (options) =>
       options?.baseOnly && !baseAvailable
         ? undefined
@@ -126,7 +128,7 @@ function harness(
     }),
     requestGrant,
     inspect,
-    isOwnerActive: async () => true,
+    isOwnerActive: async () => ownerActive,
     isOboConfigTrusted: async () => true,
     isLiveAccessTokenValid: (session) => {
       const decoded = session.accessToken ? jwt.decode(session.accessToken) : null;
@@ -146,6 +148,9 @@ function harness(
     pauseSchedule,
     requestGrant,
     inspect,
+    setOwnerActive: (active: boolean) => {
+      ownerActive = active;
+    },
     setAllowed: (names: string[]) => {
       allowed = names;
     },
@@ -745,7 +750,7 @@ describe('separately authorized scheduled OBO grants', () => {
           throw new Error('A downstream token must not be exchanged as an upstream assertion');
         }),
         oboTrustChecker: jest.fn(async () => true),
-        upstreamTokenProviderResolver: (input?: { target?: typeof target }) =>
+        upstreamTokenProviderResolver: (input?: { target?: UpstreamTokenTarget }) =>
           service.resolve(user, { context, target: input?.target }),
       };
       const call = async (message: string) => {
@@ -778,6 +783,281 @@ describe('separately authorized scheduled OBO grants', () => {
       await mcp.close();
     }
   }, 30_000);
+
+  it('requires the connection destination instead of guessing the latest configured endpoint', async () => {
+    const { service, row, setServer, requestGrant } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const unbound = (await service.resolve(user, {
+      context,
+      target: { mcpServer: 'Files', scopes: target.scopes },
+    }))!;
+    await expect(unbound()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    setServer({ ...config, url: 'https://replacement.test/mcp' });
+    const stale = (await service.resolve(user, { context, target }))!;
+    await expect(stale()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('never sends a replacement grant to an old real MCP transport', async () => {
+    const observed: string[] = [];
+    const mcp = await createOAuthMCPServer({
+      onResourceRequest: (req) => {
+        if (req.headers.authorization) observed.push(req.headers.authorization);
+      },
+    });
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    const { service, row, tokenStore, flow, setServer, requestGrant } = harness(coordinator);
+    const original = { ...config, url: mcp.url };
+    const replacement = { ...config, url: 'https://replacement.test/mcp' };
+    setServer(original);
+    try {
+      await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, original.url);
+      row.enabled = true;
+      requestGrant.mockResolvedValue({
+        access_token: 'replacement-only',
+        refresh_token: 'replacement-refresh',
+        expires_in: 3600,
+      });
+      coordinator.getTokens = async (params) => {
+        setServer(replacement);
+        await service.enroll(
+          user.id,
+          row.id,
+          'Files',
+          'new-assertion',
+          target.scopes,
+          replacement.url,
+        );
+        mcp.issuedTokens.add('replacement-only');
+        mcp.tokenIssueTimes.set('replacement-only', Date.now());
+        return MCPTokenStorage.getTokens(params);
+      };
+      await expect(
+        MCPConnectionFactory.create(
+          { serverName: 'Files', serverConfig: original },
+          {
+            user,
+            useOAuth: true,
+            flowManager: flow,
+            tokenMethods: tokenStore,
+            oboTokenResolver: async () => {
+              throw new Error('No downstream assertion exchange');
+            },
+            oboTrustChecker: async () => true,
+            upstreamTokenProviderResolver: (input) =>
+              service.resolve(user, { context, target: input?.target }),
+          },
+        ),
+      ).rejects.toThrow();
+      expect(observed).not.toContain('Bearer replacement-only');
+      expect(requestGrant.mock.calls.filter(([, type]) => type === 'refresh_token')).toHaveLength(
+        0,
+      );
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  it('validates the returned generation even when a substituted storage bypasses token lookups', async () => {
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    const { service, row, tokenStore, setServer, requestGrant } = harness(coordinator);
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    coordinator.getTokens = async () => {
+      setServer({ ...config, url: 'https://replacement.test/mcp' });
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'replacement',
+        refresh_token: 'new-refresh',
+        expires_in: 3600,
+      });
+      await service.enroll(
+        user.id,
+        row.id,
+        'Files',
+        'new-assertion',
+        target.scopes,
+        'https://replacement.test/mcp',
+      );
+      const access = tokenStore.getAll().find((r) => r.type === 'mcp_oauth')!;
+      const generation =
+        access.metadata instanceof Map
+          ? access.metadata.get('credential_set_id')
+          : access.metadata?.credential_set_id;
+      return {
+        access_token: 'replacement',
+        token_type: 'Bearer',
+        obtained_at: Date.now(),
+        expires_at: Date.now() + 3600_000,
+        credential_set_id: String(generation),
+      };
+    };
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
+
+  it('adopts a peer rotation between the initial binding check and token retrieval', async () => {
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    const { service, row, tokenStore, flow } = harness(coordinator);
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    coordinator.getTokens = async (params) => {
+      await MCPTokenStorage.forceRefreshTokens({
+        ...params,
+        flowManager: flow,
+        findToken: tokenStore.findToken,
+        refreshTokens: async () => ({
+          access_token: 'peer-access',
+          refresh_token: 'peer-refresh',
+          token_type: 'Bearer',
+          obtained_at: Date.now(),
+          expires_at: Date.now() + 3600_000,
+        }),
+      });
+      return MCPTokenStorage.getTokens(params);
+    };
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).resolves.toMatchObject({ access_token: 'peer-access' });
+  });
+
+  it('treats an incoherent credential generation as retryable, never permanently missing', async () => {
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    const { service, row, tokenStore } = harness(coordinator);
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const client = tokenStore.getAll().find((r) => r.type === 'mcp_oauth_client')!;
+    const original = client.metadata;
+    await tokenStore.updateToken(
+      { userId: user.id, type: 'mcp_oauth_client', identifier: client.identifier },
+      {
+        metadata: {
+          ...Object.fromEntries(
+            original instanceof Map ? original : Object.entries(original ?? {}),
+          ),
+          credential_set_id: 'writer-in-progress',
+        },
+      },
+    );
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).rejects.toMatchObject({
+      reason: 'session_refresh_failed',
+      retryable: true,
+    });
+    await tokenStore.updateToken(
+      { userId: user.id, type: 'mcp_oauth_client', identifier: client.identifier },
+      { metadata: original as Record<string, unknown> },
+    );
+    await expect(provider()).resolves.toMatchObject({ access_token: 'first' });
+  });
+
+  it.each([
+    'invalid_grant',
+    'invalid_client',
+    'unauthorized_client',
+    'invalid_scope',
+    'access_denied',
+  ])('requires authorization after a structured provider %s error', async (code) => {
+    const { service, row, requestGrant } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockRejectedValueOnce(
+      Object.assign(new Error('server responded with an error in the response body'), {
+        name: 'ResponseBodyError',
+        code: 'OAUTH_RESPONSE_BODY_ERROR',
+        error: code,
+        status: 400,
+      }),
+    );
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+      retryable: false,
+    });
+  });
+
+  it.each([429, 503])(
+    'retains a grant after an actual transient provider status %s',
+    async (status) => {
+      const { service, row, requestGrant, tokenStore } = harness();
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      row.enabled = true;
+      requestGrant.mockRejectedValueOnce(
+        Object.assign(new Error('server responded with an error in the response body'), {
+          name: 'ResponseBodyError',
+          code: 'OAUTH_RESPONSE_BODY_ERROR',
+          error: 'temporarily_unavailable',
+          status,
+        }),
+      );
+      const provider = (await service.resolve(user, { context, target }))!;
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: true });
+      expect(tokenStore.getAll()).toHaveLength(3);
+      await expect(provider({ forceRefresh: true })).resolves.toMatchObject({
+        access_token: 'fresh-after-12h',
+      });
+    },
+  );
+
+  it('refuses enrollment completing after the account barrier and token sweep', async () => {
+    const { service, row, tokenStore, requestGrant, setOwnerActive } = harness();
+    requestGrant.mockImplementationOnce(async () => {
+      setOwnerActive(false);
+      row.enabled = false;
+      await service.drainOwnerWrites(user.id);
+      await tokenStore.deleteTokens({ userId: user.id });
+      return { access_token: 'late', refresh_token: 'late-refresh', expires_in: 3600 };
+    });
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toThrow();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('drains token writes and rollback before the account sweep without blocking on a provider', async () => {
+    const { service, row, tokenStore, setOwnerActive } = harness();
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = tokenStore.createToken;
+    jest.spyOn(tokenStore, 'createToken').mockImplementationOnce(async (data) => {
+      const created = await original(data);
+      entered();
+      await blocked;
+      return created;
+    });
+    const enrolling = service.enroll(user.id, row.id, 'Files', 'assertion');
+    await started;
+    setOwnerActive(false);
+    let drained = false;
+    const deletion = service.drainOwnerWrites(user.id).then(async () => {
+      drained = true;
+      await tokenStore.deleteTokens({ userId: user.id });
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    release();
+    await enrolling;
+    await deletion;
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('never persists a late renewal once the account deletion fence has advanced', async () => {
+    const { service, row, tokenStore, requestGrant, setOwnerActive } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockImplementationOnce(async () => {
+      setOwnerActive(false);
+      await service.drainOwnerWrites(user.id);
+      await tokenStore.deleteTokens({ userId: user.id });
+      return { access_token: 'late-renewal', refresh_token: 'late-rotation', expires_in: 3600 };
+    });
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toThrow();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
 
   it('does not enroll a ClickHouse Cloud direct-OAuth MCP server as an OBO grant', async () => {
     const { service, setServer, requestGrant, tokenStore } = harness();

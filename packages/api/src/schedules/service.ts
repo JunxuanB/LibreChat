@@ -119,6 +119,8 @@ export type ScheduleResumeClaimResult =
  */
 export interface SchedulesServiceDeps {
   preflightMCP: ScheduleMCPPreflight;
+  /** After the durable user-deletion barrier, drain grant persistence before the cascade. */
+  drainOboWrites?: (userId: string) => Promise<void>;
   methods: ScheduleMethods & {
     getRoleByName: (
       role?: string,
@@ -1653,6 +1655,7 @@ export function createSchedulesService(
    * restoreUserSchedulesFromDeletion) rather than stranding a live user with erased rows.
    */
   async function quiesceUserSchedules(userId: string, token: string): Promise<boolean> {
+    await deps.drainOboWrites?.(userId);
     await methods.suspendUserSchedulesForDeletion(userId, token);
     const active = await methods.getActiveRunsForUser(userId);
     const unconfirmed: string[] = [];

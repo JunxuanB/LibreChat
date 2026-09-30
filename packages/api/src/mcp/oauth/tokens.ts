@@ -15,7 +15,10 @@ import { isInvalidClientMessage } from '~/mcp/utils';
 import { isSystemUserId } from '~/mcp/enum';
 
 export class ReauthenticationRequiredError extends Error {
-  constructor(serverName: string, reason: 'expired' | 'missing' | 'invalid_client' | 'binding') {
+  constructor(
+    serverName: string,
+    readonly reason: 'expired' | 'missing' | 'invalid_client' | 'binding',
+  ) {
     let detail: string;
     if (reason === 'invalid_client') {
       detail = 'stored client registration is no longer valid';
@@ -46,7 +49,11 @@ export class MCPTokenRefreshUnavailableError extends Error {
   }
 }
 
+/** Caller-owned lifetime around credential persistence, including rollback. Never wraps wire redemption. */
+type TokenPersistenceGuard = (persist: () => Promise<MCPOAuthTokens>) => Promise<MCPOAuthTokens>;
+
 interface StoreTokensParams {
+  withPersistence?: TokenPersistenceGuard;
   /** Interactive writers share the persistence fence with refresh, adoption, and teardown. */
   flowManager?: Pick<FlowStateManager, 'acquireLease'>;
   persistenceWaitTimeoutMs?: number;
@@ -76,6 +83,7 @@ interface StoreTokensParams {
 }
 
 interface GetTokensParams {
+  withPersistence?: TokenPersistenceGuard;
   userId: string;
   serverName: string;
   findToken: TokenMethods['findToken'];
@@ -513,7 +521,8 @@ export class MCPTokenStorage {
       );
     }
     try {
-      return await this.storeTokensUnderLease(params);
+      const persist = () => this.storeTokensUnderLease(params);
+      return await (params.withPersistence ? params.withPersistence(persist) : persist());
     } finally {
       if (lease)
         await this.releaseRefreshFlight(lease, this.getLogPrefix(params.userId, params.serverName));
@@ -1527,6 +1536,7 @@ export class MCPTokenStorage {
     leasedRefreshToken,
     onRefreshSuccess,
     onRefreshPreparing,
+    withPersistence,
     signal,
     flowManager,
     leaseId,
@@ -1701,37 +1711,39 @@ export class MCPTokenStorage {
       let storedTokens: MCPOAuthTokens;
       try {
         let preparedRefreshCommit: ((tokens?: MCPOAuthTokens) => Promise<void>) | undefined;
-        storedTokens = await this.storeTokensUnderLease({
-          userId,
-          serverName,
-          tokens: newTokens,
-          createToken,
-          updateToken,
-          deleteTokens,
-          findToken,
-          clientInfo,
-          existingTokens: {
-            accessToken: existingAccessToken ?? undefined,
-            refreshToken: refreshTokenData,
-            clientInfoToken: clientInfoData,
-          },
-          metadata: storedClientMetadata,
-          expectedCredentialSetId: refreshCredentialSetId,
-          signal,
-          onStorePreparing:
-            onRefreshPreparing == null
-              ? undefined
-              : async () => {
-                  preparedRefreshCommit = await onRefreshPreparing();
-                },
-          onStoreCommitted: async (tokens) => {
-            if (preparedRefreshCommit != null) {
-              await preparedRefreshCommit(tokens);
-            } else {
-              await onRefreshSuccess?.(tokens);
-            }
-          },
-        });
+        const persist = () =>
+          this.storeTokensUnderLease({
+            userId,
+            serverName,
+            tokens: newTokens,
+            createToken,
+            updateToken,
+            deleteTokens,
+            findToken,
+            clientInfo,
+            existingTokens: {
+              accessToken: existingAccessToken ?? undefined,
+              refreshToken: refreshTokenData,
+              clientInfoToken: clientInfoData,
+            },
+            metadata: storedClientMetadata,
+            expectedCredentialSetId: refreshCredentialSetId,
+            signal,
+            onStorePreparing:
+              onRefreshPreparing == null
+                ? undefined
+                : async () => {
+                    preparedRefreshCommit = await onRefreshPreparing();
+                  },
+            onStoreCommitted: async (tokens) => {
+              if (preparedRefreshCommit != null) {
+                await preparedRefreshCommit(tokens);
+              } else {
+                await onRefreshSuccess?.(tokens);
+              }
+            },
+          });
+        storedTokens = await (withPersistence ? withPersistence(persist) : persist());
       } finally {
         try {
           await persistenceLease?.release();
@@ -1830,6 +1842,7 @@ export class MCPTokenStorage {
     onRefreshSuccess,
     onRefreshPreparing,
     onTokensAdopted,
+    withPersistence,
   }: GetTokensParams): Promise<MCPOAuthTokens | null> {
     const logPrefix = this.getLogPrefix(userId, serverName);
 
@@ -1887,6 +1900,7 @@ export class MCPTokenStorage {
           onTokensAdopted,
           existingAccessToken: accessTokenData,
           existingRefreshToken: refreshTokenData,
+          withPersistence,
         });
       }
 
