@@ -531,6 +531,31 @@ describe('verified fill defaults', () => {
   });
 });
 
+/**
+ * The default avatar's glyph is a graphical object under WCAG 1.4.11, so it needs 3:1 on its fill.
+ * The bundled dark theme keeps the 2.6:1 its avatar painted before the role existed: the glyph is
+ * decorative (aria-hidden beside the account name), and raising it is tracked on its own.
+ */
+it('keeps the bundled dark avatar glyph no fainter than it painted before its role', () => {
+  expect(
+    contrast(toRgb(darkTheme, 'rgb-avatar-text'), toRgb(darkTheme, 'rgb-avatar-fill')),
+  ).toBeGreaterThanOrEqual(2.6);
+});
+
+describe.each([
+  ['default', defaultTheme],
+  ['high contrast light', highContrastLightTheme],
+  ['high contrast dark', highContrastDarkTheme],
+  ['clickhouse light', clickHouseLightTheme],
+  ['clickhouse dark', clickHouseDarkTheme],
+])('%s default avatar', (_name, theme: IThemeRGB) => {
+  it('keeps the glyph at the 3:1 mark floor against its fill', () => {
+    expect(
+      contrast(toRgb(theme, 'rgb-avatar-text'), toRgb(theme, 'rgb-avatar-fill')),
+    ).toBeGreaterThanOrEqual(WCAG_MARK_MIN);
+  });
+});
+
 /** The shared `Switch` paints this track, so it travels with the package rather
  *  than the app stylesheet. It is a UI component boundary under WCAG 1.4.11 and
  *  has to stay distinct from the `switch-thumb` knob on it and from the
