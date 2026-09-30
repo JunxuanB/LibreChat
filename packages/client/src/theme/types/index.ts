@@ -55,6 +55,8 @@ export interface IThemeRGB {
   'rgb-surface-tertiary'?: string;
   'rgb-surface-tertiary-alt'?: string;
   'rgb-surface-dialog'?: string;
+  /** An OGDialog title's ink; follows `rgb-text-primary` when a theme omits it. */
+  'rgb-dialog-title'?: string;
   'rgb-surface-overlay'?: string;
   'rgb-surface-submit'?: string;
   'rgb-surface-submit-hover'?: string;
@@ -69,6 +71,10 @@ export interface IThemeRGB {
   'rgb-surface-inverted-hover'?: string;
   /** Fill of an inverted control while pressed; follows `rgb-surface-inverted-hover` when omitted. */
   'rgb-surface-inverted-pressed'?: string;
+  /** The Button's primary fill and its hover; they follow `rgb-surface-inverted` and its hover
+   *  when omitted, which the checkbox and switch keep painting. */
+  'rgb-button-primary'?: string;
+  'rgb-button-primary-hover'?: string;
   'rgb-text-inverted'?: string;
   'rgb-surface-fixed'?: string;
   'rgb-surface-fixed-hover'?: string;
@@ -127,6 +133,13 @@ export interface IThemeRGB {
 
   // Brand colors
   'rgb-brand-purple'?: string;
+
+  /** The default user avatar's fill and glyph, drawn when a user has no image. The glyph follows
+   *  `rgb-text-primary` in a theme that does not set it, as it did before it had a role. */
+  'rgb-avatar-fill'?: string;
+  'rgb-avatar-text'?: string;
+  /** Behind an agent or assistant avatar while its image loads or where it is transparent. */
+  'rgb-avatar-placeholder'?: string;
 
   /**
    * Code syntax highlighting. Declared here rather than left as literals in the
@@ -215,6 +228,7 @@ export interface IThemeVariables {
   '--surface-tertiary': string;
   '--surface-tertiary-alt': string;
   '--surface-dialog': string;
+  '--dialog-title': string;
   '--surface-overlay': string;
   '--surface-submit': string;
   '--surface-submit-hover': string;
@@ -227,6 +241,8 @@ export interface IThemeVariables {
   '--surface-inverted': string;
   '--surface-inverted-hover': string;
   '--surface-inverted-pressed': string;
+  '--button-primary': string;
+  '--button-primary-hover': string;
   '--text-inverted': string;
   '--surface-fixed': string;
   '--surface-fixed-hover': string;
@@ -267,6 +283,9 @@ export interface IThemeVariables {
   '--status-verified': string;
   '--text-on-status': string;
   '--brand-purple': string;
+  '--avatar-fill': string;
+  '--avatar-text': string;
+  '--avatar-placeholder': string;
 
   '--syntax-text': string;
   '--syntax-comment': string;
@@ -333,6 +352,7 @@ export interface IThemeColors {
   'surface-tertiary'?: string;
   'surface-tertiary-alt'?: string;
   'surface-dialog'?: string;
+  'dialog-title'?: string;
   'surface-overlay'?: string;
   'surface-submit'?: string;
   'surface-submit-hover'?: string;
@@ -345,6 +365,8 @@ export interface IThemeColors {
   'surface-inverted'?: string;
   'surface-inverted-hover'?: string;
   'surface-inverted-pressed'?: string;
+  'button-primary'?: string;
+  'button-primary-hover'?: string;
   'text-inverted'?: string;
   'surface-fixed'?: string;
   'surface-fixed-hover'?: string;
@@ -381,6 +403,9 @@ export interface IThemeColors {
   'status-verified'?: string;
   'text-on-status'?: string;
   'brand-purple'?: string;
+  'avatar-fill'?: string;
+  'avatar-text'?: string;
+  'avatar-placeholder'?: string;
 
   'series-1'?: string;
   'series-2'?: string;
@@ -422,6 +447,14 @@ export interface IThemeAppearance {
   radius2xl: string;
   radius3xl: string;
   controlHeight: string;
+  /** A theme-sized control's inline padding and icon-to-label gap; they follow `spaceNormal` and
+   *  `spaceCompact` when a theme names those and not these. */
+  controlPaddingX: string;
+  controlGap: string;
+  /** A theme-sized control's label weight, and the Button's default and `sm` heights. */
+  controlFontWeight: string;
+  buttonHeight: string;
+  buttonHeightSm: string;
   switchWidth: string;
   switchHeight: string;
   tableCellSpaceY: string;
@@ -432,7 +465,7 @@ export interface IThemeAppearance {
   disabledStyle: 'dim' | 'fill';
   fontFamily: string;
   monoFontFamily: string;
-  /** Headings and dialog titles; follows `fontFamily` when a theme omits it. */
+  /** Headings; follows `fontFamily` when a theme omits it. */
   displayFontFamily: string;
   /** The `text-*` scale: size and line height per step, Tailwind's own values by default. */
   textXs: string;
@@ -447,6 +480,18 @@ export interface IThemeAppearance {
   leadingLg: string;
   leadingXl: string;
   leading2xl: string;
+  /**
+   * An OGDialog's edge stroke width (painted in `border-light`), inline padding and title to
+   * description gap, and its title's size, leading, weight and family. The title follows `textLg`
+   * and `displayFontFamily` when a theme omits its size and family.
+   */
+  dialogStroke: string;
+  dialogPaddingX: string;
+  dialogHeaderGap: string;
+  dialogTitleSize: string;
+  dialogTitleLeading: string;
+  dialogTitleFontWeight: string;
+  dialogTitleFontFamily: string;
   /** Opacity of `surface-overlay` under OGDialog, AlertDialog and Dialog, in that order. */
   scrimOpacity: string;
   alertScrimOpacity: string;

@@ -369,6 +369,64 @@ describe('theme registry', () => {
     });
   });
 
+  it('keeps the avatar backdrop on the surface each mode drew it on before the role existed', () => {
+    const colors = { 'rgb-surface-secondary': '20 21 22', 'rgb-surface-tertiary': '30 31 32' };
+    const theme = {
+      version: 1 as const,
+      name: 'legacy-avatar-placeholder',
+      modes: { light: { colors }, dark: { colors } },
+    };
+
+    expect(resolveTheme(theme, 'light').colors['rgb-avatar-placeholder']).toBe('20 21 22');
+    expect(resolveTheme(theme, 'dark').colors['rgb-avatar-placeholder']).toBe('30 31 32');
+  });
+
+  it('inks the default avatar in the primary text a theme sets, unless it sets the role', () => {
+    const inherited = resolveTheme(
+      {
+        version: 1,
+        name: 'legacy-avatar-text',
+        modes: { light: { colors: { 'rgb-text-primary': '10 11 12' } } },
+      },
+      'light',
+    );
+    const explicit = resolveTheme(
+      {
+        version: 1,
+        name: 'explicit-avatar-text',
+        modes: {
+          light: { colors: { 'rgb-text-primary': '10 11 12', 'rgb-avatar-text': '1 2 3' } },
+        },
+      },
+      'light',
+    );
+
+    expect(inherited.colors['rgb-avatar-text']).toBe('10 11 12');
+    expect(explicit.colors['rgb-avatar-text']).toBe('1 2 3');
+  });
+
+  it('preserves an explicit avatar backdrop and falls back to the bundled one otherwise', () => {
+    const explicit = resolveTheme(
+      {
+        version: 1,
+        name: 'explicit-avatar-placeholder',
+        modes: {
+          dark: {
+            colors: { 'rgb-surface-tertiary': '30 31 32', 'rgb-avatar-placeholder': '1 2 3' },
+          },
+        },
+      },
+      'dark',
+    );
+    const untouched = resolveTheme(
+      { version: 1, name: 'no-surface', modes: { dark: { colors: {} } } },
+      'dark',
+    );
+
+    expect(explicit.colors['rgb-avatar-placeholder']).toBe('1 2 3');
+    expect(untouched.colors['rgb-avatar-placeholder']).toBe(darkTheme['rgb-avatar-placeholder']);
+  });
+
   it('keeps the switch thumb on the surface a theme repainted before the role existed', () => {
     const resolved = resolveTheme(
       {
@@ -589,6 +647,226 @@ describe('theme registry', () => {
 
     expect(explicit.appearance.displayFontFamily).toBe('Head, serif');
     expect(bundled.appearance.displayFontFamily).toBe(defaultAppearance.fontFamily);
+  });
+
+  it('pads theme-sized controls with the shared spacing by default', () => {
+    expect(defaultAppearance.controlPaddingX).toBe(defaultAppearance.spaceNormal);
+    expect(defaultAppearance.controlGap).toBe(defaultAppearance.spaceCompact);
+  });
+
+  it('keeps the controls of a theme that names only the shared spacing on it', () => {
+    const { appearance } = resolveTheme(compactTheme, 'light');
+
+    expect(appearance).toMatchObject({ controlPaddingX: '0.5rem', controlGap: '0.25rem' });
+  });
+
+  it('spaces controls apart from message rows when a theme names the control roles', () => {
+    const { appearance } = resolveTheme(
+      {
+        version: 1,
+        name: 'roomy-controls-reference',
+        modes: {
+          light: {
+            appearance: { spaceNormal: '0.5rem', controlPaddingX: '2rem', controlGap: '1rem' },
+          },
+        },
+      },
+      'light',
+    );
+
+    expect(appearance).toMatchObject({
+      spaceNormal: '0.5rem',
+      spaceCompact: defaultAppearance.spaceCompact,
+      controlPaddingX: '2rem',
+      controlGap: '1rem',
+    });
+  });
+
+  it('rejects a control spacing role that is not a length', () => {
+    const issues = (appearance: Record<string, string>) =>
+      validateThemeDefinition({
+        version: 1,
+        name: 'bad-controls',
+        modes: { light: { appearance } },
+      });
+
+    expect(issues({ controlPaddingX: '1rem', controlGap: 'calc(1rem - 2px)' })).toEqual([]);
+    expect(issues({ controlPaddingX: '12' })).toHaveLength(1);
+    expect(issues({ controlGap: '1rem; color: red' })).toHaveLength(1);
+  });
+
+  it('keeps the primary buttons of a theme that predates the role on its inverted surface', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'inverted-reference',
+        modes: { light: { colors: { 'rgb-surface-inverted': '10 20 30' } } },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-button-primary']).toBe('10 20 30');
+    expect(resolved.colors['rgb-button-primary-hover']).toBe(
+      defaultTheme['rgb-button-primary-hover'],
+    );
+  });
+
+  it('draws buttons from their own roles apart from the checkbox fill', () => {
+    const { colors, appearance } = resolveTheme(
+      {
+        version: 1,
+        name: 'bold-buttons-reference',
+        modes: {
+          dark: {
+            colors: { 'rgb-button-primary': '200 30 90', 'rgb-button-primary-hover': '220 60 110' },
+            appearance: {
+              controlFontWeight: '700',
+              buttonHeight: '3rem',
+              buttonHeightSm: '2.75rem',
+            },
+          },
+        },
+      },
+      'dark',
+    );
+
+    expect(colors['rgb-surface-inverted']).toBe(darkTheme['rgb-surface-inverted']);
+    expect(colors['rgb-button-primary']).toBe('200 30 90');
+    expect(appearance).toMatchObject({
+      controlFontWeight: '700',
+      buttonHeight: '3rem',
+      buttonHeightSm: '2.75rem',
+    });
+  });
+
+  it('keeps LibreChat’s button weight and heights by default', () => {
+    expect(defaultAppearance).toMatchObject({
+      controlFontWeight: '500',
+      buttonHeight: '2.5rem',
+      buttonHeightSm: '2.25rem',
+    });
+  });
+
+  it('accepts a numeric label weight from 1 to 1000 and rejects anything else', () => {
+    const issues = (controlFontWeight: string) =>
+      validateThemeDefinition({
+        version: 1,
+        name: 'weights',
+        modes: { light: { appearance: { controlFontWeight } } },
+      });
+
+    expect(issues('400')).toEqual([]);
+    expect(issues('1000')).toEqual([]);
+    ['0', '1001', 'bold', '400;', '4.5e2'].forEach((value) =>
+      expect(issues(value)).toHaveLength(1),
+    );
+  });
+
+  it('keeps LibreChat’s dialog chrome by default', () => {
+    expect(defaultAppearance).toMatchObject({
+      dialogStroke: '0px',
+      dialogPaddingX: '1.5rem',
+      dialogHeaderGap: '0.375rem',
+      dialogTitleSize: defaultAppearance.textLg,
+      dialogTitleLeading: '1',
+      dialogTitleFontWeight: '600',
+      dialogTitleFontFamily: defaultAppearance.displayFontFamily,
+    });
+    expect(defaultTheme['rgb-dialog-title']).toBe(defaultTheme['rgb-text-primary']);
+    expect(darkTheme['rgb-dialog-title']).toBe(darkTheme['rgb-text-primary']);
+  });
+
+  it('keeps the dialog titles of a theme that predates the roles on its type and ink', () => {
+    const { colors, appearance } = resolveTheme(
+      {
+        version: 1,
+        name: 'type-reference',
+        modes: {
+          light: {
+            colors: { 'rgb-text-primary': '10 20 30' },
+            appearance: { fontFamily: 'Georgia, serif', textLg: '1.4rem' },
+          },
+        },
+      },
+      'light',
+    );
+
+    expect(colors['rgb-dialog-title']).toBe('10 20 30');
+    /** The family chains through the display role, which itself follows `fontFamily`. */
+    expect(appearance.displayFontFamily).toBe('Georgia, serif');
+    expect(appearance.dialogTitleFontFamily).toBe('Georgia, serif');
+    expect(appearance.dialogTitleSize).toBe('1.4rem');
+  });
+
+  it('draws dialog chrome from its own roles apart from the type scale and body ink', () => {
+    const { colors, appearance } = resolveTheme(
+      {
+        version: 1,
+        name: 'framed-dialog-reference',
+        modes: {
+          dark: {
+            colors: { 'rgb-dialog-title': '200 30 90' },
+            appearance: {
+              dialogStroke: '3px',
+              dialogPaddingX: '3rem',
+              dialogHeaderGap: '1rem',
+              dialogTitleSize: '2rem',
+              dialogTitleLeading: '1.2',
+              dialogTitleFontWeight: '800',
+              dialogTitleFontFamily: 'Georgia, serif',
+            },
+          },
+        },
+      },
+      'dark',
+    );
+
+    expect(colors['rgb-text-primary']).toBe(darkTheme['rgb-text-primary']);
+    expect(colors['rgb-dialog-title']).toBe('200 30 90');
+    expect(appearance.textLg).toBe(defaultAppearance.textLg);
+    expect(appearance.displayFontFamily).toBe(defaultAppearance.displayFontFamily);
+    expect(appearance).toMatchObject({
+      dialogStroke: '3px',
+      dialogPaddingX: '3rem',
+      dialogHeaderGap: '1rem',
+      dialogTitleSize: '2rem',
+      dialogTitleLeading: '1.2',
+      dialogTitleFontWeight: '800',
+      dialogTitleFontFamily: 'Georgia, serif',
+    });
+  });
+
+  it('does not count the dialog title ink among the surfaces the verified mark sits on', () => {
+    const { colors } = resolveTheme(
+      {
+        version: 1,
+        name: 'title-ink-reference',
+        modes: { light: { colors: { 'rgb-dialog-title': '200 30 90' } } },
+      },
+      'light',
+    );
+
+    expect(colors['rgb-status-verified']).toBe(defaultTheme['rgb-status-verified']);
+  });
+
+  it('rejects dialog chrome values the shared validators refuse', () => {
+    const issues = (appearance: Record<string, string>) =>
+      validateThemeDefinition({
+        version: 1,
+        name: 'dialog-values',
+        modes: { light: { appearance } },
+      });
+
+    expect(issues({ dialogStroke: '1px', dialogTitleLeading: '1.5' })).toEqual([]);
+    [
+      { dialogStroke: 'thin' },
+      { dialogPaddingX: '2' },
+      { dialogHeaderGap: 'red' },
+      { dialogTitleSize: '1.25rem;' },
+      { dialogTitleLeading: 'calc(1 / 0)' },
+      { dialogTitleFontWeight: '1001' },
+      { dialogTitleFontFamily: 'Inter; color: red' },
+    ].forEach((appearance) => expect(issues(appearance)).toHaveLength(1));
   });
 
   it('reproduces Tailwind’s own type scale by default', () => {
@@ -990,7 +1268,7 @@ describe('theme registry', () => {
 
     expect(validateThemeDefinition(invalidTheme)).toEqual([
       'Invalid RGB value for rgb-text-primary: 999 0 0',
-      'Unknown color token: rgb-unknown',
+      'Invalid RGB value for rgb-unknown: red',
       'Invalid appearance value for controlRadius: url(theme.css)',
       'Invalid appearance value for shadowLg: 0 1px red; color: red',
       'Invalid appearance value for shadowMd: not-a-shadow',
@@ -1049,39 +1327,61 @@ describe('theme registry', () => {
       expect(() => resolveTheme(theme, 'light')).toThrow(TypeError);
     });
 
-    it('ignores a well-formed colour role it predates and paints the rest', () => {
+    it('ignores a colour token it does not know and paints the rest', () => {
       const theme = {
         version: 1,
         name: 'colour',
         modes: {
           light: {
-            colors: { 'rgb-future': '1 2 3', 'rgb-accent-primary': '4 5 6' },
+            colors: {
+              'rgb-future': '1 2 3',
+              'surface-future': '7 8 9',
+              'rgb-accent-primary': '4 5 6',
+            },
             appearance: { futureSpacing: '1rem' },
           },
+          dark: { colors: { 'rgb-surfce-primary': '1 1 1' } },
         },
       } as ThemeDefinition;
 
       expect(validateThemeDefinition(theme)).toEqual([]);
       expect(collectThemeWarnings(theme)).toEqual([
         'Unknown light color token ignored: rgb-future',
+        'Unknown light color token ignored: surface-future',
         'Unknown light appearance token ignored: futureSpacing',
+        'Unknown dark color token ignored: rgb-surfce-primary',
       ]);
       const resolved = resolveTheme(theme, 'light');
       expect(resolved.colors['rgb-accent-primary']).toBe('4 5 6');
       expect(resolved.colors).not.toHaveProperty('rgb-future');
+      expect(resolved.colors).not.toHaveProperty('surface-future');
+      expect(resolveTheme(theme, 'dark').colors).not.toHaveProperty('rgb-surfce-primary');
     });
 
-    it('still rejects an unknown colour token that is not a well-formed role', () => {
+    it('still rejects an unknown colour token with an invalid value or a malformed name', () => {
       const theme = {
         version: 1,
         name: 'colour',
-        modes: { light: { colors: { 'rgb-future': 'red', future: '1 2 3' } } },
+        modes: {
+          light: {
+            colors: {
+              'rgb-future': 'red',
+              'surface-future': '300 0 0',
+              'Surface Future': '1 2 3',
+              'rgb-x;}': '1 2 3',
+            },
+          },
+        },
       } as ThemeDefinition;
 
       expect(validateThemeDefinition(theme)).toEqual([
-        'Unknown color token: rgb-future',
-        'Unknown color token: future',
+        'Invalid RGB value for rgb-future: red',
+        'Invalid RGB value for surface-future: 300 0 0',
+        'Unknown color token: Surface Future',
+        'Unknown color token: rgb-x;}',
       ]);
+      expect(collectThemeWarnings(theme)).toEqual([]);
+      expect(() => resolveTheme(theme, 'light')).toThrow(TypeError);
     });
 
     it('still rejects an injection attempt carried by an unknown key', () => {

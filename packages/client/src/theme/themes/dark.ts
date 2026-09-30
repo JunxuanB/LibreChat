@@ -51,6 +51,7 @@ export const darkTheme: IThemeRGB = {
   'rgb-surface-tertiary': '47 47 47', // #2f2f2f (gray-700)
   'rgb-surface-tertiary-alt': '47 47 47', // #2f2f2f (gray-700)
   'rgb-surface-dialog': '18 18 18', // #121212 (legacy dark dialog)
+  'rgb-dialog-title': '236 236 236', // #ececec (gray-100, matching text-primary)
   'rgb-surface-overlay': '0 0 0', // #000 (black)
   'rgb-surface-submit': '4 120 87', // #047857 (green-700)
   'rgb-surface-submit-hover': '6 95 70', // #065f46 (green-800)
@@ -63,6 +64,8 @@ export const darkTheme: IThemeRGB = {
   'rgb-surface-inverted': '255 255 255', // #fff (white)
   'rgb-surface-inverted-hover': '236 236 236', // #ececec (gray-100)
   'rgb-surface-inverted-pressed': '236 236 236', // #ececec (gray-100), the hover fill
+  'rgb-button-primary': '255 255 255', // #fff (white, matching surface-inverted)
+  'rgb-button-primary-hover': '236 236 236', // #ececec (gray-100, matching surface-inverted-hover)
   'rgb-text-inverted': '23 23 23', // #171717 (gray-850)
   'rgb-surface-fixed': '255 255 255', // #fff (white) — same in light + dark
   'rgb-surface-fixed-hover': '236 236 236', // #ececec (gray-100) — same in light + dark
@@ -118,6 +121,9 @@ export const darkTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '171 104 255', // #ab68ff
+  'rgb-avatar-fill': '121 137 255', // #7989ff (the default avatar fill in every bundled theme)
+  'rgb-avatar-text': '236 236 236', // #ececec (gray-100, matching text-primary)
+  'rgb-avatar-placeholder': '47 47 47', // #2f2f2f (gray-700, matching surface-tertiary)
 
   /** Code syntax highlighting, measured against the `surface-code` fill. The
    *  comment and meta values are the flattened equivalents of the alpha-blended

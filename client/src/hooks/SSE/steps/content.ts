@@ -340,6 +340,9 @@ export function updateContent(
       ) {
         Object.assign(newToolCall, { inputValidationError: true });
       }
+      if (contentPart.tool_call.executor != null) {
+        newToolCall.executor = contentPart.tool_call.executor;
+      }
     }
 
     updatedContent[index] = {

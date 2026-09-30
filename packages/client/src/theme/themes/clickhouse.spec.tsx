@@ -193,6 +193,17 @@ describe.each(modes)('clickhouse %s palette', (_mode, theme) => {
     expect(below(theme, WCAG_AA_NORMAL, onStatusFills, fills)).toEqual([]);
   });
 
+  it('keeps the primary button label at WCAG AA on its fill, hovered and pressed', () => {
+    expect(
+      below(
+        theme,
+        WCAG_AA_NORMAL,
+        ['rgb-text-inverted'],
+        ['rgb-button-primary', 'rgb-button-primary-hover', 'rgb-surface-inverted-pressed'],
+      ),
+    ).toEqual([]);
+  });
+
   it('keeps warning and destructive text at WCAG AA on canvas surfaces', () => {
     expect(
       below(theme, WCAG_AA_NORMAL, ['rgb-text-warning', 'rgb-text-destructive'], canvasSurfaces),
@@ -359,6 +370,8 @@ describe('clickhouse theme definition', () => {
       'shadow2xl',
       'elevationSurface',
       'controlHeight',
+      'controlPaddingX',
+      'controlGap',
       'motionFast',
     ] as const;
     expect(
@@ -366,12 +379,20 @@ describe('clickhouse theme definition', () => {
     ).toEqual([]);
   });
 
-  /** Click UI's control height and `transition.default`. The spacing roles keep LibreChat's
-   *  values: they also pad message bubbles and the composer's send button, and 0.75rem is
-   *  already Click UI's field padding. */
+  /** Click UI's control height, button padding and gap, and `transition.default`. The shared
+   *  spacing roles keep LibreChat's values: they also pad message bubbles and the composer's send
+   *  button, and 0.75rem is already Click UI's field padding. */
   it('sizes theme controls from Click UI and leaves the shared spacing alone', () => {
     const { appearance } = resolveTheme(clickHouseTheme, 'light');
-    expect(appearance).toMatchObject({ controlHeight: '2rem', motionFast: '100ms' });
+    expect(appearance).toMatchObject({
+      controlHeight: '2rem',
+      controlPaddingX: '1rem',
+      controlGap: '0.5rem',
+      controlFontWeight: '400',
+      buttonHeight: '2rem',
+      buttonHeightSm: '2rem',
+      motionFast: '100ms',
+    });
     expect(appearance.spaceCompact).toBe(defaultAppearance.spaceCompact);
     expect(appearance.spaceNormal).toBe(defaultAppearance.spaceNormal);
   });

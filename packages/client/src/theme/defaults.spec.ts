@@ -63,7 +63,7 @@ describe.each([
   const tokens = Object.keys(theme) as Array<keyof IThemeRGB>;
 
   it('covers every registry color', () => {
-    expect(tokens).toHaveLength(106);
+    expect(tokens).toHaveLength(112);
   });
 
   it('resolves every registry color to the runtime theme value', () => {
@@ -77,12 +77,41 @@ describe.each([
   });
 });
 
+/** Roles split out of a broader one alias it, so a stylesheet that sets only the broader role
+ *  still reaches what the split role draws. */
+const stockAliases: Partial<
+  Record<keyof typeof defaultAppearance, keyof typeof defaultAppearance>
+> = {
+  controlPaddingX: 'spaceNormal',
+  controlGap: 'spaceCompact',
+  dialogTitleSize: 'textLg',
+  dialogTitleFontFamily: 'displayFontFamily',
+};
+
+/** Color roles split out of a broader one read it in the stylesheet, in both modes, so a
+ *  stylesheet that overrides only the broader role still reaches what the split role paints. */
+const colorAliases: Array<[string, string]> = [
+  ['--button-primary', '--surface-inverted'],
+  ['--button-primary-hover', '--surface-inverted-hover'],
+  ['--dialog-title', '--text-primary'],
+];
+
+describe('the stock color aliases', () => {
+  it.each(colorAliases)('declares %s as the %s it split from', (property, source) => {
+    expect(light.get(property)).toBe(`var(${source})`);
+    expect(dark.get(property) ?? light.get(property)).toBe(`var(${source})`);
+  });
+});
+
 describe('the stock appearance and brands', () => {
   it('declares every appearance property with the registry default', () => {
     Object.entries(themeAppearanceProperties).forEach(([key, property]) => {
+      const role = key as keyof typeof defaultAppearance;
+      const value = defaultAppearance[role].replace(/\s+/g, ' ');
+      const source = stockAliases[role];
       expect([property, light.get(property)]).toEqual([
         property,
-        defaultAppearance[key as keyof typeof defaultAppearance].replace(/\s+/g, ' '),
+        source ? `var(${themeAppearanceProperties[source]}, ${value})` : value,
       ]);
     });
   });

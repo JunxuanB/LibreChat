@@ -76,6 +76,7 @@ export default function ProgressText({
   hasInput = true,
   popover = false,
   isExpanded = false,
+  verdict,
 }: {
   /**
    * The card's settled state, resolved once by the caller via
@@ -101,6 +102,9 @@ export default function ProgressText({
   hasInput?: boolean;
   popover?: boolean;
   isExpanded?: boolean;
+  /** Why a failed card failed ("exit code 2"), shown after the failure
+   *  suffix. Plain text inside the button, so it is part of its name. */
+  verdict?: string;
 }) {
   const localize = useLocalize();
   /** For locale-aware decimal formatting of the sub-10s duration value. */
@@ -240,6 +244,9 @@ export default function ProgressText({
         </span>
         {errorSuffix && (
           <span className="text-status-error shrink-0 font-normal">· {errorSuffix}</span>
+        )}
+        {errorSuffix && verdict && (
+          <span className="text-text-secondary shrink-0 font-normal">· {verdict}</span>
         )}
         {isRunning && phaseStartAt != null && localPhaseStart != null && (
           <ElapsedTimer start={localPhaseStart} />

@@ -380,6 +380,32 @@ describe.each([
   ['high contrast dark', highContrastDarkTheme],
   ['clickhouse light', clickHouseLightTheme],
   ['clickhouse dark', clickHouseDarkTheme],
+])('%s control focus', (_name, theme: IThemeRGB) => {
+  it('keeps the keyboard focus ring at the 3:1 floor on every control canvas', () => {
+    const ring = toRgb(theme, 'rgb-focus-control');
+    const surfaces: Array<keyof IThemeRGB> = [
+      'rgb-surface-primary',
+      'rgb-presentation',
+      'rgb-surface-secondary',
+      'rgb-surface-dialog',
+    ];
+
+    const failures = surfaces.flatMap((surface) => {
+      const ratio = contrast(ring, toRgb(theme, surface));
+      return ratio < WCAG_MARK_MIN ? [`${surface}: ${ratio.toFixed(2)}:1`] : [];
+    });
+
+    expect(failures).toEqual([]);
+  });
+});
+
+describe.each([
+  ['default', defaultTheme],
+  ['dark', darkTheme],
+  ['high contrast light', highContrastLightTheme],
+  ['high contrast dark', highContrastDarkTheme],
+  ['clickhouse light', clickHouseLightTheme],
+  ['clickhouse dark', clickHouseDarkTheme],
 ])('%s skill indicators', (_name, theme: IThemeRGB) => {
   it('keeps informational marks at the 3:1 floor on every skill surface', () => {
     const indicator = toRgb(theme, 'rgb-status-info');
@@ -502,6 +528,31 @@ describe('verified fill defaults', () => {
       defaultTheme['rgb-status-verified'],
       darkTheme['rgb-status-verified'],
     ]);
+  });
+});
+
+/**
+ * The default avatar's glyph is a graphical object under WCAG 1.4.11, so it needs 3:1 on its fill.
+ * The bundled dark theme keeps the 2.6:1 its avatar painted before the role existed: the glyph is
+ * decorative (aria-hidden beside the account name), and raising it is tracked on its own.
+ */
+it('keeps the bundled dark avatar glyph no fainter than it painted before its role', () => {
+  expect(
+    contrast(toRgb(darkTheme, 'rgb-avatar-text'), toRgb(darkTheme, 'rgb-avatar-fill')),
+  ).toBeGreaterThanOrEqual(2.6);
+});
+
+describe.each([
+  ['default', defaultTheme],
+  ['high contrast light', highContrastLightTheme],
+  ['high contrast dark', highContrastDarkTheme],
+  ['clickhouse light', clickHouseLightTheme],
+  ['clickhouse dark', clickHouseDarkTheme],
+])('%s default avatar', (_name, theme: IThemeRGB) => {
+  it('keeps the glyph at the 3:1 mark floor against its fill', () => {
+    expect(
+      contrast(toRgb(theme, 'rgb-avatar-text'), toRgb(theme, 'rgb-avatar-fill')),
+    ).toBeGreaterThanOrEqual(WCAG_MARK_MIN);
   });
 });
 
@@ -720,6 +771,34 @@ describe('state role defaults', () => {
   ])('presses %s controls in their hover fills', (_name, theme: IThemeRGB) => {
     expect(theme['rgb-surface-pressed']).toBe(theme['rgb-surface-hover']);
     expect(theme['rgb-surface-inverted-pressed']).toBe(theme['rgb-surface-inverted-hover']);
+  });
+
+  it.each([
+    ['default light', defaultTheme],
+    ['default dark', darkTheme],
+    ['high contrast light', highContrastLightTheme],
+    ['high contrast dark', highContrastDarkTheme],
+  ])('fills %s primary buttons with the inverted surface', (_name, theme: IThemeRGB) => {
+    expect(theme['rgb-button-primary']).toBe(theme['rgb-surface-inverted']);
+    expect(theme['rgb-button-primary-hover']).toBe(theme['rgb-surface-inverted-hover']);
+  });
+
+  it.each([
+    ['default light', defaultTheme],
+    ['default dark', darkTheme],
+    ['high contrast light', highContrastLightTheme],
+    ['high contrast dark', highContrastDarkTheme],
+  ])('sets %s dialog titles in the primary ink', (_name, theme: IThemeRGB) => {
+    expect(theme['rgb-dialog-title']).toBe(theme['rgb-text-primary']);
+  });
+
+  it.each([
+    ['clickhouse light', clickHouseLightTheme],
+    ['clickhouse dark', clickHouseDarkTheme],
+  ])('keeps %s dialog titles at AA on the dialog surface', (_name, theme: IThemeRGB) => {
+    expect(
+      contrast(toRgb(theme, 'rgb-dialog-title'), toRgb(theme, 'rgb-surface-dialog')),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
 

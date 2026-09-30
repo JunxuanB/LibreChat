@@ -22,6 +22,9 @@
 @theme inline {
   /* brand and surfaces */
   --color-brand-purple: rgb(var(--brand-purple));
+  --color-avatar-fill: rgb(var(--avatar-fill));
+  --color-avatar-text: rgb(var(--avatar-text));
+  --color-avatar-placeholder: rgb(var(--avatar-placeholder));
   --color-presentation: rgb(var(--presentation));
   --color-accent-primary: rgb(var(--accent-primary));
   --color-accent-primary-hover: rgb(var(--accent-primary-hover));
@@ -45,6 +48,8 @@
   --color-surface-tertiary: rgb(var(--surface-tertiary));
   --color-surface-tertiary-alt: rgb(var(--surface-tertiary-alt));
   --color-surface-dialog: rgb(var(--surface-dialog));
+  /* Falls back to the ink dialog titles were set in, for a stylesheet that predates it. */
+  --color-dialog-title: rgb(var(--dialog-title, var(--text-primary)));
   --color-surface-overlay: rgb(var(--surface-overlay));
   /* The dialog scrims: the overlay at the opacity each dialog family's appearance
    * role sets (OGDialog, AlertDialog, Dialog), defaulting to the 80%, 90% and 65%
@@ -63,6 +68,9 @@
   --color-surface-inverted: rgb(var(--surface-inverted));
   --color-surface-inverted-hover: rgb(var(--surface-inverted-hover));
   --color-surface-inverted-pressed: rgb(var(--surface-inverted-pressed));
+  /* Fall back to the inverted fill they were painted with, for a stylesheet that predates them. */
+  --color-button-primary: rgb(var(--button-primary, var(--surface-inverted)));
+  --color-button-primary-hover: rgb(var(--button-primary-hover, var(--surface-inverted-hover)));
   --color-surface-fixed: rgb(var(--surface-fixed));
   --color-surface-fixed-hover: rgb(var(--surface-fixed-hover));
   --color-surface-disabled: rgb(var(--surface-disabled));

@@ -1,7 +1,13 @@
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import { Button, buttonVariants } from './Button';
+import OGDialogTemplate from './OGDialogTemplate';
+import { OGDialog } from './OriginalDialog';
 import { cn } from '~/utils';
+
+jest.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
 
 describe('Button', () => {
   it('exposes theme-owned shape and density recipes', () => {
@@ -14,8 +20,42 @@ describe('Button', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass(
       'h-theme-control',
       'rounded-theme-control',
-      'gap-theme-compact',
+      'gap-theme-control-gap',
+      'px-theme-control-x',
     );
+  });
+
+  it('draws its label, height, fills, focus and states from theme roles', () => {
+    render(<Button>Save</Button>);
+
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveClass(
+      'font-theme-control',
+      'h-theme-button',
+      'bg-button-primary',
+      'hover:bg-button-primary-hover',
+      'hover:active:bg-surface-inverted-pressed',
+      'focus-visible:ring-focus-control',
+      'disabled:opacity-50',
+      'theme-disabled:bg-surface-disabled',
+    );
+    expect(cn(buttonVariants({ size: 'sm' }))).toContain('h-theme-button-sm');
+    expect(cn(buttonVariants({ variant: 'outline' }))).toContain('hover:active:bg-surface-pressed');
+  });
+
+  it('lets a caller replace the themed label weight and height', () => {
+    const classes = cn(buttonVariants({ size: 'sm' }), 'h-9 font-semibold');
+
+    expect(classes).not.toContain('h-theme-button-sm');
+    expect(classes).not.toContain('font-theme-control');
+  });
+
+  /** The base `gap-2` and the default size's `px-4` would otherwise survive beside the roles and
+   *  leave the winner to stylesheet order, and a caller's own padding must still win. */
+  it('lets the control spacing roles replace the base gap and a caller replace them', () => {
+    const themed = cn(buttonVariants({ size: 'theme' }));
+    expect(themed).not.toMatch(/(^|\s)gap-2(\s|$)/);
+    expect(cn(themed, 'px-2')).not.toContain('px-theme-control-x');
+    expect(cn(themed, 'gap-1')).not.toContain('gap-theme-control-gap');
   });
 
   it('offers the composer action row geometry as a size and a shape', () => {
@@ -59,7 +99,7 @@ describe('Button', () => {
     );
 
     const button = screen.getByRole('button', { name: 'Back' });
-    expect(button).toHaveClass('rounded-xl', 'h-9', 'bg-presentation');
+    expect(button).toHaveClass('rounded-xl', 'h-theme-button-sm', 'bg-presentation');
     expect(button).not.toHaveClass('rounded-lg');
 
     rerender(
@@ -68,7 +108,7 @@ describe('Button', () => {
       </Button>,
     );
 
-    expect(button).toHaveClass('rounded-theme-control', 'h-9');
+    expect(button).toHaveClass('rounded-theme-control', 'h-theme-button-sm');
     expect(button).not.toHaveClass('rounded-xl');
   });
 
@@ -152,13 +192,39 @@ describe('Button', () => {
 
     expect(header).toContain('px-1');
     expect(header).toContain('h-auto');
-    expect(header).not.toContain('h-10');
+    expect(header).not.toContain('h-theme-button');
     expect(header).not.toContain('px-4');
     /** A heading is not a control: nothing fills under the pointer. */
-    expect(header).not.toContain('hover:bg-');
+    /** Only the disabled recipe's `theme-disabled:hover:` pin may name a hover fill. */
+    expect(header).not.toMatch(/(^|\s)hover:bg-/);
   });
 
   it('still takes a size when a caller asks for one', () => {
-    expect(cn(buttonVariants({ variant: 'section-header', size: 'sm' }))).toContain('h-9');
+    expect(cn(buttonVariants({ variant: 'section-header', size: 'sm' }))).toContain(
+      'h-theme-button-sm',
+    );
+  });
+
+  /** A templated dialog's legacy `selection` action sits beside the shared cancel Button, so it
+   *  has to take the same height and primary fill roles or the two part under a theme. */
+  it('draws a templated dialog’s legacy confirm action from the Button roles', () => {
+    render(
+      <OGDialog open={true}>
+        <OGDialogTemplate
+          title="Delete"
+          selection={{ selectHandler: jest.fn(), selectText: 'Delete' }}
+        />
+      </OGDialog>,
+    );
+
+    const cancel = screen.getByRole('button', { name: 'com_ui_cancel' });
+    const confirm = screen.getByRole('button', { name: 'Delete' });
+    expect(cancel).toHaveClass('h-theme-button');
+    expect(confirm).toHaveClass(
+      'h-theme-button',
+      'bg-button-primary',
+      'hover:bg-button-primary-hover',
+    );
+    expect(confirm).not.toHaveClass('h-10');
   });
 });

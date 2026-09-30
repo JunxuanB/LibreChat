@@ -76,6 +76,7 @@ export const clickHouseLightTheme: IThemeRGB = {
   'rgb-surface-tertiary': '246 247 250', // #f6f7fa (background.muted)
   'rgb-surface-tertiary-alt': '255 255 255', // #ffffff (background.default)
   'rgb-surface-dialog': '255 255 255', // #ffffff (background.default)
+  'rgb-dialog-title': '30 29 31', // #1e1d1f (dialog.color.title.default, lch(11.126 1.374 305.43))
   'rgb-surface-overlay': '21 21 21', // #151515 (dialog.color.opaqueBackground, lch(6.7738 0 none))
   'rgb-surface-submit': '21 21 21', // #151515 (accent.default)
   'rgb-surface-submit-hover': '50 50 50', // #323232 (palette.neutral.712)
@@ -88,6 +89,9 @@ export const clickHouseLightTheme: IThemeRGB = {
   'rgb-surface-inverted': '21 21 21', // #151515 (palette.neutral.900)
   'rgb-surface-inverted-hover': '50 50 50', // #323232 (palette.neutral.712)
   'rgb-surface-inverted-pressed': '22 21 23', // #161517 (button.basic.color.primary.background.active)
+  /** The button's own primary fill, apart from the `#151515` its checkbox and switch share. */
+  'rgb-button-primary': '48 46 50', // #302e32 (button.basic.color.primary.background.default)
+  'rgb-button-primary-hover': '67 70 76', // #43464c (button.basic.color.primary.background.hover)
   'rgb-text-inverted': '255 255 255', // #ffffff (palette.neutral.0)
   'rgb-surface-fixed': '255 255 255', // #ffffff (palette.neutral.0, same in light and dark)
   'rgb-surface-fixed-hover': '230 231 233', // #e6e7e9 (palette.slate.100, same in light and dark)
@@ -130,6 +134,9 @@ export const clickHouseLightTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '136 0 204', // #8800cc (palette.violet.600)
+  'rgb-avatar-fill': '105 110 121', // #696e79 (avatar.color.background.default)
+  'rgb-avatar-text': '255 255 255', // #ffffff (avatar.color.text.default)
+  'rgb-avatar-placeholder': '246 247 250', // #f6f7fa (background.muted)
 
   // Code syntax
   'rgb-syntax-text': '40 40 40', // #282828 (codeblock.lightMode.color.text.default)
@@ -210,6 +217,7 @@ export const clickHouseDarkTheme: IThemeRGB = {
   'rgb-surface-tertiary': '40 40 40', // #282828 (background.muted)
   'rgb-surface-tertiary-alt': '50 50 50', // #323232 (palette.neutral.712)
   'rgb-surface-dialog': '31 31 28', // #1f1f1c (background.default)
+  'rgb-dialog-title': '249 249 249', // #f9f9f9 (dialog.color.title.default, rgb(97.5% 97.5% 97.5%))
   /** Not a Click UI value. Its dark scrim, dialog.color.opaqueBackground lch(40.731 0 none), is a
    *  #606060 gray that lifts the page instead of dimming it. A bundled scrim never lifts the page
    *  (`semanticTokens.spec.ts`), so black keeps the dark scrim; the 0.75 alpha is Click UI's. */
@@ -225,6 +233,8 @@ export const clickHouseDarkTheme: IThemeRGB = {
   'rgb-surface-inverted': '250 255 105', // #faff69 (button.basic.color.primary.background.default)
   'rgb-surface-inverted-hover': '252 255 150', // #fcff96 (button.basic.color.primary.background.hover)
   'rgb-surface-inverted-pressed': '231 236 97', // #e7ec61 (button.basic.color.primary.background.active)
+  'rgb-button-primary': '250 255 105', // #faff69 (button.basic.color.primary.background.default)
+  'rgb-button-primary-hover': '252 255 150', // #fcff96 (button.basic.color.primary.background.hover)
   'rgb-text-inverted': '31 31 28', // #1f1f1c (button.basic.color.primary.text.default)
   'rgb-surface-fixed': '255 255 255', // #ffffff (palette.neutral.0, same in light and dark)
   'rgb-surface-fixed-hover': '230 231 233', // #e6e7e9 (palette.slate.100, same in light and dark)
@@ -267,6 +277,9 @@ export const clickHouseDarkTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '204 102 255', // #cc66ff (palette.violet.300)
+  'rgb-avatar-fill': '128 134 145', // #808691 (avatar.color.background.default)
+  'rgb-avatar-text': '31 31 28', // #1f1f1c (avatar.color.text.default)
+  'rgb-avatar-placeholder': '40 40 40', // #282828 (background.muted)
 
   // Code syntax
   'rgb-syntax-text': '255 255 255', // #ffffff (codeblock.darkMode.color.text.default)
@@ -358,6 +371,23 @@ const clickHouseShape = {
   shadowXs: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
   shadowSm: '0 2px 2px 0 rgb(0 0 0 / 0.03)', // shadow.5
   controlHeight: '2rem', // genericMenu.panel.size.height
+  controlPaddingX: '1rem', // button.basic.space.x
+  controlGap: '0.5rem', // button.basic.space.gap
+  controlFontWeight: '400', // button.basic.typography.label.default
+  /** Click UI's button is sized by its content: 0.2813rem of space.y on both sides of a
+   *  0.875rem/1.5 label and a 1px stroke, 32px in all. */
+  buttonHeight: '2rem',
+  buttonHeightSm: '2rem',
+  dialogStroke: '1px', // dialog.stroke.default, in stroke.default (border-light)
+  dialogPaddingX: '2rem', // dialog.space.x; its space.y is LibreChat's 1.5rem
+  dialogHeaderGap: '0.25rem', // dialog.title.space.gap
+  /** `dialog.typography.title.default`: 700 1.25rem/1.5 in the regular family, not the display
+   *  one Click UI keeps for page titles. */
+  dialogTitleSize: '1.25rem',
+  dialogTitleLeading: '1.5',
+  dialogTitleFontWeight: '700',
+  dialogTitleFontFamily:
+    '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif',
   scrimOpacity: '0.75', // dialog.color.opaqueBackground alpha
   alertScrimOpacity: '0.75', // dialog.color.opaqueBackground alpha
   modalScrimOpacity: '0.75', // dialog.color.opaqueBackground alpha

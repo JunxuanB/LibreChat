@@ -51,6 +51,7 @@ export const defaultTheme: IThemeRGB = {
   'rgb-surface-tertiary': '236 236 236', // #ececec (gray-100)
   'rgb-surface-tertiary-alt': '255 255 255', // #fff (white)
   'rgb-surface-dialog': '255 255 255', // #fff (white)
+  'rgb-dialog-title': '33 33 33', // #212121 (gray-800, matching text-primary)
   'rgb-surface-overlay': '89 89 89', // #595959 (gray-500)
   'rgb-surface-submit': '4 120 87', // #047857 (green-700)
   'rgb-surface-submit-hover': '6 95 70', // #065f46 (green-800)
@@ -63,6 +64,8 @@ export const defaultTheme: IThemeRGB = {
   'rgb-surface-inverted': '23 23 23', // #171717 (gray-850)
   'rgb-surface-inverted-hover': '47 47 47', // #2f2f2f (gray-700)
   'rgb-surface-inverted-pressed': '47 47 47', // #2f2f2f (gray-700), the hover fill
+  'rgb-button-primary': '23 23 23', // #171717 (gray-850, matching surface-inverted)
+  'rgb-button-primary-hover': '47 47 47', // #2f2f2f (gray-700, matching surface-inverted-hover)
   'rgb-text-inverted': '255 255 255', // #fff (white)
   'rgb-surface-fixed': '255 255 255', // #fff (white) — same in light + dark
   'rgb-surface-fixed-hover': '236 236 236', // #ececec (gray-100) — same in light + dark
@@ -108,6 +111,9 @@ export const defaultTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '126 34 206', // #7e22ce (purple-700)
+  'rgb-avatar-fill': '121 137 255', // #7989ff (the default avatar fill in every bundled theme)
+  'rgb-avatar-text': '33 33 33', // #212121 (gray-800, matching text-primary)
+  'rgb-avatar-placeholder': '247 247 248', // #f7f7f8 (gray-50, matching surface-secondary)
 
   /** Code syntax highlighting, measured against the `surface-code` and `surface-code-body` fills. */
   'rgb-syntax-text': '33 33 33', // #212121 (gray-800)

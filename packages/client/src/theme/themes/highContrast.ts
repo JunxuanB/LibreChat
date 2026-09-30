@@ -87,6 +87,7 @@ export const highContrastLightTheme: IThemeRGB = {
   'rgb-surface-tertiary': '255 255 255', // #ffffff
   'rgb-surface-tertiary-alt': '255 255 255', // #ffffff
   'rgb-surface-dialog': '255 255 255', // #ffffff
+  'rgb-dialog-title': '0 0 0', // #000000 (matching text-primary)
   'rgb-surface-overlay': '0 0 0', // #000000
   'rgb-surface-submit': '0 92 46', // #005c2e
   'rgb-surface-submit-hover': '0 61 30', // #003d1e
@@ -99,6 +100,8 @@ export const highContrastLightTheme: IThemeRGB = {
   'rgb-surface-inverted': '0 0 0', // #000000
   'rgb-surface-inverted-hover': '51 51 51', // #333333
   'rgb-surface-inverted-pressed': '51 51 51', // #333333, the hover fill
+  'rgb-button-primary': '0 0 0', // #000000 (matching surface-inverted)
+  'rgb-button-primary-hover': '51 51 51', // #333333 (matching surface-inverted-hover)
   'rgb-text-inverted': '255 255 255', // #ffffff
   'rgb-surface-fixed': '255 255 255', // #ffffff
   'rgb-surface-fixed-hover': '212 212 212', // #d4d4d4
@@ -143,6 +146,9 @@ export const highContrastLightTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '107 0 179', // #6b00b3
+  'rgb-avatar-fill': '121 137 255', // #7989ff (the default avatar fill in every bundled theme)
+  'rgb-avatar-text': '0 0 0', // #000000 (matching text-primary)
+  'rgb-avatar-placeholder': '255 255 255', // #ffffff (matching surface-secondary)
 
   /** Code syntax highlighting at AAA on the white code surface. */
   'rgb-syntax-text': '0 0 0', // #000000
@@ -241,6 +247,7 @@ export const highContrastDarkTheme: IThemeRGB = {
   'rgb-surface-tertiary': '0 0 0', // #000000
   'rgb-surface-tertiary-alt': '0 0 0', // #000000
   'rgb-surface-dialog': '0 0 0', // #000000
+  'rgb-dialog-title': '255 255 255', // #ffffff (matching text-primary)
   'rgb-surface-overlay': '0 0 0', // #000000
   'rgb-surface-submit': '127 240 179', // #7ff0b3
   'rgb-surface-submit-hover': '163 245 204', // #a3f5cc
@@ -253,6 +260,8 @@ export const highContrastDarkTheme: IThemeRGB = {
   'rgb-surface-inverted': '255 255 255', // #ffffff
   'rgb-surface-inverted-hover': '212 212 212', // #d4d4d4
   'rgb-surface-inverted-pressed': '212 212 212', // #d4d4d4, the hover fill
+  'rgb-button-primary': '255 255 255', // #ffffff (matching surface-inverted)
+  'rgb-button-primary-hover': '212 212 212', // #d4d4d4 (matching surface-inverted-hover)
   'rgb-text-inverted': '0 0 0', // #000000
   'rgb-surface-fixed': '255 255 255', // #ffffff
   'rgb-surface-fixed-hover': '212 212 212', // #d4d4d4
@@ -297,6 +306,9 @@ export const highContrastDarkTheme: IThemeRGB = {
 
   // Brand colors
   'rgb-brand-purple': '224 179 255', // #e0b3ff
+  'rgb-avatar-fill': '121 137 255', // #7989ff (the default avatar fill in every bundled theme)
+  'rgb-avatar-text': '255 255 255', // #ffffff (matching text-primary)
+  'rgb-avatar-placeholder': '0 0 0', // #000000 (matching surface-tertiary)
 
   /** Code syntax highlighting at AAA on the black code surface. */
   'rgb-syntax-text': '255 255 255', // #ffffff

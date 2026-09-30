@@ -106,6 +106,25 @@ export function pressedFallbacks(colors: IThemeRGB): IThemeRGB {
 }
 
 /**
+ * The Button's primary fills for a theme that predates them. The Button was painted in the
+ * inverted surface, so a theme that repaints that surface or its hover keeps its buttons on it.
+ */
+export function primaryButtonFallbacks(colors: IThemeRGB): IThemeRGB {
+  const fill = colors['rgb-button-primary'] ?? colors['rgb-surface-inverted'];
+  const hover = colors['rgb-button-primary-hover'] ?? colors['rgb-surface-inverted-hover'];
+  return {
+    ...(fill !== undefined ? { 'rgb-button-primary': fill } : {}),
+    ...(hover !== undefined ? { 'rgb-button-primary-hover': hover } : {}),
+  };
+}
+
+/** Dialog titles were set in the primary ink, so a theme that repaints it keeps its titles on it. */
+export function dialogTitleFallback(colors: IThemeRGB): IThemeRGB {
+  const title = colors['rgb-dialog-title'] ?? colors['rgb-text-primary'];
+  return title !== undefined ? { 'rgb-dialog-title': title } : {};
+}
+
+/**
  * The focus roles for a stored or environment theme that predates them. The
  * global outline followed a theme's `rgb-ring-primary` whenever it named one,
  * and the shared primitives drew their ring in `rgb-text-primary`, so a theme
@@ -135,6 +154,11 @@ export const themeAppearanceProperties: Readonly<
   radius2xl: '--theme-radius-2xl',
   radius3xl: '--theme-radius-3xl',
   controlHeight: '--theme-control-height',
+  controlPaddingX: '--theme-control-padding-x',
+  controlGap: '--theme-control-gap',
+  controlFontWeight: '--theme-control-font-weight',
+  buttonHeight: '--theme-button-height',
+  buttonHeightSm: '--theme-button-height-sm',
   switchWidth: '--theme-switch-width',
   switchHeight: '--theme-switch-height',
   tableCellSpaceY: '--theme-table-cell-space-y',
@@ -157,6 +181,13 @@ export const themeAppearanceProperties: Readonly<
   leadingLg: '--theme-text-lg-leading',
   leadingXl: '--theme-text-xl-leading',
   leading2xl: '--theme-text-2xl-leading',
+  dialogStroke: '--theme-dialog-stroke',
+  dialogPaddingX: '--theme-dialog-padding-x',
+  dialogHeaderGap: '--theme-dialog-header-gap',
+  dialogTitleSize: '--theme-dialog-title-size',
+  dialogTitleLeading: '--theme-dialog-title-leading',
+  dialogTitleFontWeight: '--theme-dialog-title-font-weight',
+  dialogTitleFontFamily: '--theme-dialog-title-font-family',
   scrimOpacity: '--theme-scrim-opacity',
   alertScrimOpacity: '--theme-alert-scrim-opacity',
   modalScrimOpacity: '--theme-modal-scrim-opacity',
@@ -184,6 +215,11 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   radius2xl: '1rem',
   radius3xl: '1.5rem',
   controlHeight: '2.25rem',
+  controlPaddingX: '0.75rem',
+  controlGap: '0.375rem',
+  controlFontWeight: '500',
+  buttonHeight: '2.5rem',
+  buttonHeightSm: '2.25rem',
   ...defaultSwitchSize,
   tableCellSpaceY: '1rem',
   tableRowStroke: '0px',
@@ -206,6 +242,13 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   leadingLg: 'calc(1.75 / 1.125)',
   leadingXl: 'calc(1.75 / 1.25)',
   leading2xl: 'calc(2 / 1.5)',
+  dialogStroke: '0px',
+  dialogPaddingX: '1.5rem',
+  dialogHeaderGap: '0.375rem',
+  dialogTitleSize: '1.125rem',
+  dialogTitleLeading: '1',
+  dialogTitleFontWeight: '600',
+  dialogTitleFontFamily: 'Inter, sans-serif',
   scrimOpacity: '0.8',
   alertScrimOpacity: '0.9',
   modalScrimOpacity: '0.65',
@@ -291,17 +334,13 @@ export const highContrastTheme: ThemeDefinition = Object.freeze({
 /** Tailwind composes `--tw-shadow` into one list with the ring layers, where `none` is invalid. */
 const disabledShadow = '0 0 #0000';
 
-/** The client may be older than the server whose theme it paints, so it ignores color roles it
- *  predates the way it already ignores appearance keys. */
-const clientReader = { ignoreFutureColors: true } as const;
-
 /** The color and appearance tokens this reader does not know, which `resolveTheme` leaves out. */
 export function collectThemeWarnings(theme: ThemeDefinition): string[] {
-  return collectThemeWarningIssues(theme, clientReader).map(({ message }) => message);
+  return collectThemeWarningIssues(theme).map(({ message }) => message);
 }
 
 export function validateThemeDefinition(theme: ThemeDefinition): string[] {
-  return collectThemeIssues(theme, clientReader).map(({ message }) => message);
+  return collectThemeIssues(theme).map(({ message }) => message);
 }
 
 /**
@@ -319,7 +358,7 @@ function definedEntries<T extends object>(values?: Partial<T>): Partial<T> {
   ) as Partial<T>;
 }
 
-/** A color role this reader predates passed validation as a warning; it never reaches the DOM. */
+/** A color token this reader does not know passed validation as a warning; it never reaches the DOM. */
 function knownColors(colors?: IThemeRGB): IThemeRGB | undefined {
   if (!colors) {
     return colors;
@@ -355,16 +394,30 @@ function withComposableShadows(appearance: IThemeAppearance): IThemeAppearance {
 }
 
 /**
- * Headings drew the UI family before the display role existed, so a theme that
- * names its own `fontFamily` and no display family keeps its headings in it.
+ * Roles split out of a broader one, each paired with the role it read before. Headings drew the UI
+ * family before the display role existed, theme-sized controls were padded by the shared spacing,
+ * and dialog titles were set in the `text-lg` step and the display family, so a theme that names
+ * the broader role and not the split one keeps what it drew. Pairs resolve in order, so a role can
+ * follow one that is itself inherited.
  */
-function withDisplayFamily(appearance?: Partial<IThemeAppearance>): IThemeAppearance {
+const inheritedAppearance: ReadonlyArray<[keyof IThemeAppearance, keyof IThemeAppearance]> = [
+  ['displayFontFamily', 'fontFamily'],
+  ['controlPaddingX', 'spaceNormal'],
+  ['controlGap', 'spaceCompact'],
+  ['dialogTitleSize', 'textLg'],
+  ['dialogTitleFontFamily', 'displayFontFamily'],
+];
+
+function withInheritedRoles(appearance?: Partial<IThemeAppearance>): IThemeAppearance {
   const known = knownAppearance(appearance);
-  const display =
-    known.displayFontFamily === undefined && known.fontFamily !== undefined
-      ? { displayFontFamily: known.fontFamily }
-      : {};
-  return { ...defaultAppearance, ...known, ...display };
+  const resolved = inheritedAppearance.reduce<Partial<IThemeAppearance>>(
+    (roles, [role, source]) =>
+      roles[role] === undefined && roles[source] !== undefined
+        ? { ...roles, [role]: roles[source] }
+        : roles,
+    known,
+  );
+  return { ...defaultAppearance, ...resolved };
 }
 
 export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedThemeDefinition {
@@ -438,6 +491,24 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors?.['rgb-link-prose'] === undefined && proseLinkSource !== undefined
       ? { 'rgb-link-prose': proseLinkSource }
       : {};
+  /**
+   * Agent and assistant avatars sat on `surface-secondary` in light and `surface-tertiary` in dark
+   * before they had a role, so a theme that repaints the one its mode used keeps that backdrop.
+   */
+  const avatarPlaceholderSource =
+    mode === 'dark'
+      ? customColors?.['rgb-surface-tertiary']
+      : customColors?.['rgb-surface-secondary'];
+  const avatarPlaceholderFallback =
+    customColors?.['rgb-avatar-placeholder'] === undefined && avatarPlaceholderSource !== undefined
+      ? { 'rgb-avatar-placeholder': avatarPlaceholderSource }
+      : {};
+  /** The default avatar's glyph inked in `text-primary` before it had a role. */
+  const avatarTextFallback =
+    customColors?.['rgb-avatar-text'] === undefined &&
+    customColors?.['rgb-text-primary'] !== undefined
+      ? { 'rgb-avatar-text': customColors['rgb-text-primary'] }
+      : {};
   const chartWidgetSurfaceFallback =
     customColors?.['rgb-chart-widget-surface'] === undefined &&
     customColors?.['rgb-surface-primary'] !== undefined
@@ -475,6 +546,8 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     borderControlSource !== undefined ? { 'rgb-border-control': borderControlSource } : {};
   const focusFallback = customColors != null ? focusFallbacks(customColors) : {};
   const pressedFallback = customColors != null ? pressedFallbacks(customColors) : {};
+  const primaryButtonFallback = customColors != null ? primaryButtonFallbacks(customColors) : {};
+  const dialogTitleColor = customColors != null ? dialogTitleFallback(customColors) : {};
   /**
    * Slot 8 arrived after the seven-slot scale shipped, so a stored or
    * environment theme that paints its own scale cannot name it. Filling the
@@ -533,6 +606,8 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...shimmerBaseFallback,
       ...textMutedFallback,
       ...proseLinkFallback,
+      ...avatarPlaceholderFallback,
+      ...avatarTextFallback,
       ...chartWidgetSurfaceFallback,
       ...chartWidgetStrokeFallback,
       ...switchThumbFallback,
@@ -541,10 +616,12 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...borderControlFallback,
       ...focusFallback,
       ...pressedFallback,
+      ...primaryButtonFallback,
+      ...dialogTitleColor,
       ...seriesEightFallback,
       ...verifiedFallback,
     } as Required<IThemeRGB>,
-    appearance: withComposableShadows(withDisplayFamily(definition?.appearance)),
+    appearance: withComposableShadows(withInheritedRoles(definition?.appearance)),
     /** Mode last: a mode override is more specific than the theme-wide set. */
     brands: {
       ...defaultBrands,

@@ -12,13 +12,18 @@ import { sandboxStartingByToolCallId } from '~/store';
 import useToolCallState from './useToolCallState';
 import useLazyHighlight from './useLazyHighlight';
 import useFollowScroll from './useFollowScroll';
+import { OutputRenderer } from '../ToolOutput';
 import { ERROR_PATTERNS } from './ExecuteCode';
 import { AttachmentGroup } from './Attachment';
+import { parseCommandOutput } from './command';
 import { useToolCallIntent } from './intent';
 import { TOOL_ROW_CLASSES } from '../rows';
 import PtcToolTrace from './PtcToolTrace';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
+
+/** The SDK's sandbox executors emit this line in place of empty stdout. */
+const SANDBOX_EMPTY_OUTPUT = "stdout: Empty. Ensure you're writing output explicitly.";
 
 export default function BashCall({
   isSubmitting,
@@ -26,6 +31,7 @@ export default function BashCall({
   runStepDurationMs,
   backgrounded,
   backgroundCancelled = false,
+  executor,
   initialProgress = 0.1,
   args,
   output = '',
@@ -41,6 +47,7 @@ export default function BashCall({
   runStepDurationMs?: PartMetadata['runStepDurationMs'];
   backgrounded?: PartMetadata['backgrounded'];
   backgroundCancelled?: boolean;
+  executor?: PartMetadata['executor'];
   args?: string | Record<string, unknown>;
   output?: string;
   attachments?: TAttachment[];
@@ -54,7 +61,41 @@ export default function BashCall({
   const isWritingCommand = !command || !areToolCallArgsComplete(args);
   const sandboxStarting = useAtomValue(sandboxStartingByToolCallId(toolCallId ?? ''));
 
+  /** Only a call the server stamped as attached-workspace carries an exit
+   *  status trailer; sandbox output keeps the text heuristic even when it
+   *  prints something that looks like one. */
+  const result = useMemo(
+    () => (executor === 'attached_workspace' ? parseCommandOutput(output) : null),
+    [executor, output],
+  );
   const outputHasError = useMemo(() => ERROR_PATTERNS.test(output), [output]);
+  const outputIsEmpty = output.trim() === SANDBOX_EMPTY_OUTPUT;
+  const verdict = (() => {
+    if (result?.timedOut === true) {
+      return localize('com_ui_command_timed_out');
+    }
+    if (result?.signal != null) {
+      return localize('com_ui_command_terminated', { 0: result.signal });
+    }
+    if (result?.failed === true && result.exitCode != null) {
+      return localize('com_ui_command_exit_code', { 0: String(result.exitCode) });
+    }
+    return undefined;
+  })();
+  const outputSegments = useMemo(
+    () =>
+      result == null
+        ? undefined
+        : [
+            { text: result.head },
+            {
+              text: result.stderr,
+              className: result.failed ? 'text-status-error' : 'text-text-secondary',
+            },
+            { text: result.trailer, className: 'text-text-tertiary' },
+          ],
+    [result],
+  );
   /** A backgrounded call's persisted output stays the dispatch handle until
    *  the detached run settles and patches it; render a background state
    *  instead of the handle JSON. Completion arrives live as the status marker
@@ -86,7 +127,7 @@ export default function BashCall({
     hasInput: !!command,
     onExpand,
     runStepStatus,
-    extraError: backgroundFailed,
+    extraError: backgroundFailed || result?.failed === true,
     extraCancelled: cancelledInBackground,
   });
 
@@ -158,6 +199,7 @@ export default function BashCall({
           }
           hasInput={!!command || hasOutput}
           isExpanded={showCode}
+          verdict={verdict}
         />
       </div>
       <div style={expandStyle}>
@@ -190,7 +232,12 @@ export default function BashCall({
                     <span className="text-text-tertiary select-none" aria-hidden="true">
                       {'$ '}
                     </span>
-                    <code className="hljs language-bash">{highlighted ?? command}</code>
+                    {/* `code.hljs` in style.css sets `white-space: pre`, `word-wrap: normal`
+                        and 0.85rem, which would stop long commands wrapping and size the
+                        command larger than the `$` prompt. */}
+                    <code className="hljs language-bash !text-xs !break-words !whitespace-pre-wrap">
+                      {highlighted ?? command}
+                    </code>
                   </pre>
                 </div>
               </div>
@@ -201,15 +248,20 @@ export default function BashCall({
               className={cn(command && 'border-border-light border-t')}
             />
             {hasOutput && backgroundHandle == null && (
-              <div className={cn(command && 'border-border-light border-t')}>
-                <pre
-                  className={cn(
-                    'max-h-[300px] overflow-auto px-3 py-2.5 font-mono text-xs break-words whitespace-pre-wrap',
-                    outputHasError ? 'text-status-error' : 'text-text-primary',
-                  )}
-                >
-                  {output}
-                </pre>
+              <div className={cn('px-3 py-2.5', command && 'border-border-light border-t')}>
+                {outputIsEmpty ? (
+                  <p className="text-text-secondary text-xs italic">
+                    {localize('com_ui_no_output')}
+                  </p>
+                ) : (
+                  <OutputRenderer
+                    text={output}
+                    copyText={output}
+                    error={result == null && outputHasError}
+                    segments={outputSegments}
+                    variant="terminal"
+                  />
+                )}
               </div>
             )}
           </div>

@@ -207,7 +207,7 @@ v4 loads no config file on its own, so without the directive the preset, the `co
 and class-based dark mode are all silently absent.
 
 The published preset supplies the semantic appearance utilities used by theme-aware component
-variants, including `h-theme-control`, `rounded-theme-control`, `gap-theme-compact`, and
+variants, including `h-theme-control`, `rounded-theme-control`, `px-theme-control-x`, `gap-theme-control-gap`, and
 `duration-theme-fast`. Keep the preset enabled even when defining additional project utilities.
 
 The published stylesheet and preset preserve the host's standard Tailwind color palettes.
@@ -316,6 +316,13 @@ Each status family has a foreground, a `-subtle` background, a `-border`, and a
 ### Other Colors
 
 - `bg-brand-purple` - Brand purple color
+- `bg-avatar-fill` / `text-avatar-text` - The default user avatar drawn when a
+  user has no image, and its glyph. A theme that sets `rgb-text-primary` but not
+  `rgb-avatar-text` inks the glyph in its primary text, as it did before the role.
+- `bg-avatar-placeholder` - Behind an agent or assistant avatar while its image
+  loads or where it is transparent. A theme that sets only its surfaces keeps it
+  on `surface-secondary` in light and `surface-tertiary` in dark, where it sat
+  before the role existed.
 - `bg-presentation` - Presentation background
 - `ring-ring-primary` - Decorative ring color (selection and hover rings)
 - `focus-outline` - The app-wide keyboard focus outline. Defaults to black in
@@ -325,12 +332,26 @@ Each status family has a foreground, a `-subtle` background, a `-border`, and a
   inverted control takes while held (`hover:active:`). Defaults to the hover fill,
   which a pointer press has always shown; a theme that names only its hover fills
   presses in them.
+- `bg-button-primary` / `bg-button-primary-hover` - The `Button`'s primary fill
+  and its hover, apart from the inverted surface the checkbox and switch keep.
+  They follow `surface-inverted` and its hover when a theme names only those.
 - `bg-surface-disabled` / `text-text-disabled` / `border-border-disabled` - The
   disabled fill, ink and edge, painted through the `theme-disabled:` variant only
   when the theme's `disabledStyle` appearance role is `fill`. The default `dim`
   keeps the half-opacity treatment every primitive carries.
-- `font-display` - Headings and dialog titles (`displayFontFamily`). Follows the
-  theme's `fontFamily` when it names no display family.
+- `font-display` - Headings (`displayFontFamily`). Follows the theme's
+  `fontFamily` when it names no display family.
+- `text-dialog-title` - An OGDialog title's ink. Follows `text-primary` when a
+  theme names only that.
+- OGDialog chrome - `border-(length:--theme-dialog-stroke)` (`dialogStroke`, painted in
+  `border-light`, none by default), `px-theme-dialog-x` (`dialogPaddingX`),
+  `space-y-theme-dialog-header` (`dialogHeaderGap`), and for the title
+  `text-(length:--theme-dialog-title-size)` and
+  `leading-(--theme-dialog-title-leading)` (`dialogTitleSize`, `dialogTitleLeading`),
+  `font-theme-dialog-title-weight` (`dialogTitleFontWeight`) and
+  `font-theme-dialog-title` (`dialogTitleFontFamily`). The title size and family
+  follow `textLg` and `displayFontFamily` when a theme omits them, and a caller's
+  own padding, size or weight class replaces the role.
 - `text-xs` to `text-2xl` - Sizes and line heights read `textXs`..`text2xl` and
   `leadingXs`..`leading2xl`, in the app and in a consumer alike; the defaults are
   Tailwind's own values.
