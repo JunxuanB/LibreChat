@@ -144,7 +144,13 @@ describe('LibreChat Tailwind preset', () => {
       ['duration-theme-normal', '--theme-motion-normal', defaultAppearance.motionNormal],
     ];
 
-    const css = await generate([...roles.map(([candidate]) => candidate), 'font-sans', 'p-4']);
+    const css = await generate([
+      ...roles.map(([candidate]) => candidate),
+      'px-theme-control-x',
+      'gap-theme-control-gap',
+      'font-sans',
+      'p-4',
+    ]);
 
     roles.forEach(([candidate, property, fallback]) => {
       expect(css).toContain(`.${candidate}`);
@@ -155,6 +161,15 @@ describe('LibreChat Tailwind preset', () => {
      *  rather than only the control-height variable it is built from. */
     expect(css).toContain(
       `max(var(--theme-control-height, ${defaultAppearance.controlHeight}), 2.75rem)`,
+    );
+
+    /** A stylesheet that predates the control spacing roles pads controls with the shared
+     *  spacing they read before. */
+    expect(rule(css, 'px-theme-control-x')).toContain(
+      `padding-inline: var(--theme-control-padding-x, var(--theme-space-normal, ${defaultAppearance.spaceNormal}))`,
+    );
+    expect(rule(css, 'gap-theme-control-gap')).toContain(
+      `gap: var(--theme-control-gap, var(--theme-space-compact, ${defaultAppearance.spaceCompact}))`,
     );
 
     /** The preset extends the default theme rather than replacing it. */
@@ -204,8 +219,13 @@ describe('LibreChat Tailwind preset', () => {
 
     /** Prettier wraps a long font stack, so declarations compare with whitespace collapsed. */
     const collapsed = stockStyles.replace(/\s+/g, ' ');
+    /** The control spacing roles alias the shared spacing they were split from. */
+    const aliases = { controlPaddingX: 'spaceNormal', controlGap: 'spaceCompact' };
     Object.entries(themeAppearanceProperties).forEach(([key, property]) => {
-      expect(collapsed).toContain(`${property}: ${defaultAppearance[key]};`);
+      const value = aliases[key]
+        ? `var(${themeAppearanceProperties[aliases[key]]}, ${defaultAppearance[key]})`
+        : defaultAppearance[key];
+      expect(collapsed).toContain(`${property}: ${value};`);
     });
   });
 });

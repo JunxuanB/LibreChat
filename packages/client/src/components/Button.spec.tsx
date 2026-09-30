@@ -14,8 +14,18 @@ describe('Button', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass(
       'h-theme-control',
       'rounded-theme-control',
-      'gap-theme-compact',
+      'gap-theme-control-gap',
+      'px-theme-control-x',
     );
+  });
+
+  /** The base `gap-2` and the default size's `px-4` would otherwise survive beside the roles and
+   *  leave the winner to stylesheet order, and a caller's own padding must still win. */
+  it('lets the control spacing roles replace the base gap and a caller replace them', () => {
+    const themed = cn(buttonVariants({ size: 'theme' }));
+    expect(themed).not.toMatch(/(^|\s)gap-2(\s|$)/);
+    expect(cn(themed, 'px-2')).not.toContain('px-theme-control-x');
+    expect(cn(themed, 'gap-1')).not.toContain('gap-theme-control-gap');
   });
 
   it('offers the composer action row geometry as a size and a shape', () => {
