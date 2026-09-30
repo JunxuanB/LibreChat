@@ -3,6 +3,7 @@ import applyTheme, {
   applyResolvedTheme,
   clearAppliedTheme,
   themeOwnedProperties,
+  THEME_DISABLED_ATTRIBUTE,
 } from './applyTheme';
 import { defaultAppearance, highContrastTheme, resolveTheme } from '../registry';
 import { defaultTheme } from '../themes/default';
@@ -17,6 +18,9 @@ const semanticProperties = [
   '--text-muted',
   '--chart-widget-surface',
   '--chart-widget-stroke',
+  '--switch-thumb',
+  '--table-header-text',
+  '--table-header-fill',
   '--border-destructive',
   '--border-control',
   '--status-success',
@@ -330,6 +334,70 @@ describe('applyTheme', () => {
 
     expect(root.style.getPropertyValue('--chart-widget-surface')).toBe('40 41 42');
     expect(root.style.getPropertyValue('--chart-widget-stroke')).toBe('50 51 52');
+  });
+
+  it('carries a legacy hover onto the pressed fills', () => {
+    const root = document.documentElement;
+
+    applyTheme(
+      { 'rgb-surface-hover': '110 111 112', 'rgb-surface-inverted-hover': '20 21 22' },
+      root,
+      defaultTheme,
+    );
+
+    expect(root.style.getPropertyValue('--surface-pressed')).toBe('110 111 112');
+    expect(root.style.getPropertyValue('--surface-inverted-pressed')).toBe('20 21 22');
+  });
+
+  it('marks the root only for a theme that fills its disabled controls, and clears it', () => {
+    const root = document.documentElement;
+    const fill: ThemeDefinition = {
+      version: 1,
+      name: 'fill-reference',
+      modes: { light: { appearance: { disabledStyle: 'fill' } } },
+    };
+
+    applyResolvedTheme(resolveTheme(fill, 'light'), root);
+    expect(root.getAttribute(THEME_DISABLED_ATTRIBUTE)).toBe('fill');
+
+    applyResolvedTheme(resolveTheme({ ...fill, modes: {} }, 'light'), root);
+    expect(root.hasAttribute(THEME_DISABLED_ATTRIBUTE)).toBe(false);
+
+    applyResolvedTheme(resolveTheme(fill, 'light'), root);
+    clearAppliedTheme(root);
+    expect(root.hasAttribute(THEME_DISABLED_ATTRIBUTE)).toBe(false);
+  });
+
+  it('keeps the switch knob of a legacy theme on the surface it repainted', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-primary': '20 21 22' }, root);
+
+    expect(root.style.getPropertyValue('--switch-thumb')).toBe('20 21 22');
+  });
+
+  it('leaves an explicit switch knob alone', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-primary': '20 21 22', 'rgb-switch-thumb': '1 2 3' }, root);
+
+    expect(root.style.getPropertyValue('--switch-thumb')).toBe('1 2 3');
+  });
+
+  it('keeps table column names of a legacy theme on its secondary text', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-text-secondary': '20 21 22' }, root);
+
+    expect(root.style.getPropertyValue('--table-header-text')).toBe('20 21 22');
+  });
+
+  it('keeps a legacy self-sticking table header on its dialog surface', () => {
+    const root = document.documentElement;
+
+    applyTheme({ 'rgb-surface-dialog': '20 21 22' }, root);
+
+    expect(root.style.getPropertyValue('--table-header-fill')).toBe('20 21 22');
   });
 
   it('carries a legacy light border onto the control outline', () => {

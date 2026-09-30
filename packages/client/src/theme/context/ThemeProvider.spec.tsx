@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom';
+import { useLayoutEffect } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import {
   ThemeProvider,
@@ -8,6 +9,7 @@ import {
   useTheme,
 } from './ThemeProvider';
 import { highContrastDarkTheme, highContrastLightTheme } from '../themes/highContrast';
+import { darkTheme } from '../themes/dark';
 
 const matchMedia = (matches: boolean): MediaQueryList =>
   ({
@@ -192,6 +194,128 @@ describe('ThemeProvider', () => {
       expect(document.documentElement.dataset.theme).toBe('stored');
     });
     expect(document.documentElement.style.getPropertyValue('--accent-primary')).toBe('1 2 3');
+  });
+
+  /** The probe wraps the provider, so its layout effect runs after the provider's in the same
+   *  commit and before the browser paints it: what it reads is what the first frame shows. */
+  describe('a controlled theme change reaches the root before the commit paints', () => {
+    type Painted = { accent: string; name?: string; dark: boolean };
+    const deployment = (name: string, accent: string) => ({
+      version: 1 as const,
+      name,
+      modes: {
+        light: { colors: { 'rgb-accent-primary': accent } },
+        dark: { colors: { 'rgb-accent-primary': accent } },
+      },
+    });
+
+    function PaintProbe({ children, frames }: { children: React.ReactNode; frames: Painted[] }) {
+      useLayoutEffect(() => {
+        const root = document.documentElement;
+        frames.push({
+          accent: root.style.getPropertyValue('--accent-primary'),
+          name: root.dataset.theme,
+          dark: root.classList.contains('dark'),
+        });
+      });
+      return <>{children}</>;
+    }
+
+    const lastFrame = (frames: Painted[]) => frames[frames.length - 1];
+
+    it('on first load, on a replaced definition and when the definition is withdrawn', () => {
+      const frames: Painted[] = [];
+      const { rerender } = render(
+        <PaintProbe frames={frames}>
+          <ThemeProvider
+            initialTheme="light"
+            persistThemeDefinition={false}
+            themeDefinition={deployment('viewer', '1 2 3')}
+          >
+            <Controls />
+          </ThemeProvider>
+        </PaintProbe>,
+      );
+      expect(frames[0]).toEqual({ accent: '1 2 3', name: 'viewer', dark: false });
+
+      rerender(
+        <PaintProbe frames={frames}>
+          <ThemeProvider
+            initialTheme="light"
+            persistThemeDefinition={false}
+            themeDefinition={deployment('shared-link', '4 5 6')}
+          >
+            <Controls />
+          </ThemeProvider>
+        </PaintProbe>,
+      );
+      expect(frames[1]).toEqual({ accent: '4 5 6', name: 'shared-link', dark: false });
+
+      rerender(
+        <PaintProbe frames={frames}>
+          <ThemeProvider initialTheme="light" persistThemeDefinition={false}>
+            <Controls />
+          </ThemeProvider>
+        </PaintProbe>,
+      );
+      expect(frames[2]).toEqual({ accent: '', name: undefined, dark: false });
+    });
+
+    it('on legacy colors and on a controlled switch to dark', () => {
+      const frames: Painted[] = [];
+      const { rerender } = render(
+        <PaintProbe frames={frames}>
+          <ThemeProvider initialTheme="light" persistThemeDefinition={false}>
+            <Controls />
+          </ThemeProvider>
+        </PaintProbe>,
+      );
+      expect(lastFrame(frames)).toEqual({ accent: '', name: undefined, dark: false });
+
+      rerender(
+        <PaintProbe frames={frames}>
+          <ThemeProvider
+            initialTheme="dark"
+            persistThemeDefinition={false}
+            themeRGB={{ 'rgb-accent-primary': '7 8 9' }}
+            themeName="environment"
+          >
+            <Controls />
+          </ThemeProvider>
+        </PaintProbe>,
+      );
+      expect(lastFrame(frames)).toEqual({ accent: '7 8 9', name: 'environment', dark: true });
+    });
+
+    it('persists a controlled change once, after its commit', () => {
+      const setItem = jest.spyOn(Storage.prototype, 'setItem');
+      const { rerender } = render(
+        <ThemeProvider initialTheme="light" themeDefinition={deployment('first', '1 2 3')}>
+          <Controls />
+        </ThemeProvider>,
+      );
+      setItem.mockClear();
+
+      rerender(
+        <ThemeProvider initialTheme="light" themeDefinition={deployment('second', '4 5 6')}>
+          <Controls />
+        </ThemeProvider>,
+      );
+      rerender(
+        <ThemeProvider
+          initialTheme="light"
+          persistThemeDefinition={false}
+          themeDefinition={deployment('second', '4 5 6')}
+        >
+          <Controls />
+        </ThemeProvider>,
+      );
+
+      const definitionWrites = setItem.mock.calls.filter(([key]) => key === 'theme-definition');
+      expect(definitionWrites).toHaveLength(1);
+      expect(JSON.parse(definitionWrites[0][1]).name).toBe('second');
+      setItem.mockRestore();
+    });
   });
 
   it('keeps valid legacy overrides when another token is malformed', async () => {
@@ -1136,5 +1260,73 @@ describe('ThemeProvider', () => {
     );
     expect(screen.getByTestId('resolved-mode')).toHaveTextContent('dark');
     expect(matchMediaSpy).toHaveBeenCalled();
+  });
+  describe('the focus outline a theme paints', () => {
+    const focusOutline = () => document.documentElement.style.getPropertyValue('--focus-outline');
+
+    it('follows the ring of the mode that names one, and clears on unmount', async () => {
+      const { unmount } = render(
+        <ThemeProvider
+          initialTheme="light"
+          themeDefinition={{
+            version: 1,
+            name: 'ringed',
+            modes: {
+              light: { colors: { 'rgb-ring-primary': '10 20 30' } },
+              dark: { colors: { 'rgb-accent-primary': '1 2 3' } },
+            },
+          }}
+        >
+          <Controls />
+        </ThemeProvider>,
+      );
+
+      await waitFor(() => {
+        expect(focusOutline()).toBe('10 20 30');
+      });
+
+      act(() => screen.getByRole('button', { name: 'Dark' }).click());
+
+      await waitFor(() => {
+        expect(document.documentElement).toHaveClass('dark');
+      });
+      expect(document.documentElement.dataset.theme).toBe('ringed');
+      expect(focusOutline()).toBe(darkTheme['rgb-focus-outline']);
+
+      unmount();
+
+      expect(focusOutline()).toBe('');
+    });
+
+    it('follows a legacy RGB ring only when the props carry one', async () => {
+      const { rerender } = render(
+        <ThemeProvider
+          initialTheme="dark"
+          themeName="legacy"
+          themeRGB={{ 'rgb-ring-primary': '1 2 3' }}
+        >
+          <Controls />
+        </ThemeProvider>,
+      );
+
+      await waitFor(() => {
+        expect(focusOutline()).toBe('1 2 3');
+      });
+
+      rerender(
+        <ThemeProvider
+          initialTheme="dark"
+          themeName="legacy"
+          themeRGB={{ 'rgb-accent-primary': '1 2 3' }}
+        >
+          <Controls />
+        </ThemeProvider>,
+      );
+
+      await waitFor(() => {
+        expect(focusOutline()).toBe('');
+      });
+      expect(document.documentElement.dataset.theme).toBe('legacy');
+    });
   });
 });

@@ -21,11 +21,16 @@ export interface IThemeRGB {
   'rgb-link'?: string;
   'rgb-link-hover'?: string;
   'rgb-link-visited'?: string;
+  /** Links inside rendered Markdown. Falls back to the mode's `rgb-link`, or in dark to
+   *  `rgb-text-primary`, when a theme names that and not this. */
+  'rgb-link-prose'?: string;
   'rgb-accent-primary'?: string;
   'rgb-accent-primary-hover'?: string;
 
   // Ring colors
   'rgb-ring-primary'?: string;
+  'rgb-focus-outline'?: string;
+  'rgb-focus-control'?: string;
 
   // Header colors
   'rgb-header-primary'?: string;
@@ -37,6 +42,8 @@ export interface IThemeRGB {
   'rgb-surface-active-alt'?: string;
   'rgb-surface-hover'?: string;
   'rgb-surface-hover-alt'?: string;
+  /** Fill of a neutral control while pressed; follows `rgb-surface-hover` when a theme omits it. */
+  'rgb-surface-pressed'?: string;
   'rgb-surface-composer-hover'?: string;
   'rgb-surface-primary'?: string;
   'rgb-chart-widget-surface'?: string;
@@ -56,8 +63,12 @@ export interface IThemeRGB {
   'rgb-surface-chat'?: string;
   'rgb-surface-code'?: string;
   'rgb-surface-code-body'?: string;
+  /** The backdrop a QR code is scanned against; keep it light in every mode. */
+  'rgb-surface-qr'?: string;
   'rgb-surface-inverted'?: string;
   'rgb-surface-inverted-hover'?: string;
+  /** Fill of an inverted control while pressed; follows `rgb-surface-inverted-hover` when omitted. */
+  'rgb-surface-inverted-pressed'?: string;
   'rgb-text-inverted'?: string;
   'rgb-surface-fixed'?: string;
   'rgb-surface-fixed-hover'?: string;
@@ -74,6 +85,10 @@ export interface IThemeRGB {
    *  3:1 non-text floor on every canvas, so it is kept apart from the separator
    *  roles above, which stay quiet. */
   'rgb-border-control'?: string;
+  /** Disabled fill, ink and edge. Painted only under the `fill` disabled style. */
+  'rgb-surface-disabled'?: string;
+  'rgb-text-disabled'?: string;
+  'rgb-border-disabled'?: string;
 
   // Status colors
   'rgb-status-success'?: string;
@@ -148,6 +163,12 @@ export interface IThemeRGB {
    * got a switch with no track at all.
    */
   'rgb-switch-unchecked'?: string;
+  /** The switch's knob in both states, painted over the unchecked track and the checked fill. */
+  'rgb-switch-thumb'?: string;
+  /** Column names in a table header, over its `surface-secondary` fill. */
+  'rgb-table-header-text'?: string;
+  /** The opaque fill of a header whose cells stick on their own, the dialog surface by default. */
+  'rgb-table-header-fill'?: string;
 
   // Presentation
   'rgb-presentation'?: string;
@@ -169,9 +190,12 @@ export interface IThemeVariables {
   '--link': string;
   '--link-hover': string;
   '--link-visited': string;
+  '--link-prose': string;
   '--accent-primary': string;
   '--accent-primary-hover': string;
   '--ring-primary': string;
+  '--focus-outline': string;
+  '--focus-control': string;
   '--header-primary': string;
   '--header-hover': string;
   '--header-button-hover': string;
@@ -179,6 +203,7 @@ export interface IThemeVariables {
   '--surface-active-alt': string;
   '--surface-hover': string;
   '--surface-hover-alt': string;
+  '--surface-pressed': string;
   '--surface-composer-hover': string;
   '--surface-primary': string;
   '--chart-widget-surface': string;
@@ -198,8 +223,10 @@ export interface IThemeVariables {
   '--surface-chat': string;
   '--surface-code': string;
   '--surface-code-body': string;
+  '--surface-qr': string;
   '--surface-inverted': string;
   '--surface-inverted-hover': string;
+  '--surface-inverted-pressed': string;
   '--text-inverted': string;
   '--surface-fixed': string;
   '--surface-fixed-hover': string;
@@ -215,6 +242,9 @@ export interface IThemeVariables {
   '--border-xheavy-alpha': string;
   '--border-destructive': string;
   '--border-control': string;
+  '--surface-disabled': string;
+  '--text-disabled': string;
+  '--border-disabled': string;
   '--status-success': string;
   '--status-success-subtle': string;
   '--status-success-border': string;
@@ -257,6 +287,9 @@ export interface IThemeVariables {
   '--series-8': string;
 
   '--switch-unchecked': string;
+  '--switch-thumb': string;
+  '--table-header-text': string;
+  '--table-header-fill': string;
 
   '--presentation': string;
 }
@@ -275,9 +308,12 @@ export interface IThemeColors {
   link?: string;
   'link-hover'?: string;
   'link-visited'?: string;
+  'link-prose'?: string;
   'accent-primary'?: string;
   'accent-primary-hover'?: string;
   'ring-primary'?: string;
+  'focus-outline'?: string;
+  'focus-control'?: string;
   'header-primary'?: string;
   'header-hover'?: string;
   'header-button-hover'?: string;
@@ -285,6 +321,7 @@ export interface IThemeColors {
   'surface-active-alt'?: string;
   'surface-hover'?: string;
   'surface-hover-alt'?: string;
+  'surface-pressed'?: string;
   'surface-composer-hover'?: string;
   'surface-primary'?: string;
   'chart-widget-surface'?: string;
@@ -304,8 +341,10 @@ export interface IThemeColors {
   'surface-chat'?: string;
   'surface-code'?: string;
   'surface-code-body'?: string;
+  'surface-qr'?: string;
   'surface-inverted'?: string;
   'surface-inverted-hover'?: string;
+  'surface-inverted-pressed'?: string;
   'text-inverted'?: string;
   'surface-fixed'?: string;
   'surface-fixed-hover'?: string;
@@ -317,6 +356,9 @@ export interface IThemeColors {
   'border-xheavy'?: string;
   'border-destructive'?: string;
   'border-control'?: string;
+  'surface-disabled'?: string;
+  'text-disabled'?: string;
+  'border-disabled'?: string;
   'status-success'?: string;
   'status-success-subtle'?: string;
   'status-success-border'?: string;
@@ -348,6 +390,9 @@ export interface IThemeColors {
   'series-6'?: string;
   'series-7'?: string;
   'switch-unchecked'?: string;
+  'switch-thumb'?: string;
+  'table-header-text'?: string;
+  'table-header-fill'?: string;
   'series-8'?: string;
   presentation?: string;
 
@@ -377,10 +422,35 @@ export interface IThemeAppearance {
   radius2xl: string;
   radius3xl: string;
   controlHeight: string;
+  switchWidth: string;
+  switchHeight: string;
+  tableCellSpaceY: string;
+  tableRowStroke: string;
   spaceCompact: string;
   spaceNormal: string;
+  /** `dim` fades a disabled control to half opacity; `fill` paints it in the disabled roles. */
+  disabledStyle: 'dim' | 'fill';
   fontFamily: string;
   monoFontFamily: string;
+  /** Headings and dialog titles; follows `fontFamily` when a theme omits it. */
+  displayFontFamily: string;
+  /** The `text-*` scale: size and line height per step, Tailwind's own values by default. */
+  textXs: string;
+  textSm: string;
+  textBase: string;
+  textLg: string;
+  textXl: string;
+  text2xl: string;
+  leadingXs: string;
+  leadingSm: string;
+  leadingBase: string;
+  leadingLg: string;
+  leadingXl: string;
+  leading2xl: string;
+  /** Opacity of `surface-overlay` under OGDialog, AlertDialog and Dialog, in that order. */
+  scrimOpacity: string;
+  alertScrimOpacity: string;
+  modalScrimOpacity: string;
   elevationSurface: string;
   shadow2xs: string;
   shadowXs: string;

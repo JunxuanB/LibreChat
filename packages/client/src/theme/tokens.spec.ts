@@ -11,11 +11,15 @@ globalThis.structuredClone ??= <T>(value: T): T => deserialize(serialize(value))
 
 const tokensPath = path.resolve(__dirname, 'tokens.css');
 const tokens = fs.readFileSync(tokensPath, 'utf8');
-const declared = new Set(
-  Array.from(tokens.matchAll(/--color-([\w-]+):/g), (match) => match[1]).filter(
-    (name) => !name.endsWith('*'),
-  ),
+/** Each declared color token, mapped to the custom properties its value reads. */
+const declarations = new Map(
+  Array.from(
+    tokens.matchAll(/--color-([\w-]+):([^;]+);/g),
+    ([, name, value]) =>
+      [name, Array.from(value.matchAll(/var\(--([\w-]+)/g), (match) => match[1])] as const,
+  ).filter(([name]) => !name.endsWith('*')),
 );
+const declared = new Set(declarations.keys());
 
 /**
  * Theme properties consumed by stylesheets rather than by utilities: the shimmer animation and
@@ -68,12 +72,31 @@ describe('theme color tokens', () => {
     expect(missing).toEqual([]);
   });
 
+  it('lets a theme set every color token the stylesheet declares', () => {
+    const registered = new Set(Object.keys(defaultTheme).map((key) => key.replace(/^rgb-/, '')));
+    const unowned = [...declarations]
+      .filter(([, reads]) => !reads.some((property) => registered.has(property)))
+      .map(([token]) => token);
+
+    expect(unowned).toEqual([]);
+  });
+
   it('resolves a token to the custom property the theme rewrites at runtime', async () => {
-    const css = await generate(['bg-surface-primary', 'text-text-secondary', 'bg-series-1']);
+    const css = await generate([
+      'bg-surface-primary',
+      'text-text-secondary',
+      'bg-series-1',
+      'bg-switch-thumb',
+      'text-table-header-text',
+      'bg-table-header-fill',
+    ]);
 
     expect(css).toContain('rgb(var(--surface-primary))');
     expect(css).toContain('rgb(var(--text-secondary))');
     expect(css).toContain('rgb(var(--series-1))');
+    expect(css).toContain('rgb(var(--switch-thumb, var(--surface-primary)))');
+    expect(css).toContain('rgb(var(--table-header-text, var(--text-secondary)))');
+    expect(css).toContain('rgb(var(--table-header-fill, var(--surface-dialog)))');
   });
 
   it('keeps a border token on its intrinsic alpha and still takes an opacity modifier', async () => {

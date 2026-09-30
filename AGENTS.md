@@ -190,6 +190,12 @@ before those checks succeed.
 
 ## Frontend rules
 
+Use the chat Share/Export action-menu pattern: `DropdownPopup` from `@librechat/client` with
+`Ariakit.MenuButton` (see `HeaderMenu.tsx` and `useExportShare.tsx`). Never introduce or reintroduce
+the Radix `DropdownMenu` family for app action or sort menus. Preserve the Share/Export
+dialog-item contract (`hideOnClick: false`, item ref, button render, and dialog `triggerRef`)
+when a menu action opens a dialog.
+
 Use `useLocalize()` for all visible copy and update only English keys in
 `client/src/locales/en/translation.json`. Use semantic HTML, keyboard behavior, and ARIA labels.
 Use React Query for API interactions and invalidate related queries after mutations; define query

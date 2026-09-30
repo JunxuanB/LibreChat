@@ -62,7 +62,7 @@
   },
   "client/src/components/Agents/SortDropdown.tsx": {
     "shadcn/no-restyle": {
-      "count": 5
+      "count": 4
     }
   },
   "client/src/components/Agents/VirtualizedAgentGrid.tsx": {
@@ -272,7 +272,7 @@
   },
   "client/src/components/Chat/Input/Files/Table/DataTable.tsx": {
     "shadcn/no-restyle": {
-      "count": 17
+      "count": 14
     },
     "shadcn/no-unknown-classes": {
       "count": 1
@@ -406,14 +406,6 @@
   "client/src/components/Chat/Menus/PresetsMenu.tsx": {
     "shadcn/no-restyle": {
       "count": 4
-    }
-  },
-  "client/src/components/Chat/Messages/Content/ActionIcon.tsx": {
-    "shadcn/no-inline-styles": {
-      "count": 13
-    },
-    "shadcn/no-raw-colors": {
-      "count": 9
     }
   },
   "client/src/components/Chat/Messages/Content/ActivityPhaseGroup.tsx": {
@@ -660,11 +652,6 @@
       "count": 6
     }
   },
-  "client/src/components/Chat/Messages/Content/ProgressCircle.tsx": {
-    "shadcn/no-arbitrary-values": {
-      "count": 1
-    }
-  },
   "client/src/components/Chat/Messages/Content/ProgressText.tsx": {
     "shadcn/no-inline-styles": {
       "count": 2
@@ -681,25 +668,14 @@
       "count": 1
     }
   },
-  "client/src/components/Chat/Messages/Content/RetrievalIcon.tsx": {
-    "shadcn/no-inline-styles": {
-      "count": 5
-    },
-    "shadcn/no-raw-colors": {
-      "count": 7
-    }
-  },
   "client/src/components/Chat/Messages/Content/SearchContent.tsx": {
     "shadcn/no-unknown-classes": {
       "count": 1
     }
   },
   "client/src/components/Chat/Messages/Content/ToolApproval.tsx": {
-    "shadcn/no-raw-colors": {
-      "count": 1
-    },
     "shadcn/no-restyle": {
-      "count": 27
+      "count": 26
     }
   },
   "client/src/components/Chat/Messages/Content/ToolCall.tsx": {
@@ -766,14 +742,6 @@
     },
     "shadcn/no-restyle": {
       "count": 16
-    }
-  },
-  "client/src/components/Chat/Messages/Content/WrenchIcon.tsx": {
-    "shadcn/no-inline-styles": {
-      "count": 1
-    },
-    "shadcn/no-raw-colors": {
-      "count": 1
     }
   },
   "client/src/components/Chat/Messages/Content/animate.tsx": {
@@ -1375,9 +1343,6 @@
   "client/src/components/Projects/ProjectChatList.tsx": {
     "shadcn/no-inline-styles": {
       "count": 1
-    },
-    "shadcn/no-restyle": {
-      "count": 2
     }
   },
   "client/src/components/Projects/ProjectChatOptions.tsx": {
@@ -1390,25 +1355,9 @@
       "count": 3
     }
   },
-  "client/src/components/Projects/ProjectEditDialog.tsx": {
-    "shadcn/no-restyle": {
-      "count": 3
-    }
-  },
-  "client/src/components/Projects/ProjectWorkspace.tsx": {
-    "shadcn/no-restyle": {
-      "count": 7
-    }
-  },
   "client/src/components/Projects/ProjectsView.tsx": {
-    "shadcn/no-inline-styles": {
-      "count": 1
-    },
-    "shadcn/no-raw-colors": {
-      "count": 1
-    },
     "shadcn/no-restyle": {
-      "count": 4
+      "count": 1
     }
   },
   "client/src/components/Prompts/buttons/AutoSendPrompt.tsx": {
@@ -1514,7 +1463,7 @@
   },
   "client/src/components/Prompts/sidebar/FilterPrompts.tsx": {
     "shadcn/no-restyle": {
-      "count": 2
+      "count": 1
     },
     "shadcn/require-static-classes": {
       "count": 1
@@ -1759,11 +1708,8 @@
     }
   },
   "client/src/components/SidePanel/Agents/Tools/CategoryFilter.tsx": {
-    "shadcn/no-raw-colors": {
-      "count": 1
-    },
     "shadcn/no-restyle": {
-      "count": 6
+      "count": 4
     }
   },
   "client/src/components/SidePanel/Agents/Tools/ItemDialog/ItemDialog.tsx": {
@@ -2115,9 +2061,6 @@
     "shadcn/no-arbitrary-values": {
       "count": 3
     },
-    "shadcn/no-raw-colors": {
-      "count": 1
-    },
     "shadcn/no-restyle": {
       "count": 5
     }
@@ -2383,11 +2326,6 @@
   "packages/client/src/svgs/PaLMIcon.tsx": {
     "shadcn/no-raw-colors": {
       "count": 7
-    }
-  },
-  "packages/client/src/svgs/SamlIcon.tsx": {
-    "shadcn/no-raw-colors": {
-      "count": 1
     }
   },
   "packages/client/src/svgs/SendMessageIcon.tsx": {

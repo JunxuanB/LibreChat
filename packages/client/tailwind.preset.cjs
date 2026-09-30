@@ -7,6 +7,16 @@ module.exports = {
       },
       height: {
         'theme-control': 'var(--theme-control-height, 2.25rem)',
+        'theme-switch': 'var(--theme-switch-height, 1.5rem)',
+        /** A header cell: the table's vertical cell space on both sides of one text line. */
+        'theme-table-head': 'calc(var(--theme-table-cell-space-y, 1rem) * 2 + 1rem)',
+        /** A compact header: half the cell space on both sides of a text-sm line. */
+        'theme-table-head-compact': 'calc(var(--theme-table-cell-space-y, 1rem) + 1.25rem)',
+      },
+      width: {
+        /** Never narrower than the track is tall, so the knob always has somewhere to travel. */
+        'theme-switch':
+          'max(var(--theme-switch-width, 2.75rem), var(--theme-switch-height, 1.5rem))',
       },
       spacing: {
         'theme-compact': 'var(--theme-space-compact, 0.375rem)',
@@ -18,6 +28,15 @@ module.exports = {
          * controls is never shrunk on a phone. Pair it with `touch:`.
          */
         'theme-control-touch': 'max(var(--theme-control-height, 2.25rem), 2.75rem)',
+        /** The switch knob inside the track's 2px border, in px so it holds at any root size,
+         *  and how far it travels when checked (the borders cancel out of the travel). */
+        'theme-switch-thumb': 'max(0px, calc(var(--theme-switch-height, 1.5rem) - 4px))',
+        'theme-switch-travel':
+          'max(0px, calc(var(--theme-switch-width, 2.75rem) - var(--theme-switch-height, 1.5rem)))',
+        'theme-table-cell': 'var(--theme-table-cell-space-y, 1rem)',
+        /** The compact and dense table sizes: half and a quarter of the cell space. */
+        'theme-table-cell-compact': 'calc(var(--theme-table-cell-space-y, 1rem) / 2)',
+        'theme-table-cell-dense': 'calc(var(--theme-table-cell-space-y, 1rem) / 4)',
       },
       keyframes: {
         /** Discord-style "connecting" dots: each dot lifts and brightens in
@@ -47,22 +66,12 @@ module.exports = {
         'accordion-up': 'accordion-up 0.2s ease-out',
         'caret-blink': 'caret-blink 1.25s ease-out infinite',
       },
+      /**
+       * `rounded-sm` through `rounded-3xl` are not restated here: `@librechat/client/theme.css`
+       * maps them onto `--theme-radius-*` as `@theme inline`, the same declarations the app
+       * compiles, so a consumer's corners are the app's and follow the same theme.
+       */
       borderRadius: {
-        /**
-         * Tailwind 4 renamed the radius steps: the old `sm` (0.125rem) is now
-         * `xs`, and `sm` means 0.25rem. Every published primitive that says
-         * `rounded-sm` — the checkbox, the menu items, the resize grips — would
-         * double its corners for a consumer who upgrades Tailwind under it, so
-         * the three named steps are pinned to what this preset produced before.
-         * The fallbacks stay in `rem`, and so does what is subtracted from
-         * them: mixing in `px` would only reproduce the old scale at a 16px
-         * root font size, and `sm` would go negative below it. Setting
-         * `--radius` retunes all three; the SPA sets 0.5rem and restates the
-         * same family in its own config, so nothing there moves either.
-         */
-        lg: 'var(--radius, 0.5rem)',
-        md: 'calc(var(--radius, 0.5rem) - 0.125rem)',
-        sm: 'calc(var(--radius, 0.5rem) - 0.375rem)',
         'theme-control': 'var(--theme-control-radius, 0.75rem)',
         'theme-control-round': 'var(--theme-round-control-radius, 9999px)',
         'theme-surface': 'var(--theme-surface-radius, 1rem)',

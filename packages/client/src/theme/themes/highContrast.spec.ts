@@ -117,6 +117,7 @@ const accentTokens: Array<keyof IThemeRGB> = [
   'rgb-link',
   'rgb-link-hover',
   'rgb-link-visited',
+  'rgb-link-prose',
   'rgb-brand-purple',
 ];
 
@@ -288,7 +289,7 @@ describe.each([
         theme,
         WCAG_NON_TEXT,
         ['rgb-switch-unchecked'],
-        ['rgb-surface-primary', 'rgb-surface-inverted'],
+        ['rgb-surface-primary', 'rgb-switch-thumb', 'rgb-surface-inverted'],
       ),
     ).toEqual([]);
   });

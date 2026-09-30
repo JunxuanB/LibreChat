@@ -2,7 +2,7 @@ import * as React from 'react';
 import { JSX } from 'react/jsx-runtime';
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog';
 import { useDialogDepth } from './OriginalDialog';
-import { cn } from '~/utils';
+import { cn, disabledFillClasses } from '~/utils';
 
 const AlertDialog: React.FC<AlertDialogPrimitive.AlertDialogProps> = AlertDialogPrimitive.Root;
 
@@ -39,7 +39,7 @@ const AlertDialogOverlay = React.forwardRef<
   return (
     <AlertDialogPrimitive.Overlay
       className={cn(
-        'bg-surface-overlay/90 animate-in fade-in fixed inset-0 z-50 transition-opacity',
+        'bg-scrim-alert animate-in fade-in fixed inset-0 z-50 transition-opacity',
         className,
       )}
       style={{ ...style, zIndex }}
@@ -110,7 +110,7 @@ const AlertDialogTitle: React.ForwardRefExoticComponent<
 >(({ className = '', ...props }, ref) => (
   <AlertDialogPrimitive.Title
     ref={ref}
-    className={cn('text-text-primary text-lg font-semibold', className)}
+    className={cn('text-text-primary font-display text-lg font-semibold', className)}
     {...props}
   />
 ));
@@ -147,7 +147,8 @@ const AlertDialogAction: React.ForwardRefExoticComponent<
   <AlertDialogPrimitive.Action
     ref={ref}
     className={cn(
-      'bg-surface-inverted text-text-inverted hover:bg-surface-inverted-hover focus:ring-text-primary inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-semibold transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50',
+      'bg-surface-inverted text-text-inverted hover:bg-surface-inverted-hover focus:ring-focus-control inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-semibold transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50',
+      disabledFillClasses,
       className,
     )}
     {...props}
@@ -168,7 +169,8 @@ const AlertDialogCancel: React.ForwardRefExoticComponent<
   <AlertDialogPrimitive.Cancel
     ref={ref}
     className={cn(
-      'border-border-light text-text-primary hover:bg-surface-hover focus:ring-text-primary mt-2 inline-flex h-10 items-center justify-center rounded-md border bg-transparent px-4 py-2 text-sm font-semibold transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 sm:mt-0',
+      'border-border-light text-text-primary hover:bg-surface-hover focus:ring-focus-control mt-2 inline-flex h-10 items-center justify-center rounded-md border bg-transparent px-4 py-2 text-sm font-semibold transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 sm:mt-0',
+      disabledFillClasses,
       className,
     )}
     {...props}

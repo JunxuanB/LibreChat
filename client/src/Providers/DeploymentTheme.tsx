@@ -8,8 +8,8 @@ import {
   createContext,
   useLayoutEffect,
 } from 'react';
-import { QueryKeys } from 'librechat-data-provider';
 import { notifyManager, useQueryClient } from '@tanstack/react-query';
+import { QueryKeys, isBundledThemeName } from 'librechat-data-provider';
 import {
   ThemeProvider,
   clickHouseTheme,
@@ -17,15 +17,15 @@ import {
   fromLegacyTheme,
   validateThemeDefinition,
 } from '@librechat/client';
+import type { TInterfaceConfig, BundledThemeName } from 'librechat-data-provider';
 import type { IThemeRGB, ThemeDefinition } from '@librechat/client';
-import type { TInterfaceConfig } from 'librechat-data-provider';
 import type { ComponentProps } from 'react';
 import { getThemeFromEnv } from '~/utils/getThemeFromEnv';
 import { useGetStartupConfig } from '~/data-provider';
 
 type DeploymentThemeValue = TInterfaceConfig['theme'];
 
-const bundledThemes: Readonly<Record<string, ThemeDefinition>> = {
+const bundledThemes: Readonly<Record<BundledThemeName, ThemeDefinition>> = {
   librechat: libreChatTheme,
   clickhouse: clickHouseTheme,
 };
@@ -41,7 +41,7 @@ export function resolveDeploymentTheme(theme: DeploymentThemeValue): ThemeDefini
   }
 
   if (typeof theme === 'string') {
-    const definition = Object.hasOwn(bundledThemes, theme) ? bundledThemes[theme] : undefined;
+    const definition = isBundledThemeName(theme) ? bundledThemes[theme] : undefined;
     if (!definition) {
       console.warn(`[DeploymentTheme] Ignoring unknown interface.theme "${theme}"`);
     }
@@ -138,7 +138,7 @@ const DeploymentThemeOverrideContext = createContext<(override: ThemeOverride) =
  * absent theme included, until the route unmounts. A route whose theme source
  * failed passes `ready` with no theme, so the viewer's theme does not stand in
  * for the link's. Registered in a layout effect so the wrapper re-renders in the
- * same commit; `ThemeProvider` still applies the change in its own effects.
+ * same commit, and `ThemeProvider` applies the change before that commit paints.
  */
 export function useDeploymentThemeOverride(ready: boolean, theme: DeploymentThemeValue) {
   const setOverride = useContext(DeploymentThemeOverrideContext);

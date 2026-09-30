@@ -1,6 +1,8 @@
 import type { IThemeAppearance, IThemeBrands, IThemeRGB, ResolvedThemeDefinition } from '../types';
 import {
   controlBorderFallback,
+  focusFallbacks,
+  pressedFallbacks,
   MARK_NEIGHBOURHOOD,
   themeAppearanceProperties,
   themeBrandTokens,
@@ -67,6 +69,19 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
     variables.push(['--chart-widget-surface', colors['rgb-surface-primary']]);
   }
 
+  /** The switch knob was painted `surface-primary` before it had a role, as in `resolveTheme`. */
+  if (colors['rgb-switch-thumb'] === undefined && colors['rgb-surface-primary'] !== undefined) {
+    variables.push(['--switch-thumb', colors['rgb-surface-primary']]);
+  }
+
+  if (colors['rgb-table-header-text'] === undefined && colors['rgb-text-secondary'] !== undefined) {
+    variables.push(['--table-header-text', colors['rgb-text-secondary']]);
+  }
+
+  if (colors['rgb-table-header-fill'] === undefined && colors['rgb-surface-dialog'] !== undefined) {
+    variables.push(['--table-header-fill', colors['rgb-surface-dialog']]);
+  }
+
   if (colors['rgb-chart-widget-stroke'] === undefined && colors['rgb-border-light'] !== undefined) {
     variables.push(['--chart-widget-stroke', colors['rgb-border-light']]);
   }
@@ -74,6 +89,25 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
   const legacyControlBorder = controlBorderFallback(colors);
   if (legacyControlBorder !== undefined) {
     variables.push(['--border-control', legacyControlBorder]);
+  }
+
+  const focus = focusFallbacks(colors);
+  if (colors['rgb-focus-outline'] === undefined && focus['rgb-focus-outline'] !== undefined) {
+    variables.push(['--focus-outline', focus['rgb-focus-outline']]);
+  }
+  if (colors['rgb-focus-control'] === undefined && focus['rgb-focus-control'] !== undefined) {
+    variables.push(['--focus-control', focus['rgb-focus-control']]);
+  }
+
+  const pressed = pressedFallbacks(colors);
+  if (colors['rgb-surface-pressed'] === undefined && pressed['rgb-surface-pressed'] !== undefined) {
+    variables.push(['--surface-pressed', pressed['rgb-surface-pressed']]);
+  }
+  if (
+    colors['rgb-surface-inverted-pressed'] === undefined &&
+    pressed['rgb-surface-inverted-pressed'] !== undefined
+  ) {
+    variables.push(['--surface-inverted-pressed', pressed['rgb-surface-inverted-pressed']]);
   }
 
   /**
@@ -104,9 +138,16 @@ function mapAppearance(appearance: IThemeAppearance): Array<[string, string]> {
   ]);
 }
 
+/**
+ * Mirrors the applied theme's `disabledStyle` on the root, where the
+ * `theme-disabled:` variant reads it. Absent means the default `dim` style.
+ */
+export const THEME_DISABLED_ATTRIBUTE = 'data-theme-disabled';
+
 export function clearAppliedTheme(root: HTMLElement = document.documentElement): void {
   themeOwnedProperties.forEach((property) => root.style.removeProperty(property));
   root.removeAttribute('data-theme');
+  root.removeAttribute(THEME_DISABLED_ATTRIBUTE);
 }
 
 export function applyResolvedTheme(
@@ -123,6 +164,11 @@ export function applyResolvedTheme(
 
   variables.forEach(([property, value]) => root.style.setProperty(property, value));
   root.dataset.theme = theme.name;
+  if (theme.appearance.disabledStyle === 'fill') {
+    root.setAttribute(THEME_DISABLED_ATTRIBUTE, 'fill');
+  } else {
+    root.removeAttribute(THEME_DISABLED_ATTRIBUTE);
+  }
 }
 
 /**

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import type { ThemeDefinition } from './types';
 import {
   collectThemeWarnings,
@@ -9,6 +11,7 @@ import {
   themeColorTokens,
   validateThemeDefinition,
 } from './registry';
+import { clickHouseTheme } from './themes/clickhouse';
 import { defaultTheme } from './themes/default';
 import { darkTheme } from './themes/dark';
 
@@ -206,6 +209,53 @@ describe('theme registry', () => {
     expect(resolved.colors['rgb-text-muted']).toBe('90 91 92');
   });
 
+  it('keeps prose links on the link role in light and on primary text in dark', () => {
+    expect(resolveTheme(libreChatTheme, 'light').colors['rgb-link-prose']).toBe(
+      defaultTheme['rgb-link'],
+    );
+    expect(resolveTheme(libreChatTheme, 'dark').colors['rgb-link-prose']).toBe(
+      darkTheme['rgb-text-primary'],
+    );
+  });
+
+  it('derives omitted prose links from the link a theme names, in either mode', () => {
+    const colors = { 'rgb-link': '250 255 105', 'rgb-text-primary': '240 240 240' };
+    const theme: ThemeDefinition = {
+      version: 1,
+      name: 'prose-link-reference',
+      modes: { light: { colors }, dark: { colors } },
+    };
+
+    expect(resolveTheme(theme, 'light').colors['rgb-link-prose']).toBe('250 255 105');
+    expect(resolveTheme(theme, 'dark').colors['rgb-link-prose']).toBe('250 255 105');
+  });
+
+  it('keeps dark prose links on the primary text of a theme that names no link', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'prose-text-reference',
+        modes: { dark: { colors: { 'rgb-text-primary': '240 240 240' } } },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-link-prose']).toBe('240 240 240');
+  });
+
+  it('preserves an explicit prose link color', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'explicit-prose-link-reference',
+        modes: { dark: { colors: { 'rgb-link': '1 2 3', 'rgb-link-prose': '4 5 6' } } },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-link-prose']).toBe('4 5 6');
+  });
+
   it('derives omitted chart widget colors from the previous panel roles', () => {
     const resolved = resolveTheme(
       {
@@ -250,6 +300,148 @@ describe('theme registry', () => {
     expect(resolved.colors['rgb-chart-widget-stroke']).toBe('50 51 52');
   });
 
+  it('accepts table lengths in px or rem, zero included, and rejects other units', () => {
+    const withTable = (tableCellSpaceY: string, tableRowStroke: string) =>
+      ({
+        version: 1,
+        name: 'table',
+        modes: { light: { appearance: { tableCellSpaceY, tableRowStroke } } },
+      }) as ThemeDefinition;
+
+    expect(validateThemeDefinition(withTable('0.5rem', '0'))).toEqual([]);
+    expect(validateThemeDefinition(withTable('8px', '1px'))).toEqual([]);
+    expect(validateThemeDefinition(withTable('1em', 'calc(1px - 0px)'))).toEqual([
+      'Invalid appearance value for tableCellSpaceY: 1em',
+      'Invalid appearance value for tableRowStroke: calc(1px - 0px)',
+    ]);
+  });
+
+  describe('switch size pair', () => {
+    const withSwitch = (switchWidth: string, switchHeight: string) =>
+      ({
+        version: 1,
+        name: 'switch',
+        modes: { light: { appearance: { switchWidth, switchHeight } } },
+      }) as ThemeDefinition;
+
+    it('checks one named dimension against the default it is drawn with', () => {
+      const widthOnly = {
+        version: 1,
+        name: 'switch-width',
+        modes: { light: { appearance: { switchWidth: '1rem' } } },
+      } as ThemeDefinition;
+
+      expect(validateThemeDefinition(widthOnly)).toEqual([
+        'switchWidth must exceed switchHeight so the knob can travel: 1rem, 1.5rem',
+      ]);
+    });
+
+    it('accepts a pair in one unit that leaves a knob and a forward travel', () => {
+      expect(validateThemeDefinition(withSwitch('2rem', '1rem'))).toEqual([]);
+      expect(validateThemeDefinition(withSwitch('40px', '20px'))).toEqual([]);
+    });
+
+    it('rejects a mixed-unit pair, which only holds at one root size', () => {
+      expect(validateThemeDefinition(withSwitch('40px', '2rem'))).toEqual([
+        'switchWidth and switchHeight must share a unit (the default is rem): 40px, 2rem',
+      ]);
+    });
+
+    it('rejects em, zero, a track too short for its border and a width not above the height', () => {
+      expect(validateThemeDefinition(withSwitch('2em', '1rem'))).toEqual([
+        'Invalid appearance value for switchWidth: 2em',
+      ]);
+      expect(validateThemeDefinition(withSwitch('0', '1rem'))).toEqual([
+        'Invalid appearance value for switchWidth: 0',
+      ]);
+      expect(validateThemeDefinition(withSwitch('32px', '4px'))).toEqual([
+        'switchHeight must exceed the 4px track border: 4px',
+      ]);
+      expect(validateThemeDefinition(withSwitch('2rem', '0.25rem'))).toEqual([
+        'switchHeight must be at least 0.5rem to clear the 4px track border: 0.25rem',
+      ]);
+      expect(validateThemeDefinition(withSwitch('1rem', '2rem'))).toEqual([
+        'switchWidth must exceed switchHeight so the knob can travel: 1rem, 2rem',
+      ]);
+      expect(validateThemeDefinition(withSwitch('1.5rem', '1.5rem'))).toEqual([
+        'switchWidth must exceed switchHeight so the knob can travel: 1.5rem, 1.5rem',
+      ]);
+    });
+  });
+
+  it('keeps the switch thumb on the surface a theme repainted before the role existed', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'legacy-switch-thumb',
+        modes: { dark: { colors: { 'rgb-surface-primary': '20 21 22' } } },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-switch-thumb']).toBe('20 21 22');
+  });
+
+  it('preserves an explicit switch thumb and falls back to the bundled one otherwise', () => {
+    const explicit = resolveTheme(
+      {
+        version: 1,
+        name: 'explicit-switch-thumb',
+        modes: {
+          dark: { colors: { 'rgb-surface-primary': '20 21 22', 'rgb-switch-thumb': '1 2 3' } },
+        },
+      },
+      'dark',
+    );
+    const untouched = resolveTheme(
+      { version: 1, name: 'no-surface', modes: { dark: { colors: {} } } },
+      'dark',
+    );
+
+    expect(explicit.colors['rgb-switch-thumb']).toBe('1 2 3');
+    expect(untouched.colors['rgb-switch-thumb']).toBe(darkTheme['rgb-switch-thumb']);
+  });
+
+  it('keeps a self-sticking table header on the dialog surface a theme repainted', () => {
+    const legacy = resolveTheme(
+      {
+        version: 1,
+        name: 'legacy-table-fill',
+        modes: { dark: { colors: { 'rgb-surface-dialog': '20 21 22' } } },
+      },
+      'dark',
+    );
+
+    expect(legacy.colors['rgb-table-header-fill']).toBe('20 21 22');
+    expect(resolveTheme(libreChatTheme, 'dark').colors['rgb-table-header-fill']).toBe(
+      darkTheme['rgb-surface-dialog'],
+    );
+  });
+
+  it('keeps table column names on the secondary text a theme repainted', () => {
+    const legacy = resolveTheme(
+      {
+        version: 1,
+        name: 'legacy-table-header',
+        modes: { light: { colors: { 'rgb-text-secondary': '20 21 22' } } },
+      },
+      'light',
+    );
+    const explicit = resolveTheme(
+      {
+        version: 1,
+        name: 'explicit-table-header',
+        modes: {
+          light: { colors: { 'rgb-text-secondary': '20 21 22', 'rgb-table-header-text': '1 2 3' } },
+        },
+      },
+      'light',
+    );
+
+    expect(legacy.colors['rgb-table-header-text']).toBe('20 21 22');
+    expect(explicit.colors['rgb-table-header-text']).toBe('1 2 3');
+  });
+
   it('keeps the light border a legacy theme drew its controls with', () => {
     const resolved = resolveTheme(
       {
@@ -289,6 +481,244 @@ describe('theme registry', () => {
     );
 
     expect(resolved.colors['rgb-border-control']).toBe(darkTheme['rgb-border-control']);
+  });
+
+  it('presses a theme that predates the pressed roles in the hover fills it painted', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'hover-only-reference',
+        modes: {
+          dark: {
+            colors: {
+              'rgb-surface-hover': '70 71 72',
+              'rgb-surface-inverted-hover': '200 201 202',
+            },
+          },
+        },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe('70 71 72');
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe('200 201 202');
+  });
+
+  it('keeps the bundled pressed fills, equal to the bundled hovers, for a theme that paints none', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'pressless-reference',
+        modes: { light: { colors: { 'rgb-accent-primary': '1 2 3' } } },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe(defaultTheme['rgb-surface-hover']);
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe(
+      defaultTheme['rgb-surface-inverted-hover'],
+    );
+  });
+
+  it('preserves explicit pressed fills over the hovers they would follow', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'pressed-reference',
+        modes: {
+          light: {
+            colors: {
+              'rgb-surface-hover': '10 20 30',
+              'rgb-surface-pressed': '40 50 60',
+              'rgb-surface-inverted-pressed': '70 80 90',
+            },
+          },
+        },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-surface-pressed']).toBe('40 50 60');
+    expect(resolved.colors['rgb-surface-inverted-pressed']).toBe('70 80 90');
+  });
+
+  it('dims disabled controls unless a theme chooses to fill them', () => {
+    const base = { version: 1, name: 'disabled-reference' } as const;
+
+    expect(resolveTheme({ ...base, modes: {} }, 'light').appearance.disabledStyle).toBe('dim');
+    expect(
+      resolveTheme({ ...base, modes: { dark: { appearance: { disabledStyle: 'fill' } } } }, 'dark')
+        .appearance.disabledStyle,
+    ).toBe('fill');
+    expect(
+      validateThemeDefinition({
+        ...base,
+        modes: { light: { appearance: { disabledStyle: 'fade' as 'dim' } } },
+      }),
+    ).toEqual(['Invalid appearance value for disabledStyle: fade']);
+  });
+
+  it('sets headings in the UI family of a theme that names no display family', () => {
+    const family = '"Reference Sans", sans-serif';
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'family-only-reference',
+        modes: { light: { appearance: { fontFamily: family } } },
+      },
+      'light',
+    );
+
+    expect(resolved.appearance.displayFontFamily).toBe(family);
+  });
+
+  it('keeps an explicit display family and the bundled one for a theme that names neither', () => {
+    const explicit = resolveTheme(
+      {
+        version: 1,
+        name: 'display-reference',
+        modes: {
+          light: {
+            appearance: { fontFamily: 'Body, sans-serif', displayFontFamily: 'Head, serif' },
+          },
+        },
+      },
+      'light',
+    );
+    const bundled = resolveTheme({ version: 1, name: 'fontless-reference', modes: {} }, 'dark');
+
+    expect(explicit.appearance.displayFontFamily).toBe('Head, serif');
+    expect(bundled.appearance.displayFontFamily).toBe(defaultAppearance.fontFamily);
+  });
+
+  it('reproduces Tailwind’s own type scale by default', () => {
+    const tailwind = readFileSync(
+      join(__dirname, '..', '..', '..', '..', 'node_modules', 'tailwindcss', 'theme.css'),
+      'utf8',
+    );
+    const steps = [
+      ['xs', 'textXs', 'leadingXs'],
+      ['sm', 'textSm', 'leadingSm'],
+      ['base', 'textBase', 'leadingBase'],
+      ['lg', 'textLg', 'leadingLg'],
+      ['xl', 'textXl', 'leadingXl'],
+      ['2xl', 'text2xl', 'leading2xl'],
+    ] as const;
+    const declared = (name: string) =>
+      new RegExp(`--${name}:\\s*([^;]+);`).exec(tailwind)?.[1].trim();
+
+    steps.forEach(([step, size, leading]) => {
+      expect(defaultAppearance[size]).toBe(declared(`text-${step}`));
+      expect(defaultAppearance[leading]).toBe(declared(`text-${step}--line-height`));
+    });
+  });
+
+  it('keeps every bundled theme’s largest themed step below the unthemed text-3xl', () => {
+    const rem = (value: string) => parseFloat(value);
+    [
+      defaultAppearance,
+      { ...defaultAppearance, ...clickHouseTheme.modes.light?.appearance },
+    ].forEach((appearance) => {
+      expect(rem(appearance.text2xl)).toBeLessThan(1.875);
+    });
+  });
+
+  it('accepts ratio and length line heights and rejects anything else', () => {
+    const withLeading = (leadingSm: string): ThemeDefinition => ({
+      version: 1,
+      name: 'leading-reference',
+      modes: { light: { appearance: { leadingSm } } },
+    });
+
+    expect(validateThemeDefinition(withLeading('1.5'))).toEqual([]);
+    expect(validateThemeDefinition(withLeading('calc(1.25 / 0.875)'))).toEqual([]);
+    expect(validateThemeDefinition(withLeading('1.25rem'))).toEqual([]);
+    expect(validateThemeDefinition(withLeading('calc(1 / 0)'))).toEqual([
+      'Invalid appearance value for leadingSm: calc(1 / 0)',
+    ]);
+    expect(validateThemeDefinition(withLeading('normal; color: red'))).toEqual([
+      'Invalid appearance value for leadingSm: normal; color: red',
+    ]);
+  });
+
+  it('accepts a scrim opacity from 0 to 1 and rejects anything else', () => {
+    const withScrim = (scrimOpacity: string): ThemeDefinition => ({
+      version: 1,
+      name: 'scrim-reference',
+      modes: { dark: { appearance: { scrimOpacity } } },
+    });
+
+    expect(validateThemeDefinition(withScrim('0.75'))).toEqual([]);
+    expect(validateThemeDefinition(withScrim('1'))).toEqual([]);
+    expect(validateThemeDefinition(withScrim('1.5'))).toEqual([
+      'Invalid appearance value for scrimOpacity: 1.5',
+    ]);
+    expect(validateThemeDefinition(withScrim('75%'))).toEqual([
+      'Invalid appearance value for scrimOpacity: 75%',
+    ]);
+  });
+
+  it('draws the focus outline in the ring of a theme that predates the role', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'ring-only-reference',
+        modes: { dark: { colors: { 'rgb-ring-primary': '200 210 220' } } },
+      },
+      'dark',
+    );
+
+    expect(resolved.colors['rgb-focus-outline']).toBe('200 210 220');
+  });
+
+  it('draws the control focus ring in the ink of a theme that predates the role', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'ink-only-reference',
+        modes: { light: { colors: { 'rgb-text-primary': '20 30 40' } } },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-focus-control']).toBe('20 30 40');
+  });
+
+  it('gives a theme that names neither the bundled focus roles', () => {
+    const light = resolveTheme(
+      {
+        version: 1,
+        name: 'focusless-reference',
+        modes: { light: { colors: { 'rgb-accent-primary': '1 2 3' } } },
+      },
+      'light',
+    );
+
+    expect(light.colors['rgb-focus-outline']).toBe('0 0 0');
+    expect(light.colors['rgb-focus-control']).toBe(defaultTheme['rgb-text-primary']);
+  });
+
+  it('preserves explicit focus roles over the ring and ink they would follow', () => {
+    const resolved = resolveTheme(
+      {
+        version: 1,
+        name: 'focus-reference',
+        modes: {
+          light: {
+            colors: {
+              'rgb-ring-primary': '10 20 30',
+              'rgb-text-primary': '40 50 60',
+              'rgb-focus-outline': '200 0 120',
+              'rgb-focus-control': '0 120 200',
+            },
+          },
+        },
+      },
+      'light',
+    );
+
+    expect(resolved.colors['rgb-focus-outline']).toBe('200 0 120');
+    expect(resolved.colors['rgb-focus-control']).toBe('0 120 200');
   });
 
   it('preserves an explicit control outline', () => {
@@ -541,7 +971,7 @@ describe('theme registry', () => {
         light: {
           colors: {
             'rgb-text-primary': '999 0 0',
-            'rgb-unknown': '1 2 3',
+            'rgb-unknown': 'red',
           },
           appearance: {
             controlRadius: 'url(theme.css)',
@@ -619,16 +1049,39 @@ describe('theme registry', () => {
       expect(() => resolveTheme(theme, 'light')).toThrow(TypeError);
     });
 
-    it('still rejects an unknown colour token', () => {
+    it('ignores a well-formed colour role it predates and paints the rest', () => {
       const theme = {
         version: 1,
         name: 'colour',
         modes: {
-          light: { colors: { 'rgb-future': '1 2 3' }, appearance: { futureSpacing: '1rem' } },
+          light: {
+            colors: { 'rgb-future': '1 2 3', 'rgb-accent-primary': '4 5 6' },
+            appearance: { futureSpacing: '1rem' },
+          },
         },
       } as ThemeDefinition;
 
-      expect(validateThemeDefinition(theme)).toEqual(['Unknown color token: rgb-future']);
+      expect(validateThemeDefinition(theme)).toEqual([]);
+      expect(collectThemeWarnings(theme)).toEqual([
+        'Unknown light color token ignored: rgb-future',
+        'Unknown light appearance token ignored: futureSpacing',
+      ]);
+      const resolved = resolveTheme(theme, 'light');
+      expect(resolved.colors['rgb-accent-primary']).toBe('4 5 6');
+      expect(resolved.colors).not.toHaveProperty('rgb-future');
+    });
+
+    it('still rejects an unknown colour token that is not a well-formed role', () => {
+      const theme = {
+        version: 1,
+        name: 'colour',
+        modes: { light: { colors: { 'rgb-future': 'red', future: '1 2 3' } } },
+      } as ThemeDefinition;
+
+      expect(validateThemeDefinition(theme)).toEqual([
+        'Unknown color token: rgb-future',
+        'Unknown color token: future',
+      ]);
     });
 
     it('still rejects an injection attempt carried by an unknown key', () => {

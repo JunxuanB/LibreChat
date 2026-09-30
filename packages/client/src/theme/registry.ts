@@ -1,3 +1,18 @@
+import {
+  THEME_VERSION,
+  isThemeRGB,
+  collectThemeIssues,
+  isThemeAppearanceToken,
+  collectThemeWarningIssues,
+  defaultSwitchSize,
+  themeColorTokens as sharedColorTokens,
+  themeBrandTokens as sharedBrandTokens,
+} from 'librechat-data-provider';
+import type {
+  ThemeColorToken,
+  ThemeBrandToken,
+  ThemeAppearanceToken,
+} from 'librechat-data-provider';
 import type {
   IThemeAppearance,
   IThemeBrands,
@@ -11,7 +26,8 @@ import type {
 import { highContrastDarkTheme, highContrastLightTheme } from './themes/highContrast';
 import { defaultTheme } from './themes/default';
 import { darkTheme } from './themes/dark';
-export const THEME_VERSION = 1 as const;
+
+export { THEME_VERSION };
 
 /**
  * Compile-time guard: the categorical series scale is declared across three
@@ -28,9 +44,23 @@ export type SeriesTokensAreDeclared = [
   Assert<DeclaredIn<`series-${SeriesSlot}`, IThemeColors>>,
 ];
 
-export const themeColorTokens: readonly (keyof IThemeRGB)[] = Object.freeze(
-  Object.keys(defaultTheme) as Array<keyof IThemeRGB>,
-);
+type SameKeys<A extends PropertyKey, B extends PropertyKey> = [A] extends [B]
+  ? [B] extends [A]
+    ? true
+    : false
+  : false;
+
+/** The token lists live in `librechat-data-provider` so the server validates against the same
+ *  set; these fail the build when the client types drift from them. */
+export type SharedTokensMatchTypes = [
+  Assert<SameKeys<ThemeColorToken, keyof IThemeRGB>>,
+  Assert<SameKeys<ThemeAppearanceToken, keyof IThemeAppearance>>,
+  Assert<SameKeys<ThemeBrandToken, keyof IThemeBrands>>,
+];
+
+export const themeColorTokens: readonly (keyof IThemeRGB)[] = sharedColorTokens;
+
+const colorTokenSet: ReadonlySet<string> = new Set<string>(themeColorTokens);
 
 /**
  * What the verified mark is measured against: the fill it wore before it had a
@@ -61,6 +91,36 @@ export function controlBorderFallback(colors: IThemeRGB): string | undefined {
   return colors['rgb-border-light'] ?? colors['rgb-border-medium'];
 }
 
+/**
+ * The pressed fills for a theme that predates them. A pointer press lands on a
+ * hovered control, so the press showed the hover fill; a theme that painted a
+ * hover keeps it for the press, and one that names a pressed fill keeps it.
+ */
+export function pressedFallbacks(colors: IThemeRGB): IThemeRGB {
+  const pressed = colors['rgb-surface-pressed'] ?? colors['rgb-surface-hover'];
+  const inverted = colors['rgb-surface-inverted-pressed'] ?? colors['rgb-surface-inverted-hover'];
+  return {
+    ...(pressed !== undefined ? { 'rgb-surface-pressed': pressed } : {}),
+    ...(inverted !== undefined ? { 'rgb-surface-inverted-pressed': inverted } : {}),
+  };
+}
+
+/**
+ * The focus roles for a stored or environment theme that predates them. The
+ * global outline followed a theme's `rgb-ring-primary` whenever it named one,
+ * and the shared primitives drew their ring in `rgb-text-primary`, so a theme
+ * that painted either keeps that focus color. A theme that painted neither
+ * keeps the bundled roles, and one that names a role keeps it as written.
+ */
+export function focusFallbacks(colors: IThemeRGB): IThemeRGB {
+  const outline = colors['rgb-focus-outline'] ?? colors['rgb-ring-primary'];
+  const control = colors['rgb-focus-control'] ?? colors['rgb-text-primary'];
+  return {
+    ...(outline !== undefined ? { 'rgb-focus-outline': outline } : {}),
+    ...(control !== undefined ? { 'rgb-focus-control': control } : {}),
+  };
+}
+
 export const themeAppearanceProperties: Readonly<
   Record<keyof IThemeAppearance, `--theme-${string}`>
 > = Object.freeze({
@@ -75,10 +135,31 @@ export const themeAppearanceProperties: Readonly<
   radius2xl: '--theme-radius-2xl',
   radius3xl: '--theme-radius-3xl',
   controlHeight: '--theme-control-height',
+  switchWidth: '--theme-switch-width',
+  switchHeight: '--theme-switch-height',
+  tableCellSpaceY: '--theme-table-cell-space-y',
+  tableRowStroke: '--theme-table-row-stroke',
   spaceCompact: '--theme-space-compact',
   spaceNormal: '--theme-space-normal',
+  disabledStyle: '--theme-disabled-style',
   fontFamily: '--theme-font-family',
   monoFontFamily: '--theme-mono-font-family',
+  displayFontFamily: '--theme-display-font-family',
+  textXs: '--theme-text-xs',
+  textSm: '--theme-text-sm',
+  textBase: '--theme-text-base',
+  textLg: '--theme-text-lg',
+  textXl: '--theme-text-xl',
+  text2xl: '--theme-text-2xl',
+  leadingXs: '--theme-text-xs-leading',
+  leadingSm: '--theme-text-sm-leading',
+  leadingBase: '--theme-text-base-leading',
+  leadingLg: '--theme-text-lg-leading',
+  leadingXl: '--theme-text-xl-leading',
+  leading2xl: '--theme-text-2xl-leading',
+  scrimOpacity: '--theme-scrim-opacity',
+  alertScrimOpacity: '--theme-alert-scrim-opacity',
+  modalScrimOpacity: '--theme-modal-scrim-opacity',
   elevationSurface: '--theme-elevation-surface',
   shadow2xs: '--theme-shadow-2xs',
   shadowXs: '--theme-shadow-xs',
@@ -103,11 +184,31 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   radius2xl: '1rem',
   radius3xl: '1.5rem',
   controlHeight: '2.25rem',
+  ...defaultSwitchSize,
+  tableCellSpaceY: '1rem',
+  tableRowStroke: '0px',
   spaceCompact: '0.375rem',
   spaceNormal: '0.75rem',
+  disabledStyle: 'dim',
   fontFamily: 'Inter, sans-serif',
   monoFontFamily:
     "'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, 'Cascadia Mono', 'Liberation Mono', Consolas, monospace",
+  displayFontFamily: 'Inter, sans-serif',
+  textXs: '0.75rem',
+  textSm: '0.875rem',
+  textBase: '1rem',
+  textLg: '1.125rem',
+  textXl: '1.25rem',
+  text2xl: '1.5rem',
+  leadingXs: 'calc(1 / 0.75)',
+  leadingSm: 'calc(1.25 / 0.875)',
+  leadingBase: 'calc(1.5 / 1)',
+  leadingLg: 'calc(1.75 / 1.125)',
+  leadingXl: 'calc(1.75 / 1.25)',
+  leading2xl: 'calc(2 / 1.5)',
+  scrimOpacity: '0.8',
+  alertScrimOpacity: '0.9',
+  modalScrimOpacity: '0.65',
   elevationSurface: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
   shadow2xs: '0 1px rgb(0 0 0 / 0.05)',
   shadowXs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
@@ -120,15 +221,7 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   motionNormal: '200ms',
 });
 
-export const themeBrandTokens: readonly (keyof IThemeBrands)[] = Object.freeze([
-  'provider-openai',
-  'provider-openai-gpt4',
-  'provider-openai-reasoning',
-  'provider-anthropic',
-  'provider-azure',
-  'provider-bedrock',
-  'provider-foreground',
-]);
+export const themeBrandTokens: readonly (keyof IThemeBrands)[] = sharedBrandTokens;
 
 export const defaultBrands: IThemeBrands = Object.freeze({
   'provider-openai': '#19C37D',
@@ -195,295 +288,20 @@ export const highContrastTheme: ThemeDefinition = Object.freeze({
   },
 });
 
-const rgbPattern = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/;
-const cssLengthPattern = /^(0|\d*\.?\d+(px|rem|em))$/;
-const cssLengthDifferencePattern =
-  /^calc\(\s*\d*\.?\d+(px|rem|em)\s+[-+]\s+\d*\.?\d+(px|rem|em)\s*\)$/;
-const cssDurationPattern = /^\d*\.?\d+(ms|s)$/;
-const hexColorPattern = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-const shadowLengthPattern = /^(-?(0|\d*\.?\d+[a-z]+)|(calc|min|max|clamp)\(.*\))$/i;
-const shadowColorPattern = /^(#[0-9a-f]{3,8}|[a-z]+|[a-z-]+\(.*\))$/i;
 /** Tailwind composes `--tw-shadow` into one list with the ring layers, where `none` is invalid. */
 const disabledShadow = '0 0 #0000';
 
-function isLinearGradient(value: string): boolean {
-  if (!value.startsWith('linear-gradient(') || /url\s*\(|image-set/i.test(value)) {
-    return false;
-  }
-  let depth = 0;
-  for (let i = 0; i < value.length; i++) {
-    const char = value[i];
-    if (char === '(') {
-      depth += 1;
-    } else if (char === ')') {
-      depth -= 1;
-      if (depth === 0) {
-        return i === value.length - 1;
-      }
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return false;
-}
+/** The client may be older than the server whose theme it paints, so it ignores color roles it
+ *  predates the way it already ignores appearance keys. */
+const clientReader = { ignoreFutureColors: true } as const;
 
-const isRGB = (value: unknown): value is string => {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  const match = value.match(rgbPattern);
-  return match !== null && match.slice(1).every((channel) => Number(channel) <= 255);
-};
-
-/** The bare form, or one `calc()` of two unit-bearing lengths (a bare `0` is a number there):
- *  the small radius defaults keep a px offset. */
-const isLength = (value: unknown): value is string =>
-  typeof value === 'string' &&
-  (cssLengthPattern.test(value) || cssLengthDifferencePattern.test(value));
-const isFontFamily = (value: unknown): value is string =>
-  typeof value === 'string' && value.trim().length > 0 && !/[;{}]/.test(value);
-/** Splits on `separator` outside parentheses, so `rgb(0, 0, 0)` stays one part. Empty parts are
- *  kept, so a stray comma stays visible to the caller. */
-function splitTopLevel(value: string, separator: RegExp): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const char of value) {
-    if (char === '(') {
-      depth += 1;
-    } else if (char === ')') {
-      depth -= 1;
-    }
-    if (depth === 0 && separator.test(char)) {
-      parts.push(current);
-      current = '';
-      continue;
-    }
-    current += char;
-  }
-  parts.push(current);
-  return parts.map((part) => part.trim());
-}
-
-/** A named color is indistinguishable from any other word without the browser's color parser. */
-const isShadowColor = (token: string): boolean =>
-  globalThis.CSS?.supports?.('color', token) ?? shadowColorPattern.test(token);
-
-/** One layer: two to four lengths, optionally `inset` and one color, per the box-shadow grammar. */
-function isShadowLayer(layer: string): boolean {
-  const tokens = splitTopLevel(layer, /\s/).filter((token) => token.length > 0);
-  const lengths = tokens.filter((token) => shadowLengthPattern.test(token)).length;
-  const insets = tokens.filter((token) => token.toLowerCase() === 'inset').length;
-  const colors = tokens.filter(
-    (token) => !shadowLengthPattern.test(token) && token.toLowerCase() !== 'inset',
-  );
-  return (
-    lengths >= 2 && lengths <= 4 && insets <= 1 && colors.length <= 1 && colors.every(isShadowColor)
-  );
-}
-
-/**
- * A shadow must be concrete: a browser defers its check of any value holding `var()`, `env()` or
- * `attr()` until substitution, so such a value could never be validated before it reaches the
- * ring layers.
- */
-const isShadow = (value: unknown): value is string => {
-  if (typeof value !== 'string' || /[;{}]|url\s*\(|(var|env|attr)\s*\(/i.test(value)) {
-    return false;
-  }
-  if (value.trim().toLowerCase() === 'none') {
-    return true;
-  }
-  const layers = splitTopLevel(value, /,/);
-  if (layers.some((layer) => layer.length === 0) || !layers.every(isShadowLayer)) {
-    return false;
-  }
-  return globalThis.CSS?.supports?.('box-shadow', value) ?? true;
-};
-const isDuration = (value: unknown): value is string =>
-  typeof value === 'string' && cssDurationPattern.test(value);
-
-const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false;
-  }
-  try {
-    const prototype = Object.getPrototypeOf(value);
-    return prototype === null || prototype.constructor?.name === 'Object';
-  } catch {
-    return false;
-  }
-};
-
-const appearanceValidators: Record<keyof IThemeAppearance, (value: unknown) => boolean> = {
-  controlRadius: isLength,
-  roundControlRadius: isLength,
-  surfaceRadius: isLength,
-  largeSurfaceRadius: isLength,
-  radiusSm: isLength,
-  radiusMd: isLength,
-  radiusLg: isLength,
-  radiusXl: isLength,
-  radius2xl: isLength,
-  radius3xl: isLength,
-  controlHeight: isLength,
-  spaceCompact: isLength,
-  spaceNormal: isLength,
-  fontFamily: isFontFamily,
-  monoFontFamily: isFontFamily,
-  /** Released themes may hold `var()` here, so this role keeps its original, looser check. */
-  elevationSurface: (value) =>
-    typeof value === 'string' && value.trim().length > 0 && !/[;{}]|url\s*\(/i.test(value),
-  shadow2xs: isShadow,
-  shadowXs: isShadow,
-  shadowSm: isShadow,
-  shadowMd: isShadow,
-  shadowLg: isShadow,
-  shadowXl: isShadow,
-  shadow2xl: isShadow,
-  motionFast: isDuration,
-  motionNormal: isDuration,
-};
-
-const isAppearanceKey = (key: string): key is keyof IThemeAppearance =>
-  Object.prototype.hasOwnProperty.call(appearanceValidators, key);
-
-/**
- * A token added after this reader shipped is ignored rather than rejected, so a newer definition
- * degrades to the defaults for what this version cannot paint instead of losing every value it
- * can. It never reaches the DOM, but it must still look like a token: a camelCase name and a
- * plain CSS value, never a declaration or rule break.
- */
-const isFutureAppearance = (key: string, value: unknown): boolean =>
-  /^[a-z][a-zA-Z0-9]*$/.test(key) && typeof value === 'string' && !/[;{}<>]|url\s*\(/i.test(value);
-
-/** The appearance tokens this reader does not know, which `resolveTheme` leaves out. */
+/** The color and appearance tokens this reader does not know, which `resolveTheme` leaves out. */
 export function collectThemeWarnings(theme: ThemeDefinition): string[] {
-  if (!isPlainRecord(theme) || !isPlainRecord(theme.modes)) {
-    return [];
-  }
-  return (['light', 'dark'] as const).flatMap((mode) => {
-    const appearance: unknown = isPlainRecord(theme.modes[mode])
-      ? theme.modes[mode]?.appearance
-      : undefined;
-    if (!isPlainRecord(appearance)) {
-      return [];
-    }
-    return Object.keys(appearance)
-      .filter((key) => !isAppearanceKey(key))
-      .map((key) => `Unknown ${mode} appearance token ignored: ${key}`);
-  });
-}
-
-/** Shared by the theme-wide `brands` and each mode's override block. */
-function collectBrandErrors(brands: unknown): string[] {
-  if (!isPlainRecord(brands)) {
-    return [];
-  }
-
-  return Object.entries(brands).flatMap(([key, value]) => {
-    if (!themeBrandTokens.includes(key as keyof IThemeBrands)) {
-      return [`Unknown brand token: ${key}`];
-    }
-    /** Only the glyph is a flat colour; a fill may also be a gradient. */
-    const isColorOnly = key === 'provider-foreground';
-    const isValidBrand =
-      typeof value === 'string' &&
-      (isColorOnly
-        ? hexColorPattern.test(value)
-        : hexColorPattern.test(value) || isLinearGradient(value));
-    return value !== undefined && !isValidBrand ? [`Invalid brand value for ${key}: ${value}`] : [];
-  });
+  return collectThemeWarningIssues(theme, clientReader).map(({ message }) => message);
 }
 
 export function validateThemeDefinition(theme: ThemeDefinition): string[] {
-  const errors: string[] = [];
-
-  if (!isPlainRecord(theme)) {
-    return ['Theme definition must be an object'];
-  }
-
-  Object.keys(theme).forEach((key) => {
-    if (key !== 'version' && key !== 'name' && key !== 'modes' && key !== 'brands') {
-      errors.push(`Unknown theme field: ${key}`);
-    }
-  });
-
-  if (theme.version !== THEME_VERSION) {
-    errors.push(`Unsupported theme version: ${theme.version}`);
-  }
-  if (typeof theme.name !== 'string' || !theme.name.trim()) {
-    errors.push('Theme name is required');
-  }
-  if (!isPlainRecord(theme.modes)) {
-    errors.push('Theme modes must be an object');
-    return errors;
-  }
-
-  Object.keys(theme.modes).forEach((mode) => {
-    if (mode !== 'light' && mode !== 'dark') {
-      errors.push(`Unknown theme mode: ${mode}`);
-    }
-  });
-
-  (['light', 'dark'] as const).forEach((mode) => {
-    const definition = theme.modes[mode];
-    if (definition === undefined) {
-      return;
-    }
-
-    if (!isPlainRecord(definition)) {
-      errors.push(`Theme mode ${mode} must be an object`);
-      return;
-    }
-
-    Object.keys(definition).forEach((key) => {
-      if (key !== 'colors' && key !== 'appearance' && key !== 'brands') {
-        errors.push(`Unknown ${mode} theme field: ${key}`);
-      }
-    });
-
-    if (definition.colors !== undefined && !isPlainRecord(definition.colors)) {
-      errors.push(`Theme colors for ${mode} must be an object`);
-    } else {
-      Object.entries(definition.colors ?? {}).forEach(([key, value]) => {
-        if (!themeColorTokens.includes(key as keyof IThemeRGB)) {
-          errors.push(`Unknown color token: ${key}`);
-          return;
-        }
-        if (value !== undefined && !isRGB(value)) {
-          errors.push(`Invalid RGB value for ${key}: ${value}`);
-        }
-      });
-    }
-
-    if (definition.appearance !== undefined && !isPlainRecord(definition.appearance)) {
-      errors.push(`Theme appearance for ${mode} must be an object`);
-    } else {
-      Object.entries(definition.appearance ?? {}).forEach(([key, value]) => {
-        const isKnown = isAppearanceKey(key);
-        const isValid = isKnown ? appearanceValidators[key](value) : isFutureAppearance(key, value);
-        if (value !== undefined && !isValid) {
-          errors.push(`Invalid appearance value for ${key}: ${value}`);
-        }
-      });
-    }
-
-    if (definition.brands !== undefined && !isPlainRecord(definition.brands)) {
-      errors.push(`Theme brands for ${mode} must be an object`);
-    } else {
-      errors.push(...collectBrandErrors(definition.brands));
-    }
-  });
-
-  if (theme.brands !== undefined && !isPlainRecord(theme.brands)) {
-    errors.push('Theme brands must be an object');
-  } else {
-    errors.push(...collectBrandErrors(theme.brands));
-  }
-
-  return errors;
+  return collectThemeIssues(theme, clientReader).map(({ message }) => message);
 }
 
 /**
@@ -501,9 +319,19 @@ function definedEntries<T extends object>(values?: Partial<T>): Partial<T> {
   ) as Partial<T>;
 }
 
+/** A color role this reader predates passed validation as a warning; it never reaches the DOM. */
+function knownColors(colors?: IThemeRGB): IThemeRGB | undefined {
+  if (!colors) {
+    return colors;
+  }
+  return Object.fromEntries(
+    Object.entries(colors).filter(([key]) => colorTokenSet.has(key)),
+  ) as IThemeRGB;
+}
+
 function knownAppearance(appearance?: Partial<IThemeAppearance>): Partial<IThemeAppearance> {
   return Object.fromEntries(
-    Object.entries(definedEntries(appearance)).filter(([key]) => isAppearanceKey(key)),
+    Object.entries(definedEntries(appearance)).filter(([key]) => isThemeAppearanceToken(key)),
   );
 }
 
@@ -526,6 +354,19 @@ function withComposableShadows(appearance: IThemeAppearance): IThemeAppearance {
   );
 }
 
+/**
+ * Headings drew the UI family before the display role existed, so a theme that
+ * names its own `fontFamily` and no display family keeps its headings in it.
+ */
+function withDisplayFamily(appearance?: Partial<IThemeAppearance>): IThemeAppearance {
+  const known = knownAppearance(appearance);
+  const display =
+    known.displayFontFamily === undefined && known.fontFamily !== undefined
+      ? { displayFontFamily: known.fontFamily }
+      : {};
+  return { ...defaultAppearance, ...known, ...display };
+}
+
 export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedThemeDefinition {
   const errors = validateThemeDefinition(theme);
   if (errors.length > 0) {
@@ -534,7 +375,7 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
 
   const baseColors = mode === 'dark' ? darkTheme : defaultTheme;
   const definition = theme.modes[mode];
-  const customColors = definition?.colors;
+  const customColors = knownColors(definition?.colors);
   const composerHoverFallback =
     customColors?.['rgb-surface-composer-hover'] === undefined &&
     customColors?.['rgb-surface-hover'] !== undefined
@@ -585,10 +426,43 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors?.['rgb-text-tertiary'] !== undefined
       ? { 'rgb-text-muted': customColors['rgb-text-tertiary'] }
       : {};
+  /**
+   * Markdown links read `link` in light and `text-primary` in dark before they
+   * had a role, so a theme that names neither prose role keeps whichever of
+   * those it painted, its own link colour first.
+   */
+  const proseLinkSource =
+    customColors?.['rgb-link'] ??
+    (mode === 'dark' ? customColors?.['rgb-text-primary'] : undefined);
+  const proseLinkFallback =
+    customColors?.['rgb-link-prose'] === undefined && proseLinkSource !== undefined
+      ? { 'rgb-link-prose': proseLinkSource }
+      : {};
   const chartWidgetSurfaceFallback =
     customColors?.['rgb-chart-widget-surface'] === undefined &&
     customColors?.['rgb-surface-primary'] !== undefined
       ? { 'rgb-chart-widget-surface': customColors['rgb-surface-primary'] }
+      : {};
+  /**
+   * The thumb was painted `surface-primary` before it had a role, so a theme that repaints that
+   * surface keeps the knob it drew against its tracks.
+   */
+  const switchThumbFallback =
+    customColors?.['rgb-switch-thumb'] === undefined &&
+    customColors?.['rgb-surface-primary'] !== undefined
+      ? { 'rgb-switch-thumb': customColors['rgb-surface-primary'] }
+      : {};
+  /** Table column names were `text-secondary` before they had a role. */
+  const tableHeaderTextFallback =
+    customColors?.['rgb-table-header-text'] === undefined &&
+    customColors?.['rgb-text-secondary'] !== undefined
+      ? { 'rgb-table-header-text': customColors['rgb-text-secondary'] }
+      : {};
+  /** Self-sticking table headers were the dialog surface before they had a role. */
+  const tableHeaderFillFallback =
+    customColors?.['rgb-table-header-fill'] === undefined &&
+    customColors?.['rgb-surface-dialog'] !== undefined
+      ? { 'rgb-table-header-fill': customColors['rgb-surface-dialog'] }
       : {};
   const chartWidgetStrokeFallback =
     customColors?.['rgb-chart-widget-stroke'] === undefined &&
@@ -599,6 +473,8 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors != null ? controlBorderFallback(customColors) : undefined;
   const borderControlFallback =
     borderControlSource !== undefined ? { 'rgb-border-control': borderControlSource } : {};
+  const focusFallback = customColors != null ? focusFallbacks(customColors) : {};
+  const pressedFallback = customColors != null ? pressedFallbacks(customColors) : {};
   /**
    * Slot 8 arrived after the seven-slot scale shipped, so a stored or
    * environment theme that paints its own scale cannot name it. Filling the
@@ -656,16 +532,19 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...composerHoverFallback,
       ...shimmerBaseFallback,
       ...textMutedFallback,
+      ...proseLinkFallback,
       ...chartWidgetSurfaceFallback,
       ...chartWidgetStrokeFallback,
+      ...switchThumbFallback,
+      ...tableHeaderTextFallback,
+      ...tableHeaderFillFallback,
       ...borderControlFallback,
+      ...focusFallback,
+      ...pressedFallback,
       ...seriesEightFallback,
       ...verifiedFallback,
     } as Required<IThemeRGB>,
-    appearance: withComposableShadows({
-      ...defaultAppearance,
-      ...knownAppearance(definition?.appearance),
-    }),
+    appearance: withComposableShadows(withDisplayFamily(definition?.appearance)),
     /** Mode last: a mode override is more specific than the theme-wide set. */
     brands: {
       ...defaultBrands,
@@ -679,7 +558,7 @@ export function fromLegacyTheme(colors: IThemeRGB, name = 'custom'): ThemeDefini
   const legacyName = name.trim() || 'custom';
   const sanitizedColors = themeColorTokens.reduce<IThemeRGB>((result, token) => {
     const value = colors[token];
-    if (isRGB(value)) {
+    if (isThemeRGB(value)) {
       result[token] = value;
     }
     return result;

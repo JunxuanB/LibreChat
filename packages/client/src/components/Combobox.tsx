@@ -13,8 +13,8 @@ import {
 import type { OptionWithIcon } from '~/common';
 import { SelectTrigger, SelectValue, SelectScrollDownButton } from './Select';
 import { useNestedPopoverStyle } from './OriginalDialog';
+import { cn, disabledInkClasses } from '~/utils';
 import { useCombobox } from '~/hooks';
-import { cn } from '~/utils';
 
 export default function ComboboxComponent({
   selectedValue,
@@ -84,7 +84,7 @@ export default function ComboboxComponent({
             isCollapsed
               ? 'flex h-9 w-9 shrink-0 items-center justify-center p-0 [&>span]:w-auto [&>svg]:hidden'
               : '',
-            'bg-surface-secondary text-text-primary hover:bg-surface-hover focus-visible:ring-text-primary focus-visible:ring-2',
+            'bg-surface-secondary text-text-primary hover:bg-surface-hover focus-visible:ring-focus-control focus-visible:ring-2',
           )}
         >
           <SelectValue placeholder={selectPlaceholder}>
@@ -145,6 +145,7 @@ export default function ComboboxComponent({
                     <ComboboxItem
                       className={cn(
                         'focus:bg-surface-hover focus:text-text-primary relative flex w-full cursor-pointer items-center rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+                        disabledInkClasses,
                         'hover:bg-surface-hover rounded-lg',
                       )}
                       /** Hacky fix for radix-ui Android issue: https://github.com/radix-ui/primitives/issues/1658  */
