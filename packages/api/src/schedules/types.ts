@@ -337,6 +337,8 @@ export type ScheduleMCPPreflight = (
     scheduleId?: string;
     /** Only a disabled row being explicitly activated may probe its already-enrolled grant. */
     activationPreflight?: boolean;
+    /** Resume admission checks existing OBO targets even after enrollment policy removal. */
+    oboOnly?: boolean;
     inspectOboTarget?: {
       serverName: string;
       onSelected: (config: import('../mcp/types').ParsedServerConfig) => Promise<void>;

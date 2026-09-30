@@ -52,6 +52,7 @@ import { createConcurrencyLimiter } from '../utils/promise';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
 import { OpenIDReauthRequiredError } from '../utils/oidc';
 import { resolveReachableGraph } from '../agents/edges';
+import { resolveScheduledOboServer } from './target';
 import { formatMCPServerTools } from '../mcp/tools';
 import { checkAccess } from '../middleware/access';
 import { detachOnAbort } from '../utils/promises';
@@ -543,11 +544,16 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
     const effectiveConfig = await loadAppConfig();
     const rawConfig = effectiveConfig?.mcpConfig ?? {};
     const configNames = Object.keys(rawConfig);
-    const candidateNames = Array.from(new Set([...configNames, ...serverHints]));
+    const resumeServers = options.oboOnly
+      ? await deps.getServerConfigs(user.id, {}, user.role)
+      : undefined;
+    const candidateNames = Array.from(
+      new Set([...configNames, ...Object.keys(resumeServers ?? {}), ...serverHints]),
+    );
     // Authoritative config names claim normalized aliases before persisted hints.
     // A hint is often already normalized (for example `Sales_Force` for the real
     // config name `Sales Force`) and must not shadow that registry identity.
-    const aliases = buildServerNameAliases(configNames);
+    const aliases = buildServerNameAliases([...configNames, ...Object.keys(resumeServers ?? {})]);
     for (const hint of serverHints) {
       if (!aliases.has(hint)) aliases.set(hint, hint);
       const normalized = normalizeServerName(hint);
@@ -566,6 +572,8 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
         const [, name] = splitMCPToolKey(tool, candidates);
         if (!name) continue;
         const server = exactNames.has(name) ? name : (nameAliases.get(name) ?? name);
+        const resumeServer = resumeServers?.[server] ?? rawConfig[server];
+        if (options.oboOnly && resumeServer && !resumeServer.obo) continue;
         const owners = serverAgentIds.get(server) ?? new Set<string>();
         owners.add(toolAgentId);
         serverAgentIds.set(server, owners);
@@ -586,7 +594,7 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
     let { selected, serverAgentIds, toolAgentIds } = collectSelected(
       candidateNames,
       aliases,
-      new Set(configNames),
+      new Set([...configNames, ...Object.keys(resumeServers ?? {})]),
     );
     const outcomesForOwners = (
       server: string,
@@ -605,6 +613,7 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
         ...(ownerId !== agentId ? { agentId: ownerId } : {}),
       }));
     };
+    if (options.oboOnly && selected.size === 0) return [];
     const capabilities = effectiveConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities ?? [];
     if (!capabilities.includes(AgentCapabilities.tools)) {
       throw new ScheduleMCPError(
@@ -630,7 +639,8 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
     // Resolve once more against the ACL-filtered registry before initializing config.
     // Exact accessible identities must beat normalized aliases from another tier, just
     // as they do in the interactive runtime.
-    const accessibleServers = await deps.getServerConfigs(user.id, {}, user.role);
+    const accessibleServers =
+      resumeServers ?? (await deps.getServerConfigs(user.id, {}, user.role));
     const authoritativeNames = Array.from(
       new Set([...Object.keys(accessibleServers), ...configNames]),
     );
@@ -668,6 +678,16 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
     const shadowed = findShadowedServerNames(
       Array.from(new Set([...configNames, ...Object.keys(servers)])),
     );
+    throwIfAborted();
+    const auth = await getPluginAuthMap({
+      userId: user.id,
+      pluginKeys: (options.inspectOboTarget
+        ? [options.inspectOboTarget.serverName]
+        : [...selected.keys()]
+      ).map((server) => `${Constants.mcp_prefix}${server}`),
+      throwError: true,
+      findPluginAuthsByKeys: deps.findPluginAuthsByKeys,
+    });
     if (options.inspectOboTarget) {
       const { serverName, onSelected } = options.inspectOboTarget;
       const server = servers[serverName];
@@ -679,16 +699,11 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
       ) {
         throw new ScheduleMCPError([{ server: serverName, status: 'mcp_configuration_missing' }]);
       }
-      await onSelected(server);
+      await onSelected(
+        resolveScheduledOboServer(server, user, auth[`${Constants.mcp_prefix}${serverName}`]),
+      );
       return [{ server: serverName, status: 'ready' }];
     }
-    throwIfAborted();
-    const auth = await getPluginAuthMap({
-      userId: user.id,
-      pluginKeys: [...selected.keys()].map((server) => `${Constants.mcp_prefix}${server}`),
-      throwError: true,
-      findPluginAuthsByKeys: deps.findPluginAuthsByKeys,
-    });
     const upstreamTokenProviderResolver = bindUpstreamTokenProviderResolver(
       user,
       deps.resolveUpstreamTokenProvider,
@@ -719,6 +734,7 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
               try {
                 throwIfAborted();
                 const serverConfig = servers[server];
+                if (options.oboOnly && serverConfig && !serverConfig.obo) return [];
                 const customUserVars = auth[`${Constants.mcp_prefix}${server}`];
                 if (
                   !serverConfig ||

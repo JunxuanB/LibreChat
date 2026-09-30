@@ -1,10 +1,11 @@
-import { Permissions, PermissionTypes } from 'librechat-data-provider';
 import { logger, getTenantId, isRuntimeDisabled } from '@librechat/data-schemas';
+import { Constants, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type {
   IUser,
   TokenMethods,
   AppConfig,
   ScheduledOboGrantMethods,
+  PluginAuthMethods,
 } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { SessionOpenIDTokens } from '../auth/openid/types';
@@ -26,7 +27,10 @@ import {
 } from '../mcp/oauth/tokens';
 import { OboTokenResolutionError, isRetryableOboExchangeError } from '../mcp/oauth/obo';
 import { getAppConfigOptionsFromUser } from '../app/service';
+import { resolveScheduledOboServer } from './target';
 import { checkAccess } from '../middleware/access';
+import { hasScheduledOboScopes } from './provider';
+import { getPluginAuthMap } from '../agents/auth';
 import { isEnabled } from '../utils/common';
 import { ScheduleMCPError } from './mcp';
 
@@ -52,7 +56,7 @@ interface GrantProvider {
   tokenEndpoint: string;
   authorizationEndpoint: string;
   exchange: (assertion: string, scopes: string) => Promise<GrantResponse>;
-  refresh: (refreshToken: string, scopes: string) => Promise<GrantResponse>;
+  refresh: (refreshToken: string, scopes: string, signal?: AbortSignal) => Promise<GrantResponse>;
 }
 interface GrantResponse {
   access_token?: string;
@@ -84,6 +88,7 @@ interface GrantDeps {
     config: Record<string, ParsedServerConfig>,
     role?: string,
   ) => Promise<Record<string, ParsedServerConfig>>;
+  findPluginAuthsByKeys: PluginAuthMethods['findPluginAuthsByKeys'];
   getRoleByName: Parameters<typeof checkAccess>[0]['getRoleByName'];
   agentAccess: (agentId: string, user: IUser) => Promise<'ok' | 'missing' | 'forbidden'>;
   getOpenIdConfig: () => OpenIdConfig | null;
@@ -91,6 +96,7 @@ interface GrantDeps {
     config: OpenIdConfig,
     grantType: string,
     parameters: Record<string, string>,
+    signal?: AbortSignal,
   ) => Promise<GrantResponse>;
   inspect?: (
     agentId: string,
@@ -250,8 +256,13 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           assertion,
           requested_token_use: 'on_behalf_of',
         }),
-      refresh: (refreshToken, scopes) =>
-        deps.requestGrant(config, 'refresh_token', { refresh_token: refreshToken, scope: scopes }),
+      refresh: (refreshToken, scopes, signal) =>
+        deps.requestGrant(
+          config,
+          'refresh_token',
+          { refresh_token: refreshToken, scope: scopes },
+          signal,
+        ),
     };
   };
 
@@ -263,7 +274,17 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     if (!appConfig) throw new Error('Principal MCP configuration is unavailable');
     const raw = appConfig.mcpConfig?.[name];
     const parsed = raw ? await deps.ensureConfigServers({ [name]: raw }) : {};
-    return (await deps.getServerConfigs(user.id, parsed, user.role))[name];
+    const server = (await deps.getServerConfigs(user.id, parsed, user.role))[name];
+    if (!server) return undefined;
+    if (!server.customUserVars && !server.url?.includes('{{'))
+      return resolveScheduledOboServer(server, user);
+    const key = `${Constants.mcp_prefix}${name}`;
+    const auth = await getPluginAuthMap({
+      userId: user.id,
+      pluginKeys: [key],
+      findPluginAuthsByKeys: deps.findPluginAuthsByKeys,
+    });
+    return resolveScheduledOboServer(server, user, auth[key]);
   };
 
   const validate = async (
@@ -448,7 +469,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     }
     const refreshTokens: NonNullable<
       Parameters<typeof deps.tokenStorage.getTokens>[0]['refreshTokens']
-    > = async (secret, stored) => {
+    > = async (secret, stored, signal) => {
       if (
         stored.storedServerUrl !== target.url ||
         stored.storedTokenEndpoint !== provider.tokenEndpoint ||
@@ -459,7 +480,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         throw new ReauthenticationRequiredError(key, 'binding');
       let next: GrantResponse;
       try {
-        next = await provider.refresh(secret, target.scopes);
+        next = await provider.refresh(secret, target.scopes, signal);
       } catch (error) {
         if (isRetryableOboExchangeError(error))
           throw new MCPTokenRefreshUnavailableError(key, error);
@@ -483,6 +504,28 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             code === 'invalid_client' ? 'invalid_client' : 'expired',
           );
         throw error;
+      }
+      signal?.throwIfAborted();
+      if (!hasScheduledOboScopes(next.scope, target.scopes)) {
+        // The provider may have consumed a rotating refresh token. Retire only
+        // this generation so retries cannot replay it or erase a new enrollment.
+        const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
+        if (!lease)
+          throw new MCPTokenRefreshUnavailableError(
+            key,
+            new Error('Grant retirement fence unavailable'),
+          );
+        try {
+          const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          await tokens.deleteTokens({
+            userId,
+            identifier: new RegExp(`^${escaped}(?::refresh|:client)?$`),
+            metadataCredentialSetId: generation,
+          });
+        } finally {
+          await lease.release();
+        }
+        throw new ReauthenticationRequiredError(key, 'expired');
       }
       if (!next.access_token)
         throw new MCPTokenRefreshUnavailableError(key, new Error('No access token'));
@@ -634,7 +677,12 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           throw new MCPTokenRefreshUnavailableError(key, error);
         throw missingGrant();
       }
-      if (!response.access_token || !response.refresh_token) throw missingGrant();
+      if (
+        !response.access_token ||
+        !response.refresh_token ||
+        !hasScheduledOboScopes(response.scope, target.scopes)
+      )
+        throw missingGrant();
       let expiresIn: number;
       try {
         expiresIn = expiresInSeconds(response);

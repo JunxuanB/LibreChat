@@ -842,7 +842,7 @@ describe('in-flight run projection', () => {
     });
   });
 
-  it('keeps ordinary schedules visible when the grant-name lookup is unavailable', async () => {
+  it('returns a retryable non-success when grant names are unavailable, never partial data', async () => {
     const deps = makeCreateDeps({
       listOboGrants: jest.fn(async () => {
         throw new Error('grant store offline');
@@ -855,10 +855,10 @@ describe('in-flight run projection', () => {
       { user: { id: 'user-1' } } as unknown as ServerRequest,
       res,
     );
-    expect(captured.body).toMatchObject({
-      schedules: [expect.objectContaining({ id: 'sched-1' })],
-    });
-    expect(captured.body).not.toHaveProperty('oboGrants');
+    expect(captured.status).toBe(503);
+    expect(captured.body).toMatchObject({ code: 'schedule_obo_unavailable' });
+    expect(captured.body).not.toHaveProperty('schedules');
+    expect(JSON.stringify(captured.body)).not.toContain('grant store offline');
   });
 
   it('asks only for generating occurrences, never the parked ones', async () => {

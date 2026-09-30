@@ -1107,52 +1107,55 @@ describe('isScheduleLive policy recheck', () => {
     }
   });
 
-  it('checks scheduled OBO readiness again after an approval pause', async () => {
-    const service = makeService(
-      jest.fn<Promise<ActiveRun[]>, [string]>().mockResolvedValue([]),
-      jest.fn(async () => ({
-        interfaceConfig: {
-          schedules: {
-            use: true,
-            oboServers: ['Files'],
+  it.each([['Files'], [], undefined])(
+    'checks OBO readiness after approval with enrollment policy %j',
+    async (oboServers) => {
+      const service = makeService(
+        jest.fn<Promise<ActiveRun[]>, [string]>().mockResolvedValue([]),
+        jest.fn(async () => ({
+          interfaceConfig: {
+            schedules: {
+              use: true,
+              oboServers,
+            },
           },
-        },
-      })) as unknown as SchedulesServiceDeps['getAppConfig'],
-    );
-    const methods = service.engineDeps.methods as unknown as {
-      getScheduleById: jest.Mock;
-      getRoleByName: jest.Mock;
-    };
-    methods.getScheduleById = jest.fn(async () => ({
-      id: 's1',
-      user: 'u1',
-      agent_id: 'root',
-      enabled: true,
-    }));
-    methods.getRoleByName = jest.fn(async () => ({
-      permissions: { SCHEDULES: { USE: true } },
-    }));
-    (service.engineDeps as unknown as { getUserContext: jest.Mock }).getUserContext = jest.fn(
-      async () => ({ id: 'u1', role: 'USER' }),
-    );
-    const preflight = service.engineDeps.preflightMCP as jest.Mock;
-    await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(true);
-    expect(preflight).toHaveBeenCalledWith(
-      'root',
-      expect.objectContaining({ id: 'u1' }),
-      expect.objectContaining({ scheduleId: 's1' }),
-    );
-    preflight.mockRejectedValueOnce(
-      new ScheduleMCPError([
-        {
-          server: 'Files',
-          status: 'mcp_configuration_missing',
-          detail: 'unattended_auth_required',
-        },
-      ]),
-    );
-    await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(false);
-  });
+        })) as unknown as SchedulesServiceDeps['getAppConfig'],
+      );
+      const methods = service.engineDeps.methods as unknown as {
+        getScheduleById: jest.Mock;
+        getRoleByName: jest.Mock;
+      };
+      methods.getScheduleById = jest.fn(async () => ({
+        id: 's1',
+        user: 'u1',
+        agent_id: 'root',
+        enabled: true,
+      }));
+      methods.getRoleByName = jest.fn(async () => ({
+        permissions: { SCHEDULES: { USE: true } },
+      }));
+      (service.engineDeps as unknown as { getUserContext: jest.Mock }).getUserContext = jest.fn(
+        async () => ({ id: 'u1', role: 'USER' }),
+      );
+      const preflight = service.engineDeps.preflightMCP as jest.Mock;
+      await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(true);
+      expect(preflight).toHaveBeenCalledWith(
+        'root',
+        expect.objectContaining({ id: 'u1' }),
+        expect.objectContaining({ scheduleId: 's1' }),
+      );
+      preflight.mockRejectedValueOnce(
+        new ScheduleMCPError([
+          {
+            server: 'Files',
+            status: 'mcp_configuration_missing',
+            detail: 'unattended_auth_required',
+          },
+        ]),
+      );
+      await expect(service.isScheduleLive('s1', undefined, { policy: true })).resolves.toBe(false);
+    },
+  );
 
   it('refuses a resume when the owner lost SCHEDULES:USE', async () => {
     const service = makeService(jest.fn<Promise<ActiveRun[]>, [string]>().mockResolvedValue([]));

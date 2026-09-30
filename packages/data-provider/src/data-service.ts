@@ -1280,8 +1280,12 @@ export function runScheduleNow(id: string): Promise<sch.TScheduleRunNowResponse>
   return request.post(endpoints.runSchedule(id), {});
 }
 
-export function inspectScheduledObo(id: string, server: string): Promise<sch.TScheduledOboTarget> {
-  return request.get(endpoints.scheduledObo(id, server));
+export function inspectScheduledObo(
+  id: string,
+  server: string,
+  signal?: AbortSignal,
+): Promise<sch.TScheduledOboTarget> {
+  return request.get(endpoints.scheduledObo(id, server), { signal });
 }
 
 export function authorizeScheduledObo(

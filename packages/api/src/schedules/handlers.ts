@@ -582,21 +582,29 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
       deps.methods.getSchedulesByUser(user.id),
       deps.getLimits(user),
       deps.methods.getActiveRunsForUser(user.id, LISTED_RUN_STATUSES),
-      deps.listOboGrants(user.id).catch((error: unknown) => {
-        logger.warn('[schedules] unable to list stored OBO grant names', error);
-        return null;
-      }),
+      deps.listOboGrants(user.id).then(
+        (grants) => ({ ok: true as const, grants }),
+        () => ({ ok: false as const }),
+      ),
     ]);
+    if (!enrolled.ok) {
+      res.status(503).json({
+        code: 'schedule_obo_unavailable',
+        error: 'Scheduled authorization is unavailable. Retry shortly.',
+      });
+      return;
+    }
     const inFlightBySchedule_ = inFlightBySchedule(inFlight);
     const oboGrants: Record<string, string[]> = Object.create(null);
     const projected = schedules.map((schedule) => {
-      if (enrolled?.[schedule.id]?.length) oboGrants[schedule.id] = enrolled[schedule.id];
+      if (enrolled.grants[schedule.id]?.length)
+        oboGrants[schedule.id] = enrolled.grants[schedule.id];
       return toWireSchedule(schedule, limits, inFlightBySchedule_.get(schedule.id));
     });
     retryDeferredDeletions(user.id);
     res.json({
       schedules: projected,
-      ...(enrolled && { oboGrants }),
+      oboGrants,
       limits: {
         maxPerUser: limits.maxPerUser,
         // minIntervalMinutes ships with the list so the dialog can refuse a cadence

@@ -100,6 +100,7 @@ function setup(tools = ['search_mcp_docs']) {
         deadlineMs?: number;
         scheduleId?: string;
         activationPreflight?: boolean;
+        oboOnly?: boolean;
         inspectOboTarget?: {
           serverName: string;
           onSelected: (config: ParsedServerConfig) => Promise<void>;
@@ -189,6 +190,49 @@ it('allows disabled-grant reads only in the owner activation preflight context',
   expect(jest.mocked(deps.resolveUpstreamTokenProvider!).mock.lastCall?.[1]).not.toHaveProperty(
     'activationPreflight',
   );
+});
+
+it('resume preflight checks OBO targets without probing unrelated direct OAuth servers', async () => {
+  const { check, deps } = setup(['search_mcp_obo', 'search_mcp_direct']);
+  deps.getServerConfigs = jest.fn(async () => ({
+    obo: { ...server, obo: { scopes: 'read' } },
+    direct: server,
+  }));
+  await expect(check('agent', principal, { oboOnly: true })).resolves.toEqual([
+    { server: 'obo', status: 'ready' },
+  ]);
+  expect(deps.connect).toHaveBeenCalledTimes(1);
+  expect(deps.connect).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'obo' }));
+});
+
+it('does not add OBO resume checks to a direct-only schedule when MCP permission was revoked', async () => {
+  const { check, deps } = setup();
+  deps.getRoleByName = jest.fn(async () => ({ permissions: {} }) as IRole);
+  deps.getAppConfig = jest.fn(
+    async () =>
+      ({ endpoints: { agents: { capabilities: [] } } }) as Partial<AppConfig> as AppConfig,
+  );
+  await expect(check('agent', principal, { oboOnly: true })).resolves.toEqual([]);
+  expect(deps.connect).not.toHaveBeenCalled();
+  expect(deps.findPluginAuthsByKeys).not.toHaveBeenCalled();
+});
+
+it('inspection uses the same resolved user URL as runtime preflight', async () => {
+  const { check, deps } = setup(['search_mcp_docs']);
+  deps.getServerConfigs = jest.fn(async () => ({
+    docs: {
+      ...server,
+      url: 'https://mcp.test/{{LIBRECHAT_USER_ID}}',
+      source: 'yaml' as const,
+      obo: { scopes: 'read' },
+    },
+  }));
+  const selected = jest.fn(async () => undefined);
+  await check('agent', principal, {
+    inspectOboTarget: { serverName: 'docs', onSelected: selected },
+  });
+  expect(selected).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://mcp.test/owner' }));
+  expect(deps.connect).not.toHaveBeenCalled();
 });
 
 it('inspects only an accessible, selected operator-owned OBO target before enrollment', async () => {

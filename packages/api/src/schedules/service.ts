@@ -1158,19 +1158,18 @@ export function createSchedulesService(
       if (!(await engineDeps.hasScheduleAccess(owner))) {
         return false;
       }
-      if (limits.oboServers?.length) {
-        try {
-          await engineDeps.runInTenantContext(owner, () =>
-            deps.preflightMCP(schedule.agent_id, owner, {
-              scheduleId,
-              concurrency: limits.mcpPreflightConcurrency,
-              deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
-            }),
-          );
-        } catch (error) {
-          if (error instanceof ScheduleMCPError && error.code !== 'mcp_unavailable') return false;
-          throw error;
-        }
+      try {
+        await engineDeps.runInTenantContext(owner, () =>
+          deps.preflightMCP(schedule.agent_id, owner, {
+            scheduleId,
+            oboOnly: true,
+            concurrency: limits.mcpPreflightConcurrency,
+            deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ScheduleMCPError && error.code !== 'mcp_unavailable') return false;
+        throw error;
       }
       // Project policy belongs HERE rather than in the resume claim: this branch's
       // refusal is already routed through abort-and-settle by both callers, so a

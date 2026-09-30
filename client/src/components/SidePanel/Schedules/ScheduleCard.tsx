@@ -3,7 +3,7 @@ import * as Ariakit from '@ariakit/react';
 import { useNavigate } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Play, Trash, Folder, Pencil, Ellipsis } from 'lucide-react';
-import { PermissionTypes, Permissions, dataService } from 'librechat-data-provider';
+import { PermissionTypes, Permissions } from 'librechat-data-provider';
 import {
   Label,
   Chip,
@@ -15,16 +15,13 @@ import {
   OGDialogTemplate,
   useToastContext,
 } from '@librechat/client';
-import type {
-  TSchedule,
-  ScheduleRunStatus,
-  ScheduleDisabledReason,
-  TScheduledOboTarget,
-} from 'librechat-data-provider';
+import type { TSchedule, ScheduleRunStatus, ScheduleDisabledReason } from 'librechat-data-provider';
+import type { ReactNode } from 'react';
 import type { ImmediateScheduleMCPFailure } from './errors';
 import type { TranslationKeys } from '~/hooks';
 import {
   useGetAgentByIdQuery,
+  useScheduledOboTargetQuery,
   useDeleteScheduleMutation,
   useUpdateScheduleMutation,
   useRunScheduleNowMutation,
@@ -104,19 +101,13 @@ export default function ScheduleCard({
   );
   // Enable/disable, run-now, edit and delete all hit CREATE-gated routes, so a
   // USE-only viewer sees a read-only card instead of controls that 403.
-  const inspectObo = async (server: string) => {
-    setInspectingObo(true);
-    try {
-      setOboTarget(await dataService.inspectScheduledObo(schedule.id, server));
-    } catch {
-      showToast({ message: localize('com_ui_schedule_obo_authorize_failed'), status: 'error' });
-    } finally {
-      setInspectingObo(false);
-    }
-  };
+  const [inspectionServer, setInspectionServer] = useState<string | null>(null);
+  const inspection = useScheduledOboTargetQuery(schedule.id, inspectionServer);
+  const oboTarget = inspection.data;
+  const inspectingObo = inspection.isFetching;
   const authorizeObo = useAuthorizeScheduledOboMutation({
     onSuccess: () => {
-      setOboTarget(null);
+      setInspectionServer(null);
       showToast({ message: localize('com_ui_schedule_obo_authorized'), status: 'success' });
     },
     onError: () =>
@@ -138,8 +129,6 @@ export default function ScheduleCard({
   const [menuOpen, setMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [oboTarget, setOboTarget] = useState<TScheduledOboTarget | null>(null);
-  const [inspectingObo, setInspectingObo] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -267,6 +256,39 @@ export default function ScheduleCard({
 
   const statusChip = schedule.lastRun ? STATUS_CHIPS[schedule.lastRun.status] : null;
   const lastRunConvoId = schedule.lastRun?.conversationId;
+  let oboPreview: ReactNode = null;
+  if (inspectingObo) {
+    oboPreview = <Spinner className="size-5" aria-label={localize('com_ui_loading')} />;
+  } else if (inspection.isError) {
+    oboPreview = (
+      <div className="space-y-2">
+        <p role="alert">{localize('com_ui_schedule_obo_authorize_failed')}</p>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            void inspection.refetch();
+          }}
+        >
+          {localize('com_ui_retry')}
+        </Button>
+      </div>
+    );
+  } else if (oboTarget != null) {
+    oboPreview = (
+      <div className="space-y-2 text-sm text-text-primary">
+        <p>{localize('com_ui_schedule_obo_confirm_body')}</p>
+        <p>
+          {localize('com_ui_schedule_obo_server')}: {oboTarget.server}
+        </p>
+        <p>{localize('com_ui_schedule_obo_scopes')}:</p>
+        <code className="block break-all rounded bg-surface-secondary p-2">{oboTarget.scopes}</code>
+        <p>
+          {localize('com_ui_schedule_obo_endpoint')}: {oboTarget.url}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -358,7 +380,7 @@ export default function ScheduleCard({
                   size="sm"
                   disabled={authorizeObo.isLoading || revokeObo.isLoading || inspectingObo}
                   onClick={() => {
-                    void inspectObo(server);
+                    setInspectionServer(server);
                   }}
                 >
                   {localize('com_ui_schedule_obo_authorize')}
@@ -388,38 +410,24 @@ export default function ScheduleCard({
         />
       </div>
       <OGDialog
-        open={oboTarget != null}
+        open={inspectionServer != null}
         onOpenChange={(open) => {
-          if (!open) setOboTarget(null);
+          if (!open) setInspectionServer(null);
         }}
       >
         <OGDialogTemplate
           title={localize('com_ui_schedule_obo_confirm_title')}
           showCloseButton={false}
           className="w-11/12 max-w-lg"
-          main={
-            oboTarget != null && (
-              <div className="space-y-2 text-sm text-text-primary">
-                <p>{localize('com_ui_schedule_obo_confirm_body')}</p>
-                <p>
-                  {localize('com_ui_schedule_obo_server')}: {oboTarget.server}
-                </p>
-                <p>{localize('com_ui_schedule_obo_scopes')}:</p>
-                <code className="block break-all rounded bg-surface-secondary p-2">
-                  {oboTarget.scopes}
-                </code>
-                <p>
-                  {localize('com_ui_schedule_obo_endpoint')}: {oboTarget.url}
-                </p>
-              </div>
-            )
-          }
+          main={oboPreview}
           selection={
             <Button
               type="button"
-              disabled={authorizeObo.isLoading}
+              disabled={
+                authorizeObo.isLoading || inspectingObo || inspection.isError || oboTarget == null
+              }
               onClick={() => {
-                if (oboTarget != null)
+                if (oboTarget != null && !inspection.isError && !inspectingObo)
                   authorizeObo.mutate({
                     id: schedule.id,
                     server: oboTarget.server,

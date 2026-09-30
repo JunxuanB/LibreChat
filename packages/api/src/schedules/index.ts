@@ -10,3 +10,4 @@ export * from './trigger';
 export * from './types';
 export * from './mcp';
 export * from './obo';
+export { createSignalBoundGrantRequest } from './provider';

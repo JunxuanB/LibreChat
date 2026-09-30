@@ -95,6 +95,7 @@ export enum QueryKeys {
   favorites = 'favorites',
   /* Scheduled chats */
   schedules = 'schedules',
+  scheduledOboTarget = 'scheduledOboTarget',
   schedule = 'schedule',
   parentSubagents = 'parentSubagents',
   subagentThread = 'subagentThread',

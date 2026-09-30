@@ -3,6 +3,7 @@ const {
   createLazyScheduledOboGrantService,
   createScheduledOboGrantService,
   MCPTokenStorage,
+  createSignalBoundGrantRequest,
 } = require('@librechat/api');
 const { CacheKeys } = require('librechat-data-provider');
 const { getMCPServersRegistry, getFlowStateManager } = require('~/config');
@@ -12,6 +13,13 @@ const { resolveAgentFireAccess } = require('./access');
 const { createOboTrustChecker } = require('~/server/services/OboPolicyService');
 const { getLogStores } = require('~/cache');
 const methods = require('~/models');
+const requestGrant = createSignalBoundGrantRequest({
+  request: (config, type, parameters) => client.genericGrantRequest(config, type, parameters),
+  getFetch: (config) => config[client.customFetch] ?? globalThis.fetch,
+  setFetch: (config, fetch) => {
+    config[client.customFetch] = fetch;
+  },
+});
 
 module.exports = createLazyScheduledOboGrantService(() =>
   createScheduledOboGrantService({
@@ -31,12 +39,12 @@ module.exports = createLazyScheduledOboGrantService(() =>
     getServerConfigs: (userId, config, role) =>
       getMCPServersRegistry().getAllServerConfigs(userId, config, role),
     getRoleByName: methods.getRoleByName,
+    findPluginAuthsByKeys: methods.findPluginAuthsByKeys,
     agentAccess: resolveAgentFireAccess,
     getOpenIdConfig,
     isLiveAccessTokenValid: require('~/server/services/OpenIDSessionRefresh')
       .isLiveAccessTokenValid,
-    requestGrant: (config, type, parameters) =>
-      client.genericGrantRequest(config, type, parameters),
+    requestGrant,
     isOwnerActive: methods.isAgentTriggerPrincipalActive,
     pauseSchedule: (id, userId, revision) =>
       methods.updateScheduleById(id, userId, { enabled: false }, undefined, {

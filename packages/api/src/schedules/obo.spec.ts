@@ -17,10 +17,12 @@ import { OboTokenResolutionError, resolveOboToken } from '../mcp/oauth/obo';
 import { createScheduleMCPPreflight, ScheduleMCPError } from './mcp';
 import { MCPConnectionFactory } from '../mcp/MCPConnectionFactory';
 import { MCPTokenStorage } from '../mcp/oauth/tokens';
+import { resolveScheduledOboServer } from './target';
 import { FlowStateManager } from '../flow/manager';
 
 jest.mock('@librechat/data-schemas', () => ({
   ...jest.requireActual('@librechat/data-schemas'),
+  decrypt: jest.fn(async (value: string) => value),
   encryptV2: jest.fn(async (value: string) => `enc:${value}`),
   decryptV2: jest.fn(async (value: string) => value.replace(/^enc:/, '')),
   getTenantId: jest.fn(() => 'tenant'),
@@ -73,11 +75,13 @@ function harness(
       _config: unknown,
       grantType: string,
       _params: Record<string, string>,
+      _signal?: AbortSignal,
     ): Promise<{
       access_token: string;
       refresh_token?: string;
       expires_in?: number;
       refresh_token_expires_in?: number;
+      scope?: string;
     }> =>
       grantType === 'refresh_token'
         ? { access_token: 'fresh-after-12h', refresh_token: 'rotated-refresh', expires_in: 3600 }
@@ -88,7 +92,10 @@ function harness(
   let agentAllowed = true;
   let baseAvailable = true;
   let server = config;
-  const inspect = jest.fn(async (_agent, _user, _id, _server, onSelected) => onSelected(server));
+  let variables: Record<string, string> = {};
+  const inspect = jest.fn(async (_agent, _user, _id, _server, onSelected) =>
+    onSelected(resolveScheduledOboServer(server, user, variables)),
+  );
   const pauseSchedule = jest.fn(async () => {
     row.enabled = false;
     row.configRevision += 1;
@@ -110,6 +117,11 @@ function harness(
     ensureConfigServers: async () => ({ Files: server }),
     getServerConfigs: async () => ({ Files: server }),
     agentAccess: async () => (agentAllowed ? 'ok' : 'forbidden'),
+    findPluginAuthsByKeys: async () =>
+      Object.entries(variables).map(
+        ([authField, value]) =>
+          ({ userId: user.id, pluginKey: 'mcp_Files', authField, value }) as never,
+      ),
     getRoleByName: async () =>
       ({
         permissions: {
@@ -159,6 +171,9 @@ function harness(
     },
     setBaseAvailable: (available: boolean) => {
       baseAvailable = available;
+    },
+    setVariables: (values: Record<string, string>) => {
+      variables = values;
     },
     setServer: (replacement: ParsedServerConfig) => {
       server = replacement;
@@ -213,10 +228,15 @@ describe('separately authorized scheduled OBO grants', () => {
     );
     const after = await resolveOboToken(user, config.obo!, exchange, provider!);
     expect(after.access_token).toBe('fresh-after-12h');
-    expect(requestGrant).toHaveBeenCalledWith(expect.anything(), 'refresh_token', {
-      refresh_token: 'server-scoped-refresh',
-      scope: config.obo!.scopes,
-    });
+    expect(requestGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      'refresh_token',
+      {
+        refresh_token: 'server-scoped-refresh',
+        scope: config.obo!.scopes,
+      },
+      expect.any(AbortSignal),
+    );
     expect(exchange).not.toHaveBeenCalled();
     expect(tokenStore.getAll().find((t) => t.type === 'mcp_oauth_refresh')?.token).toBe(
       'enc:rotated-refresh',
@@ -640,7 +660,7 @@ describe('separately authorized scheduled OBO grants', () => {
       },
     });
     const { service, row, tokenStore, flow, requestGrant, setServer } = harness();
-    const liveServer = { ...config, url: mcp.url };
+    const liveServer = { ...config, url: `${mcp.url}{{LIBRECHAT_USER_ID}}` };
     setServer(liveServer);
     requestGrant.mockImplementation(async () => {
       mcp.issuedTokens.add('enrolled');
@@ -1056,6 +1076,129 @@ describe('separately authorized scheduled OBO grants', () => {
     });
     const provider = (await service.resolve(user, { context, target }))!;
     await expect(provider({ forceRefresh: true })).rejects.toThrow();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('binds the preview, persisted grant, activation and run to the same user/custom-variable URL', async () => {
+    const { service, row, setServer, setVariables, tokenStore } = harness();
+    setVariables({ REGION: 'europe' });
+    setServer({
+      ...config,
+      url: 'https://mcp.test/{{REGION}}/{{LIBRECHAT_USER_ID}}',
+      customUserVars: { REGION: { title: 'Region', description: 'Region' } },
+    });
+    const response = { status: jest.fn().mockReturnThis(), json: jest.fn() } as unknown as Response;
+    await service.describeFromRequest(
+      { user, params: { id: row.id, server: 'Files' } } as unknown as ServerRequest,
+      response,
+    );
+    const resolved = 'https://mcp.test/europe/owner';
+    expect(response.json).toHaveBeenCalledWith({
+      server: 'Files',
+      scopes: target.scopes,
+      url: resolved,
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, resolved);
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, url: resolved },
+      activationPreflight: true,
+    }))!;
+    await expect(provider()).resolves.toMatchObject({ access_token: 'first' });
+    row.enabled = true;
+    await expect(
+      (await service.resolve(user, { context, target: { ...target, url: resolved } }))!(),
+    ).resolves.toMatchObject({ access_token: 'first' });
+    expect(tokenStore.getAll().find((r) => r.type === 'mcp_oauth_client')?.metadata).toMatchObject({
+      server_url: resolved,
+    });
+    setVariables({ REGION: 'america' });
+    await expect(provider()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
+
+  it('does not persist an initial grant whose explicit scopes omit a required MCP scope', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'insufficient',
+      refresh_token: 'unused',
+      expires_in: 3600,
+      scope: 'openid',
+    });
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+    });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('retires a consumed rotating grant when renewal explicitly reduces resource scopes', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'narrow',
+      refresh_token: 'replacement',
+      expires_in: 3600,
+      scope: 'openid offline_access',
+    });
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(tokenStore.getAll()).toEqual([]);
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(requestGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retire a fresh enrollment when an older renewal returns narrower scopes', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockImplementationOnce(async () => {
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'new-consent',
+        refresh_token: 'new-grant',
+        expires_in: 3600,
+      });
+      await service.enroll(user.id, row.id, 'Files', 'new-assertion');
+      return {
+        access_token: 'narrow-old',
+        refresh_token: 'consumed-old',
+        expires_in: 3600,
+        scope: 'openid',
+      };
+    });
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(tokenStore.getAll()).toHaveLength(3);
+    await expect(provider()).resolves.toMatchObject({ access_token: 'new-consent' });
+  });
+
+  it('propagates only the coordinator cancellation to a stalled provider and completes revoke', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    let started!: () => void;
+    const entered = new Promise<void>((r) => {
+      started = r;
+    });
+    let providerSignal: AbortSignal | undefined;
+    requestGrant.mockImplementationOnce(async (...args) => {
+      providerSignal = args[3];
+      started();
+      return new Promise((_, reject) => {
+        providerSignal!.addEventListener('abort', () => reject(providerSignal!.reason), {
+          once: true,
+        });
+      });
+    });
+    const provider = (await service.resolve(user, { context, target }))!;
+    const outcome = provider({ forceRefresh: true }).then(
+      () => null,
+      (e) => e,
+    );
+    await entered;
+    expect(providerSignal?.aborted).toBe(false);
+    await service.revoke(user.id, row.id, 'Files');
+    expect(providerSignal?.aborted).toBe(true);
+    expect(await outcome).toBeInstanceOf(Error);
     expect(tokenStore.getAll()).toEqual([]);
   });
 

@@ -88,6 +88,28 @@ and may otherwise disable a newly enrolled schedule. Closing a browser or
 signing out does not automatically revoke this separately authorized grant;
 use **Revoke offline access** or delete the schedule to withdraw it.
 
+## Authorization boundaries
+
+Preview, enrollment and use resolve the operator-owned URL through the same
+user/custom-variable rules as MCP runtime. A request/session-dependent URL cannot
+be a durable unattended grant target. Changing a custom variable or endpoint
+requires another preview and enrollment. Existing literal-URL grants keep their
+stored format; previously enrolled raw-template URLs must be reauthorized.
+
+Provider responses that explicitly list scopes must contain all required MCP
+resource scopes. An omitted scope retains the requested scope per OAuth; it is
+not evidence that the provider narrowed consent. A narrowed rotating renewal is
+rejected and its consumed stored generation retired, never retried with the old
+refresh token or used as a bearer.
+
+The host's signal-aware IdP adapter cancels the coordinator's network request on
+teardown without aborting unrelated browser requests sharing the SDK configuration.
+Grant-store outages fail the list request; the frontend keeps its existing retry
+surface instead of treating unavailable data as an empty grant list. The consent
+preview has its own React Query key, immutable data while open, retry and cancellation.
+Resume admission validates existing OBO targets regardless of whether new enrollment
+is currently allowed. Non-OBO probes are not added to this resume-only check.
+
 ## Host token-provider context
 
 `createMCPPreflight` and `createInitializeClient` accept a
