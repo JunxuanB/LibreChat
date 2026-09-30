@@ -13,13 +13,13 @@ const compact = (source: string, width = 60): string =>
   compactTypeImports(source, 'consumer.tsx', width);
 const header = "import type { Message, Conversation, Agent as Assistant } from './models';\n";
 
-function diagnostics(content: string): readonly ts.Diagnostic[] {
+function diagnostics(
+  content: string,
+  model = 'export interface Message { text: string } export interface Conversation { title: string } export interface Agent { name: string }',
+): readonly ts.Diagnostic[] {
   const files = new Map([
     ['/consumer.tsx', content],
-    [
-      '/models.ts',
-      'export interface Message { text: string } export interface Conversation { title: string } export interface Agent { name: string }',
-    ],
+    ['/models.ts', model],
   ]);
   const host: ts.CompilerHost = {
     getSourceFile: (name) => {
@@ -42,6 +42,8 @@ function diagnostics(content: string): readonly ts.Diagnostic[] {
     {
       noLib: true,
       strict: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
     },
@@ -168,13 +170,37 @@ test('skips conflicting declarations and documentation links', () => {
     assert.equal(compact(header + suffix), header + suffix);
 });
 
-test('qualifies default export aliases and namespace members', () => {
+test('preserves synthetic default aliases and their type namespaces', () => {
   const source =
-    "import type { default as Message, Conversation, Agent as Assistant } from './models';\ntype Row = [Message, Assistant.Options];\n";
+    "import type { default as Message, Conversation } from './models';\ntype Row = [Message, Conversation, Message.Conversation];\n";
+  const model =
+    'declare class Message { text: string } declare namespace Message { interface Conversation { title: string } } export = Message;';
+  assert.equal(diagnostics(source, model).length, 0);
+  const output = compact(source);
+  assert.equal(output, source);
+  assert.equal(diagnostics(output, model).length, 0);
+});
+
+test('qualifies namespace members of ordinary named aliases', () => {
+  const source = header + 'type Row = [Message, Assistant.Options];\n';
   assert.equal(
     compact(source),
-    "import type * as t from './models';\ntype Row = [t.default, t.Agent.Options];\n",
+    "import type * as t from './models';\ntype Row = [t.Message, t.Agent.Options];\n",
   );
+});
+
+test('compacts consistently with Windows, POSIX, and relative filenames', () => {
+  const source = header + 'type Row = [Message, Conversation, Assistant];\n';
+  const expected = compact(source);
+  assert.notEqual(expected, source);
+  for (const file of [
+    'C:\\repo\\consumer.tsx',
+    'C:/repo/consumer.tsx',
+    '/repo/consumer.tsx',
+    'src\\consumer.tsx',
+    'src/consumer.tsx',
+  ])
+    assert.equal(compactTypeImports(source, file, 60), expected, file);
 });
 
 test('output stays compact after Prettier formats it', async () => {

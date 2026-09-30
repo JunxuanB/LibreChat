@@ -185,7 +185,7 @@ import sorter on files you change. To shorten long named type imports, opt in wi
 `npm run sort-imports -- --compact-types path/to/file.ts`, then run Prettier on those files.
 The mode uses `.prettierrc`'s `printWidth` and rewrites references to a collision-free
 `import type * as t` namespace. Runtime imports and short type imports stay unchanged;
-commented import clauses, re-exported types, and unsupported references are left alone.
+default aliases, commented import clauses, re-exported types, and unsupported references are left alone.
 Add `--check` to preview which files need cleanup without writing. Normal sorting, hooks,
 and CI do not require namespace conversion.
 

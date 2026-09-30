@@ -26,7 +26,9 @@ export function compactTypeImports(content: string, fileName: string, printWidth
   if (!/\bimport\s+type\s*\{/.test(content)) return content;
 
   const ts: typeof TS = require('typescript');
-  const source = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const normalizePath = (name: string): string => name.replaceAll('\\', '/');
+  const normalizedFileName = normalizePath(fileName);
+  const source = ts.createSourceFile(normalizedFileName, content, ts.ScriptTarget.Latest, true);
   const candidates: Candidate[] = [];
   const importedNames = new Map<string, number>();
   const countName = (name: string): void => {
@@ -46,7 +48,9 @@ export function compactTypeImports(content: string, fileName: string, printWidth
     if (bindings.elements.length < 2) continue;
     if (
       bindings.elements.some(
-        (binding) => binding.propertyName && !ts.isIdentifier(binding.propertyName),
+        (binding) =>
+          binding.propertyName &&
+          (!ts.isIdentifier(binding.propertyName) || binding.propertyName.text === 'default'),
       )
     ) {
       continue;
@@ -81,17 +85,17 @@ export function compactTypeImports(content: string, fileName: string, printWidth
   if (candidates.length === 0) return content;
 
   const host: TS.CompilerHost = {
-    getSourceFile: (name) => (name === fileName ? source : undefined),
+    getSourceFile: (name) => (normalizePath(name) === normalizedFileName ? source : undefined),
     getDefaultLibFileName: () => '',
     writeFile: () => {},
     getCurrentDirectory: () => '',
-    getCanonicalFileName: (name) => name,
+    getCanonicalFileName: normalizePath,
     useCaseSensitiveFileNames: () => true,
     getNewLine: () => '\n',
-    fileExists: (name) => name === fileName,
-    readFile: (name) => (name === fileName ? content : undefined),
+    fileExists: (name) => normalizePath(name) === normalizedFileName,
+    readFile: (name) => (normalizePath(name) === normalizedFileName ? content : undefined),
   };
-  const program = ts.createProgram([fileName], { noResolve: true, noLib: true }, host);
+  const program = ts.createProgram([normalizedFileName], { noResolve: true, noLib: true }, host);
   if (program.getSyntacticDiagnostics(source).length > 0) return content;
   const checker = program.getTypeChecker();
   const bindings = new Map<TS.Symbol, Binding>();
