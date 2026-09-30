@@ -1725,6 +1725,19 @@ describe('separately authorized scheduled OBO grants', () => {
     ).toEqual(['Files.List', 'Files.Read']);
   });
 
+  it('renews a rejected scheduled downstream token without asking for browser-session renewal', async () => {
+    const { service, row, requestGrant } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    const exchange = jest.fn();
+    await expect(
+      resolveOboToken(user, config.obo!, exchange, provider, undefined, true),
+    ).resolves.toMatchObject({ access_token: 'fresh-after-12h' });
+    expect(requestGrant.mock.calls.filter(([, kind]) => kind === 'refresh_token')).toHaveLength(1);
+    expect(exchange).not.toHaveBeenCalled();
+  });
+
   it('does not enroll a ClickHouse Cloud direct-OAuth MCP server as an OBO grant', async () => {
     const { service, setServer, requestGrant, tokenStore } = harness();
     setServer({

@@ -659,12 +659,12 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     { context, target, activationPreflight, writePreflight },
   ) => {
     if (!context || !target || user.id !== context.ownerId) return undefined;
-    return async ({ forceRefresh } = {}) => {
+    return async ({ forceRefresh, forceDownstreamRefresh } = {}) => {
       const result = await read(
         user.id,
         context,
         target,
-        forceRefresh,
+        forceRefresh || forceDownstreamRefresh,
         activationPreflight,
         writePreflight,
       );

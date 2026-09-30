@@ -2187,6 +2187,47 @@ describe('OpenIDSessionRefresh', () => {
       await expect(provider()).rejects.toThrow('invalid_grant');
     });
 
+    it('reuses a valid browser assertion for real OBO downstream-rejection recovery even when session refresh is revoked', async () => {
+      const expiry = Math.floor(Date.now() / 1000) + 600;
+      const tokens = {
+        accessToken: makeJwt(expiry),
+        idToken: makeJwt(expiry),
+        refreshToken: 'revoked-browser-grant',
+      };
+      const user = makeOpenIdUser();
+      const provider = createOpenIDSessionTokenProvider({
+        req: buildReq(tokens),
+        user,
+        tokenPreference: 'access_token',
+      });
+      openIdClient.refreshTokenGrant.mockRejectedValue(
+        new Error('invalid_grant: revoked browser grant'),
+      );
+      const exchange = jest.fn(async () => ({
+        access_token: 'recovered-downstream',
+        expires_in: 3600,
+      }));
+      const { resolveOboToken } = jest.requireActual('@librechat/api');
+      await expect(
+        resolveOboToken(
+          user,
+          { scopes: 'api://resource/Read' },
+          exchange,
+          provider,
+          undefined,
+          true,
+        ),
+      ).resolves.toMatchObject({ access_token: 'recovered-downstream' });
+      expect(openIdClient.refreshTokenGrant).not.toHaveBeenCalled();
+      expect(exchange).toHaveBeenCalledWith(
+        user,
+        tokens.accessToken,
+        'api://resource/Read',
+        false,
+        undefined,
+      );
+    });
+
     it('forces a refresh when the caller reports that a live access token was rejected', async () => {
       const farFutureExp = Math.floor(Date.now() / 1000) + 600;
       const sessionTokens = {

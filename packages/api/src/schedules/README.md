@@ -138,6 +138,12 @@ and cannot permanently disable recurrence. The retirement fence observes the
 current generation before deletion, including structured provider rejections;
 legacy failures are also reclassified against a coherent current snapshot.
 
+Downstream bearer rejection and upstream session rejection are separate intents.
+OBO recovery bypasses the downstream exchange cache or renews the scheduled
+resource grant; an interactive provider can still reuse a valid browser assertion.
+It does not force login-session renewal merely because another resource rejected
+its bearer. Direct OpenID bearer recovery retains explicit upstream refresh.
+
 The host's signal-aware IdP adapter cancels the coordinator's network request on
 teardown without aborting unrelated browser requests sharing the SDK configuration.
 Grant-store outages fail the list request; the frontend keeps its existing retry

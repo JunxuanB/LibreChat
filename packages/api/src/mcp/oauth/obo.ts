@@ -45,7 +45,10 @@ export type OboTokenResolver = (
 export type OboProviderTokens = OIDCTokens & { readonly scheduledObo?: true };
 
 export type UpstreamTokenProvider = (options?: {
+  /** Explicit rejection of the upstream credential (for direct bearer recovery). */
   forceRefresh?: boolean;
+  /** Downstream OBO rejection; only separately renewable downstream providers use it. */
+  forceDownstreamRefresh?: boolean;
   signal?: AbortSignal;
 }) => Promise<OboProviderTokens | null>;
 
@@ -306,7 +309,9 @@ export async function resolveOboToken(
 ): Promise<MCPOAuthTokens> {
   let liveTokens: OboProviderTokens | null;
   try {
-    liveTokens = await upstreamTokenProvider({ forceRefresh });
+    liveTokens = forceRefresh
+      ? await upstreamTokenProvider({ forceDownstreamRefresh: true })
+      : await upstreamTokenProvider();
   } catch (error) {
     if (isAbortError(error)) throw error;
     if (error instanceof OboTokenResolutionError) throw error;
