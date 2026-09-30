@@ -35,7 +35,7 @@ const {
   captureSubagentIdentity,
   getAttachmentOwnership,
   collectToolCallIds,
-  createToolTimingAdapter,
+  stampCommandExecutor,
 } = require('@librechat/api');
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
@@ -674,6 +674,7 @@ function getDefaultHandlers({
             toolCall.inputValidationError = true;
           }
         }
+        stampCommandExecutor(toolExecuteOptions?.attachedCommandStepIds, data?.result, toolCall);
         if (data?.result != null) {
           await emitForJob({ event, data });
         } else if (checkIfLastAgent(metadata?.last_agent_id, metadata?.langgraph_node)) {
