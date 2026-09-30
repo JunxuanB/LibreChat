@@ -1147,6 +1147,47 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(requestGrant).toHaveBeenCalledTimes(2);
   });
 
+  it('retires the actual consumed grant when retrieval sees a newer generation than admission', async () => {
+    const coordinator = Object.create(MCPTokenStorage) as typeof MCPTokenStorage;
+    const { service, row, tokenStore, requestGrant } = harness(coordinator);
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    coordinator.getTokens = async (params) => {
+      const key = `schedule-obo:${row.id}:Files`;
+      const client = (await MCPTokenStorage.getClientInfoAndMetadata({
+        userId: user.id,
+        serverName: key,
+        findToken: tokenStore.findToken,
+      }))!;
+      await MCPTokenStorage.storeTokens({
+        userId: user.id,
+        serverName: key,
+        tokens: {
+          access_token: 'peer-access',
+          refresh_token: 'peer-grant',
+          token_type: 'Bearer',
+          expires_in: 0,
+        },
+        clientInfo: client.clientInfo,
+        metadata: client.clientMetadata,
+        findToken: tokenStore.findToken,
+        createToken: tokenStore.createToken,
+        updateToken: tokenStore.updateToken,
+        deleteTokens: tokenStore.deleteTokens,
+      });
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'narrowed',
+        refresh_token: 'rotated',
+        expires_in: 3600,
+        scope: 'openid',
+      });
+      return MCPTokenStorage.getTokens(params);
+    };
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).rejects.toMatchObject({ retryable: false });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
   it('does not retire a fresh enrollment when an older renewal returns narrower scopes', async () => {
     const { service, row, requestGrant, tokenStore } = harness();
     await service.enroll(user.id, row.id, 'Files', 'assertion');
@@ -1169,6 +1210,83 @@ describe('separately authorized scheduled OBO grants', () => {
     await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
     expect(tokenStore.getAll()).toHaveLength(3);
     await expect(provider()).resolves.toMatchObject({ access_token: 'new-consent' });
+  });
+
+  it('blocks an activation that reads the new paused revision while revocation is still deleting', async () => {
+    const { service, row, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    let entered!: () => void;
+    let release!: () => void;
+    const deleting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = tokenStore.deleteTokens;
+    jest.spyOn(tokenStore, 'deleteTokens').mockImplementationOnce(async (filter) => {
+      entered();
+      await blocked;
+      return original(filter);
+    });
+    const revoking = service.revoke(user.id, row.id, 'Files');
+    await deleting;
+    const revision = row.configRevision;
+    const provider = (await service.resolve(user, { context, target, activationPreflight: true }))!;
+    let admitted = false;
+    const activation = provider().then(
+      () => {
+        admitted = true;
+        if (row.configRevision === revision) row.enabled = true;
+      },
+      () => undefined,
+    );
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      expect(admitted).toBe(false);
+    } finally {
+      release();
+      await revoking;
+      await activation;
+    }
+    expect(admitted).toBe(false);
+    expect(row.enabled).toBe(false);
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it.each([0, 1, 30])(
+    'retires a consumed rotating grant with access lifetime %s instead of replaying it',
+    async (expires_in) => {
+      const { service, row, requestGrant, tokenStore } = harness();
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      row.enabled = true;
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'unusable',
+        refresh_token: 'replacement',
+        expires_in,
+      });
+      const provider = (await service.resolve(user, { context, target }))!;
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+      expect(tokenStore.getAll()).toEqual([]);
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+      expect(requestGrant).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('retires a consumed rotating grant whose returned token has no usable expiry', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'opaque-no-expiry',
+      refresh_token: 'replacement',
+    });
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(tokenStore.getAll()).toEqual([]);
+    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
+    expect(requestGrant).toHaveBeenCalledTimes(2);
   });
 
   it('propagates only the coordinator cancellation to a stalled provider and completes revoke', async () => {

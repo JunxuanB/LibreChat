@@ -471,6 +471,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       Parameters<typeof deps.tokenStorage.getTokens>[0]['refreshTokens']
     > = async (secret, stored, signal) => {
       if (
+        !stored.credentialSetId ||
         stored.storedServerUrl !== target.url ||
         stored.storedTokenEndpoint !== provider.tokenEndpoint ||
         stored.clientInfo?.client_id !== provider.clientId ||
@@ -506,9 +507,15 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         throw error;
       }
       signal?.throwIfAborted();
-      if (!hasScheduledOboScopes(next.scope, target.scopes)) {
-        // The provider may have consumed a rotating refresh token. Retire only
-        // this generation so retries cannot replay it or erase a new enrollment.
+      let expiresIn: number;
+      try {
+        if (!next.access_token || !hasScheduledOboScopes(next.scope, target.scopes))
+          throw new ReauthenticationRequiredError(key, 'expired');
+        expiresIn = expiresInSeconds(next);
+      } catch {
+        // A received response may have consumed the refresh token, even when
+        // its access token cannot be used. Retire the redeemed generation,
+        // never the earlier admission snapshot or a new owner enrollment.
         const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
         if (!lease)
           throw new MCPTokenRefreshUnavailableError(
@@ -520,15 +527,13 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           await tokens.deleteTokens({
             userId,
             identifier: new RegExp(`^${escaped}(?::refresh|:client)?$`),
-            metadataCredentialSetId: generation,
+            metadataCredentialSetId: stored.credentialSetId,
           });
         } finally {
           await lease.release();
         }
         throw new ReauthenticationRequiredError(key, 'expired');
       }
-      if (!next.access_token)
-        throw new MCPTokenRefreshUnavailableError(key, new Error('No access token'));
       return {
         access_token: next.access_token,
         ...(next.refresh_token ? { refresh_token: next.refresh_token } : {}),
@@ -537,7 +542,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           : {}),
         token_type: 'Bearer',
         obtained_at: Date.now(),
-        expires_at: Date.now() + expiresInSeconds(next) * 1000,
+        expires_at: Date.now() + expiresIn * 1000,
       };
     };
     try {
@@ -769,14 +774,6 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       identifier: `mcp:${key}:refresh`,
     });
     if (!refresh) throw missingGrant();
-    // Advance the revision even for a paused row: a concurrent activation may
-    // already have passed its grant preflight and must lose its final update CAS.
-    if (!(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision))) {
-      throw new MCPTokenRefreshUnavailableError(
-        scheduledOboGrantKey(scheduleId, serverName),
-        new Error('Schedule changed during revocation'),
-      );
-    }
     const release = await deps.tokenStorage.beginRefreshTeardown(userId, key);
     const leaseId = getMCPOAuthLeaseId(userId, key);
     try {
@@ -790,6 +787,14 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       if (!lease)
         throw new MCPTokenRefreshUnavailableError(key, new Error('Grant is being changed'));
       try {
+        // Publish the pause only after credential snapshots are fenced. Earlier
+        // activations lose their revision CAS; later ones cannot read the grant.
+        if (!(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision))) {
+          throw new MCPTokenRefreshUnavailableError(
+            scheduledOboGrantKey(scheduleId, serverName),
+            new Error('Schedule changed during revocation'),
+          );
+        }
         await deps.tokenStorage.deleteUserTokens({
           userId,
           serverName: key,

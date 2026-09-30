@@ -93,6 +93,8 @@ interface GetTokensParams {
       userId: string;
       serverName: string;
       identifier: string;
+      /** Generation actually redeemed under the refresh flight, not the caller's earlier snapshot. */
+      credentialSetId?: string;
       clientInfo?: OAuthClientInformation;
       storedTokenEndpoint?: string;
       storedAuthMethods?: string[];
@@ -1647,6 +1649,7 @@ export class MCPTokenStorage {
         userId,
         serverName,
         identifier,
+        credentialSetId: refreshCredentialSetId,
         clientInfo,
         storedTokenEndpoint,
         storedAuthMethods,

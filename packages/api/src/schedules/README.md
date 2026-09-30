@@ -98,9 +98,12 @@ stored format; previously enrolled raw-template URLs must be reauthorized.
 
 Provider responses that explicitly list scopes must contain all required MCP
 resource scopes. An omitted scope retains the requested scope per OAuth; it is
-not evidence that the provider narrowed consent. A narrowed rotating renewal is
-rejected and its consumed stored generation retired, never retried with the old
-refresh token or used as a bearer.
+not evidence that the provider narrowed consent. A narrowed or unusable rotating renewal is
+rejected and the generation actually redeemed by the coordinator is retired,
+never retried with the old refresh token or used as a bearer. The earlier
+admission snapshot cannot select the consumed generation. Revocation fences
+credential snapshots before publishing its pause and holds that fence through
+deletion, so activations arriving during teardown cannot use the new revision.
 
 The host's signal-aware IdP adapter cancels the coordinator's network request on
 teardown without aborting unrelated browser requests sharing the SDK configuration.
