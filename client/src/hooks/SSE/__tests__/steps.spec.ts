@@ -457,6 +457,54 @@ describe('steps', () => {
       expect(replayed.message.content).toEqual(closed.content);
     });
 
+    it('preserves tool timing through completion and settled-step replay', () => {
+      const getTiming = () => ({ toolPreparationStartedAt: 1_000, toolDispatchedAt: 1_100 });
+      const opened = applyToolCallsStep(createResponse(), search, 0, getTiming).message;
+      const streamed = applyToolCallDelta(
+        opened,
+        search,
+        argsDelta(search.id, '{}'),
+        'call-1',
+        0,
+        getTiming,
+      ) as TMessage;
+      const completed = applyToolCallCompleted(
+        streamed,
+        search,
+        toolEnd(search.id, { id: 'call-1', name: 'search', output: 'done' }),
+        0,
+      );
+      const closed = applyRunStepClosed(
+        completed,
+        search,
+        {
+          id: search.id,
+          index: 1,
+          type: StepTypes.TOOL_CALLS,
+          status: 'completed',
+          created_at: 1_000,
+          closed_at: 1_250,
+        },
+        0,
+        { toolPreparationDurationMs: 100, toolExecutionDurationMs: 150 },
+      ) as TMessage;
+      expect(closed.content?.[1]).toMatchObject({
+        tool_call: {
+          args: '{}',
+          output: 'done',
+          progress: 1,
+          toolPreparationStartedAt: 1_000,
+          toolDispatchedAt: 1_100,
+          toolPreparationDurationMs: 100,
+          toolExecutionDurationMs: 150,
+          runStepDurationMs: 250,
+        },
+      });
+      expect(applyToolCallsStep(closed, search, 0, getTiming).message.content).toEqual(
+        closed.content,
+      );
+    });
+
     it('keeps streamed args when the completion omits them', () => {
       const opened = applyToolCallsStep(createResponse(), search, 0).message;
       const streamed = applyToolCallDelta(opened, search, argsDelta(search.id, '{}'), 'call-1', 0);

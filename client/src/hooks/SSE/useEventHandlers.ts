@@ -99,16 +99,23 @@ const SKILL_QUERY_KEYS = [
   QueryKeys.skillNodeContent,
 ] as const;
 
+/** A regenerated response is parented to the saved turn, never its unsaved replay copy. */
+const responseParentMessageId = (
+  initialResponse: TMessage,
+  userMessage: TMessage,
+  isRegenerate?: boolean,
+) =>
+  isRegenerate && initialResponse.parentMessageId
+    ? initialResponse.parentMessageId
+    : userMessage.messageId;
+
 export const buildCreatedInitialResponse = ({
   initialResponse,
   userMessage,
   isRegenerate = false,
 }: Pick<EventSubmission, 'initialResponse' | 'userMessage' | 'isRegenerate'>): TMessage => ({
   ...initialResponse,
-  parentMessageId:
-    isRegenerate && initialResponse.parentMessageId
-      ? initialResponse.parentMessageId
-      : userMessage.messageId,
+  parentMessageId: responseParentMessageId(initialResponse, userMessage, isRegenerate),
   messageId:
     isRegenerate && initialResponse.messageId
       ? initialResponse.messageId
@@ -340,11 +347,13 @@ const createErrorMessage = ({
       text: '',
       content: appendErrorPart(streamedContent, errorText),
     };
-    if (
-      submission.userMessage.messageId &&
-      submission.userMessage.messageId !== errorMessage.parentMessageId
-    ) {
-      errorMessage.parentMessageId = submission.userMessage.messageId;
+    const parentMessageId = responseParentMessageId(
+      submission.initialResponse,
+      submission.userMessage,
+      submission.isRegenerate,
+    );
+    if (parentMessageId && parentMessageId !== errorMessage.parentMessageId) {
+      errorMessage.parentMessageId = parentMessageId;
     }
     return errorMessage;
   }
@@ -421,6 +430,11 @@ export const resolveErrorTurn = ({
   isNewConversationRoute: boolean;
 }): ErrorTurn => {
   const { userMessage, initialResponse } = submission;
+  const parentMessageId = responseParentMessageId(
+    initialResponse,
+    userMessage,
+    submission.isRegenerate,
+  );
   const conversationId =
     userMessage.conversationId ?? submission.conversation?.conversationId ?? '';
 
@@ -430,7 +444,7 @@ export const resolveErrorTurn = ({
       ...initialResponse,
       ...metadata,
       error: true,
-      parentMessageId: userMessage.messageId,
+      parentMessageId,
     };
 
     if (errorMessage.messageId === undefined || errorMessage.messageId === '') {
@@ -471,7 +485,7 @@ export const resolveErrorTurn = ({
       tMessageSchema.parse({
         ...data,
         error: true,
-        parentMessageId: userMessage.messageId,
+        parentMessageId,
       }) as TMessage,
     ),
   };

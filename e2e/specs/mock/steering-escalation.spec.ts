@@ -220,7 +220,7 @@ test.describe('escalating waiting messages to an interrupt', () => {
     await page.getByRole('menuitem', { name: 'Settings' }).click();
     await page.getByRole('tab', { name: 'Chat' }).click();
     const interruptToggle = page.getByRole('switch', {
-      name: 'Steering interrupts generation',
+      name: 'Steer sooner on Enter',
     });
     await expect(interruptToggle).toBeVisible({ timeout: 5000 });
     await interruptToggle.click();

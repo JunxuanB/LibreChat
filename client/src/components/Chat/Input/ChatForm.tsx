@@ -239,6 +239,7 @@ const ChatForm = memo(function ChatForm({
     () => conversation?.conversationId ?? Constants.NEW_CONVO,
     [conversation?.conversationId],
   );
+  const isNewConversation = conversationId === '' || conversationId === Constants.NEW_CONVO;
   /**
    * The quote feature merges excerpts server-side in `BaseClient.sendMessage`,
    * which the Assistants endpoints bypass, so hide the UI there rather than
@@ -597,6 +598,7 @@ const ChatForm = memo(function ChatForm({
           {steering.canControlGeneration && (
             <InterruptSteerButton
               steering={steering}
+              isNewConversation={isNewConversation}
               getText={() => methods.getValues('text')}
               onConsumed={consumeComposer}
               disabled={filesLoading}
@@ -606,6 +608,7 @@ const ChatForm = memo(function ChatForm({
             ref={submitButtonRef}
             control={methods.control}
             steering={steering}
+            isNewConversation={isNewConversation}
             getText={() => methods.getValues('text')}
             onConsumed={consumeComposer}
             disabled={filesLoading}
@@ -618,6 +621,7 @@ const ChatForm = memo(function ChatForm({
     return stopButton;
   }, [
     consumeComposer,
+    isNewConversation,
     steering,
     textValue,
     methods,
@@ -761,7 +765,7 @@ const ChatForm = memo(function ChatForm({
               data-testid="composer-context-rail"
               className={cn(
                 'mx-4 -mb-3 flex min-w-0 flex-wrap items-center gap-1 rounded-t-2xl',
-                'border-border-light bg-surface-secondary border px-2 pt-1 pb-4',
+                'border-border-light bg-surface-secondary border px-2 pb-4 pt-1',
                 isRTL && 'flex-row-reverse',
               )}
             >
@@ -815,7 +819,7 @@ const ChatForm = memo(function ChatForm({
                    squared off at the bottom (`rounded-t-theme-surface-lg`) and no disclaimer
                    follows it — so the action row is the last thing in it, with no
                    band of padding under the buttons. */
-                'rounded-t-theme-surface-lg sm:rounded-theme-surface-lg relative flex w-full grow flex-col overflow-hidden',
+                'relative flex w-full grow flex-col overflow-hidden rounded-t-theme-surface-lg sm:rounded-theme-surface-lg',
                 composerSurfaceClasses(),
                 isTextAreaFocused ? composerSurfaceShadow.focused : composerSurfaceShadow.blurred,
                 /* Temporary-chat accent is a ChatForm-only override, not part of
@@ -918,14 +922,14 @@ const ChatForm = memo(function ChatForm({
                         active={dictation.active}
                         className={cn(
                           'pointer-events-none absolute inset-y-2',
-                          isMoreThanThreeRows ? 'right-2 left-5' : 'inset-x-5',
+                          isMoreThanThreeRows ? 'left-5 right-2' : 'inset-x-5',
                         )}
                       />
                     )}
                     {/* Sits over the fade scrim in the corner of the input
                         rather than in its own column beside it, so a long draft
                         does not push an orphaned control off to the side. */}
-                    <div className="absolute right-2 bottom-1 z-10">
+                    <div className="absolute bottom-1 right-2 z-10">
                       <CollapseChat
                         isCollapsed={isCollapsed}
                         isScrollable={isMoreThanThreeRows}

@@ -1227,9 +1227,15 @@ export const CODE_ENVIRONMENT_COMMAND_TIMEOUT_HARD_MAX_MS = 5 * 60_000;
 export const CODE_ENVIRONMENT_QUEUE_WAIT_DEFAULT_MS = 5 * 60_000;
 /** Code API's per-request admission ceiling, independent of the retry horizon. */
 export const CODE_ENVIRONMENT_ADMISSION_MAX_MS = 5 * 60_000;
-/** Maximum opt-in HTTP budget: five minutes of admission and execution plus ten seconds for settlement and delivery. */
+/** Minimum command admission time reserved inside an opted-in HTTP budget. */
+export const CODE_ENVIRONMENT_COMMAND_ADMISSION_DEFAULT_MS = 10_000;
+/** Five seconds each for command settlement and transport delivery. */
+const CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS = 10_000;
+/** Maximum opt-in HTTP budget: five minutes of admission and execution plus settlement and delivery. */
 export const CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS =
-  CODE_ENVIRONMENT_ADMISSION_MAX_MS + CODE_ENVIRONMENT_COMMAND_TIMEOUT_HARD_MAX_MS + 10_000;
+  CODE_ENVIRONMENT_ADMISSION_MAX_MS +
+  CODE_ENVIRONMENT_COMMAND_TIMEOUT_HARD_MAX_MS +
+  CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS;
 
 /**
  * Typed user-tunable surface for one attached code environment. Omitted fields
@@ -1276,6 +1282,49 @@ export const codeEnvironmentUserConfigSchema = z
           .min(1)
           .max(CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS)
           .optional(),
+        /** Admission allowance before local dispatch overhead for a Bash command inside
+         * maxRequestTimeoutMs. Omission reserves ten seconds; ignored without a total HTTP budget. */
+        minCommandAdmissionMs: z
+          .number()
+          .int()
+          .min(1_000)
+          .max(CODE_ENVIRONMENT_ADMISSION_MAX_MS)
+          .optional(),
+      })
+      .strict()
+      .superRefine((limits, context) => {
+        if (
+          limits.maxRequestTimeoutMs == null ||
+          limits.maxRequestTimeoutMs >
+            (limits.minCommandAdmissionMs ?? CODE_ENVIRONMENT_COMMAND_ADMISSION_DEFAULT_MS) +
+              CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS
+        ) {
+          return;
+        }
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [
+            limits.minCommandAdmissionMs == null ? 'maxRequestTimeoutMs' : 'minCommandAdmissionMs',
+          ],
+          message: 'Command admission and settlement reserves must leave time for execution',
+        });
+      })
+      .optional(),
+    workspaces: z
+      .object({
+        /** Run requests aimed at `.worktrees/<name>` in that worktree's own lane when the
+         * worker advertises linked-worktree lanes. Omission keeps every request scoped to
+         * its checkout. */
+        linkedWorktrees: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    edits: z
+      .object({
+        /** Whether a worker that negotiated `tolerant_match` may fall back from exact matching
+         * to whitespace-tolerant strategies, as skill and sandbox edits already do. Omission
+         * allows it; `false` requires every attached-workspace edit to match exactly. */
+        tolerantMatching: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -3762,7 +3811,12 @@ export const alternateName = {
 const responsesOnlyOpenAIModels = ['gpt-6-astra'];
 /** Tool calls with Sol/Luna's default reasoning require Responses. Do not offer
  * these on Assistants, which cannot use the native request-routing path. */
-const responsesReasoningOpenAIModels = ['gpt-6-sol', 'gpt-6-luna'];
+const responsesReasoningOpenAIModels = ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'];
+/** Catalog models whose native execution defaults to the Responses API. */
+export const responsesPreferredOpenAIModels: readonly string[] = [
+  ...responsesOnlyOpenAIModels,
+  ...responsesReasoningOpenAIModels,
+];
 
 const sharedOpenAIModels = [
   'gpt-5.6',
@@ -3796,6 +3850,7 @@ const sharedAnthropicModels = [
   'claude-fable-5',
   'claude-opus-5-5',
   'claude-opus-5',
+  'claude-sonnet-5-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-sonnet-5',
@@ -3833,6 +3888,7 @@ export const bedrockModels = [
   'global.anthropic.claude-fable-5',
   'global.anthropic.claude-opus-5-5',
   'global.anthropic.claude-opus-5',
+  'global.anthropic.claude-sonnet-5-5',
   'global.anthropic.claude-opus-4-8',
   'global.anthropic.claude-opus-4-7',
   'global.anthropic.claude-sonnet-5',

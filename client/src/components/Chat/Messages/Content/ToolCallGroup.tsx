@@ -63,6 +63,8 @@ interface ToolCallGroupProps {
    *  blocks the run, and hiding that card behind a second collapsed
    *  disclosure would bury the action the run is waiting on. */
   withinActivityPhase?: boolean;
+  /** The phase header owns the failure pill even while its live groups stay expandable. */
+  parentPhaseOwnsFailurePill?: boolean;
 }
 
 export type ToolCallGroupExpansionState = {
@@ -83,6 +85,7 @@ export default function ToolCallGroup({
   onExpansionChange,
   labelPart,
   withinActivityPhase = false,
+  parentPhaseOwnsFailurePill = false,
 }: ToolCallGroupProps) {
   const localize = useLocalize();
   const mcpIconMap = useMCPIconMap();
@@ -448,12 +451,10 @@ export default function ToolCallGroup({
   }
   const failedNote =
     activitySummary.failedCount > 0
-      ? localize(
-          activitySummary.failedCount === 1
-            ? 'com_ui_one_action_failed'
-            : 'com_ui_n_actions_failed',
-          { 0: String(activitySummary.failedCount) },
-        )
+      ? localize('com_ui_n_of_n_actions_failed', {
+          0: String(activitySummary.failedCount),
+          1: String(count),
+        })
       : '';
   if (failedNote !== '') {
     groupDetailParts.push(failedNote);
@@ -479,7 +480,8 @@ export default function ToolCallGroup({
    *  the header, which is also the way to the failed rows; the text keeps it
    *  only for the accessible name. Inside a phase the pill is the phase's,
    *  so the group's detail says it in text. */
-  const showsFailurePill = !withinActivityPhase && activitySummary.failedCount > 0;
+  const showsFailurePill =
+    !withinActivityPhase && !parentPhaseOwnsFailurePill && activitySummary.failedCount > 0;
   const visibleGroupDetail = showsFailurePill
     ? groupDetailParts.filter((part) => part && part !== failedNote).join(' · ')
     : groupDetail;
@@ -512,12 +514,12 @@ export default function ToolCallGroup({
   }, [hasActiveToolCall, userOverride, suppressAutoExpand]);
 
   return (
-    <div className="mt-1 mb-2" ref={rootRef}>
+    <div className="mb-2 mt-1" ref={rootRef}>
       <div className="flex w-full items-center gap-2">
         <button
           type="button"
           className={cn(
-            'text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-0 focus-visible:outline-none',
+            'text-text-secondary hover:text-text-secondary focus-visible:ring-border-heavy inline-flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none bg-transparent p-0 py-1 hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-0',
             /** An open header is the title of the rows under it, so it is the
              *  one line in the fold set in the primary colour. */
             isExpanded && 'text-text-primary hover:text-text-primary',
@@ -563,7 +565,7 @@ export default function ToolCallGroup({
           </span>
           {visibleGroupDetail && (
             <span
-              className="text-text-secondary max-w-[40%] min-w-0 truncate text-xs font-normal"
+              className="text-text-secondary min-w-0 max-w-[40%] truncate text-xs font-normal"
               title={visibleGroupDetail}
             >
               · {visibleGroupDetail}
@@ -577,8 +579,12 @@ export default function ToolCallGroup({
             aria-hidden="true"
           />
         </button>
-        {!withinActivityPhase && (
-          <FailedRevealPill count={activitySummary.failedCount} onReveal={handleRevealFailed} />
+        {!withinActivityPhase && !parentPhaseOwnsFailurePill && (
+          <FailedRevealPill
+            count={activitySummary.failedCount}
+            total={count}
+            onReveal={handleRevealFailed}
+          />
         )}
       </div>
       <div
@@ -641,7 +647,7 @@ export default function ToolCallGroup({
                 </div>
               </FailedRevealContext.Provider>
             </ToolAuthWarningContext.Provider>
-            {hasPendingAuthRequest && <ToolAuthWarning className="mt-2.5 mb-1" />}
+            {hasPendingAuthRequest && <ToolAuthWarning className="mb-1 mt-2.5" />}
           </div>
         )}
       </div>

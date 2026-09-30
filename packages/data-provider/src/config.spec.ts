@@ -10,6 +10,7 @@ import {
   DEFAULT_STEER_ARM_CONFIRMATION_TIMEOUT_MS,
   codeEnvironmentUserConfigSchema,
   interfaceSchema,
+  CODE_ENVIRONMENT_ADMISSION_MAX_MS,
   excludedKeys,
   DEFAULT_MCP_APP_ADMISSION_REQUESTS_PER_MINUTE,
   DEFAULT_MCP_APP_PERSISTED_BYTES,
@@ -664,8 +665,120 @@ describe('attached code environment user config schema', () => {
     },
   );
 
+  it('accepts an explicit tolerant-matching opt-in and nothing else under edits', () => {
+    expect(codeEnvironmentUserConfigSchema.parse({ edits: { tolerantMatching: true } })).toEqual({
+      edits: { tolerantMatching: true },
+    });
+    expect(codeEnvironmentUserConfigSchema.parse({})).toEqual({});
+    expect(
+      codeEnvironmentUserConfigSchema.safeParse({ edits: { tolerantMatching: 'yes' } }).success,
+    ).toBe(false);
+    expect(codeEnvironmentUserConfigSchema.safeParse({ edits: { fuzzy: true } }).success).toBe(
+      false,
+    );
+  });
+
   it('keeps an omitted admission budget backward compatible', () => {
     expect(codeEnvironmentUserConfigSchema.parse({ limits: {} })).toEqual({ limits: {} });
+  });
+
+  it.each([1_000, 15_000, CODE_ENVIRONMENT_ADMISSION_MAX_MS])(
+    'accepts a bounded %i ms command admission allowance',
+    (minCommandAdmissionMs) => {
+      expect(codeEnvironmentUserConfigSchema.parse({ limits: { minCommandAdmissionMs } })).toEqual({
+        limits: { minCommandAdmissionMs },
+      });
+    },
+  );
+
+  it.each([0, -1, 0.5, 999, CODE_ENVIRONMENT_ADMISSION_MAX_MS + 1, NaN, Infinity])(
+    'rejects an invalid command admission allowance of %s',
+    (minCommandAdmissionMs) => {
+      expect(
+        codeEnvironmentUserConfigSchema.safeParse({ limits: { minCommandAdmissionMs } }).success,
+      ).toBe(false);
+    },
+  );
+
+  it.each([20_001, 90_000])(
+    'preserves omission of the command admission allowance with a fitting %i ms budget',
+    (maxRequestTimeoutMs) => {
+      expect(codeEnvironmentUserConfigSchema.parse({ limits: { maxRequestTimeoutMs } })).toEqual({
+        limits: { maxRequestTimeoutMs },
+      });
+    },
+  );
+
+  it.each([5_000, 10_002, 15_000, 20_000])(
+    'rejects an undersized %i ms request budget with the default command reserve',
+    (maxRequestTimeoutMs) => {
+      const parsed = codeEnvironmentUserConfigSchema.safeParse({ limits: { maxRequestTimeoutMs } });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ path: ['limits', 'maxRequestTimeoutMs'] }),
+          ]),
+        );
+      }
+    },
+  );
+
+  it.each([
+    { maxRequestTimeoutMs: 90_000, minCommandAdmissionMs: 79_999 },
+    { maxRequestTimeoutMs: 11_001, minCommandAdmissionMs: 1_000 },
+    { maxRequestTimeoutMs: 610_000, minCommandAdmissionMs: 300_000 },
+  ])('accepts an admission reserve with execution time left: %j', (limits) => {
+    expect(codeEnvironmentUserConfigSchema.parse({ limits })).toEqual({ limits });
+  });
+
+  it.each([
+    { maxRequestTimeoutMs: 90_000, minCommandAdmissionMs: 80_000 },
+    { maxRequestTimeoutMs: 90_000, minCommandAdmissionMs: 100_000 },
+    { maxRequestTimeoutMs: 11_000, minCommandAdmissionMs: 1_000 },
+  ])('rejects a command reserve that cannot fit inside its request budget: %j', (limits) => {
+    const parsed = codeEnvironmentUserConfigSchema.safeParse({ limits });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ['limits', 'minCommandAdmissionMs'] }),
+        ]),
+      );
+    }
+  });
+
+  it('allows a command reserve without a request budget (the legacy per-attempt path)', () => {
+    expect(
+      codeEnvironmentUserConfigSchema.parse({ limits: { minCommandAdmissionMs: 300_000 } }),
+    ).toEqual({ limits: { minCommandAdmissionMs: 300_000 } });
+  });
+
+  it.each([
+    { maxRequestTimeoutMs: 90_000, minCommandAdmissionMs: 100_000 },
+    { maxRequestTimeoutMs: 15_000 },
+  ])('rejects an impossible command reserve in the top-level deployment config: %j', (limits) => {
+    expect(
+      configSchema.safeParse({
+        version: '1.0',
+        endpoints: {
+          agents: {
+            statefulCodeSessions: {
+              allowedEnvironments: ['user'],
+              environments: [
+                {
+                  id: 'personal-vm',
+                  name: 'Personal VM',
+                  type: 'attached',
+                  baseURL: 'https://code.example.com/v1',
+                  configSchema: { limits },
+                },
+              ],
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('accepts typed permission controls exposed by the administrator', () => {
@@ -687,7 +800,11 @@ describe('attached code environment user config schema', () => {
                     fileWrite: { allowed: ['allow', 'ask', 'deny'], default: 'ask' },
                     commandExecution: { allowed: ['ask', 'deny'], default: 'ask' },
                   },
-                  limits: { maxCommandTimeoutMs: 120000, maxRequestTimeoutMs: 125_000 },
+                  limits: {
+                    maxCommandTimeoutMs: 120000,
+                    maxRequestTimeoutMs: 125_000,
+                    minCommandAdmissionMs: 15_000,
+                  },
                 },
               },
             ],
@@ -706,13 +823,44 @@ describe('attached code environment user config schema', () => {
           statefulCodeSessions: {
             environments: [
               {
-                configSchema: { limits: { maxRequestTimeoutMs: 125_000 } },
+                configSchema: {
+                  limits: { maxRequestTimeoutMs: 125_000, minCommandAdmissionMs: 15_000 },
+                },
               },
             ],
           },
         },
       },
     });
+  });
+
+  it.each([
+    [{ linkedWorktrees: true }, true],
+    [{ linkedWorktrees: 'yes' }, false],
+    [{ linkedWorktrees: true, subdirectories: true }, false],
+  ])('validates the linked worktree lane toggle %p', (workspaces, valid) => {
+    const result = configSchema.safeParse({
+      version: '1.0',
+      endpoints: {
+        agents: {
+          statefulCodeSessions: {
+            allowedEnvironments: ['user'],
+            environments: [
+              {
+                id: 'personal-vm',
+                name: 'Personal VM',
+                type: 'attached',
+                baseURL: 'https://code.example.com/v1',
+                default: true,
+                configSchema: { workspaces },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(valid);
   });
 
   it('rejects an attached command timeout above the protocol hard cap', () => {

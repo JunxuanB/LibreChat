@@ -17,6 +17,7 @@ type ActionRow = SendAction;
 type DuringRunSendButtonProps = {
   control: Control<{ text: string }>;
   steering: SteeringControls;
+  isNewConversation: boolean;
   getText: () => string;
   onConsumed: () => void;
   /** External hold (e.g. uploads in flight), mirroring the normal send button. */
@@ -31,8 +32,9 @@ type DuringRunSendButtonProps = {
  * composer holds text: submitting steers or queues per the effective action.
  * Hovering it reveals the full action list with its shortcuts: steer, queue
  * (⌘/Ctrl+Enter routes to the non-default action), interrupt & steer
- * (⌘/Ctrl+Shift+Enter: stops writing now but keeps what is written), and
- * interrupt & send (⌥/Alt+Enter: discards the answer and starts over).
+ * (⌘/Ctrl+Shift+Enter — requests an earlier safe point when a conversation
+ * exists, otherwise stops and sends a new turn), and
+ * interrupt & send (⌥/Alt+Enter — discards the answer and starts over).
  * Clearing the composer restores the Stop button.
  */
 const DuringRunSendButton = React.memo(
@@ -135,10 +137,12 @@ const DuringRunSendButton = React.memo(
       icon: <Clock className="text-status-info h-4 w-4" aria-hidden="true" />,
       onClick: () => runAction((text) => steering.queueFromComposer(text)),
     };
-    /** Keeps the half-written answer, unlike interrupt & send below it. */
+    /** When steering is available, keeps visible text; a new chat instead hard-stops. */
     const interruptSteerRow: ActionRow = {
       key: 'interrupt-steer',
-      label: localize('com_ui_interrupt_steer'),
+      label: localize(
+        props.isNewConversation ? 'com_ui_steer_first_turn_stop' : 'com_ui_interrupt_steer',
+      ),
       kbd: interruptSteerKbd,
       icon: <ZapOff className="text-status-warning h-4 w-4" aria-hidden="true" />,
       disabled:

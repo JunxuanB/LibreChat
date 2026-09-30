@@ -20,14 +20,20 @@ import {
   anthropicSettings,
 } from './types';
 import {
+  hasAlwaysOnThinking,
+  hasBetweenToolsThinkingFloor,
+  supportsPromptCache,
+  supportsAdaptiveThinking,
+} from './bedrock';
+import {
   getModelKey,
   getSettingsKeys,
   reasoningOverrideSchema,
   ReasoningParameterFormat,
 } from './schemas';
-import { isOpus55Model, supportsPromptCache, supportsAdaptiveThinking } from './bedrock';
 import { resolveEffectiveUseResponsesApi } from './file-config';
 import { clampSettingRange } from './generate';
+import { gpt6Tier } from './families';
 
 // Base definitions
 const baseDefinitions: Record<string, SettingDefinition> = {
@@ -560,6 +566,7 @@ const anthropic: Record<string, SettingDefinition> = {
       [ThinkingDisplay.auto]: 'com_ui_auto',
       [ThinkingDisplay.summarized]: 'com_ui_summarized',
       [ThinkingDisplay.omitted]: 'com_ui_omitted',
+      [ThinkingDisplay.updates]: 'com_ui_updates',
     },
     optionType: 'model',
     columnSpan: 4,
@@ -1581,7 +1588,8 @@ export function applyModelAwareDefaults(
         : setting,
     );
   }
-  if (/^gpt-6-(?:sol|luna)(?:$|-)/i.test(model)) {
+  const tier = gpt6Tier(model);
+  if (tier === 'sol' || tier === 'luna') {
     return settings.map((setting) => {
       if (setting.key === 'reasoning_effort') {
         return {
@@ -1603,11 +1611,23 @@ export function applyModelAwareDefaults(
       return setting;
     });
   }
-  if (isOpus55Model(model)) {
+  if (hasAlwaysOnThinking(model)) {
     return settings.filter(
       (setting) =>
         !['thinking', 'thinkingBudget', 'temperature', 'topP', 'topK'].includes(setting.key),
     );
+  }
+  /** Sonnet 5.5+ keeps the toggle: "off" maps to its `between_tools` floor. */
+  if (hasBetweenToolsThinkingFloor(model)) {
+    return settings
+      .map((setting) =>
+        setting.key === 'thinking'
+          ? { ...setting, description: 'com_endpoint_anthropic_thinking_between_tools' }
+          : setting,
+      )
+      .filter(
+        (setting) => !['thinkingBudget', 'temperature', 'topP', 'topK'].includes(setting.key),
+      );
   }
   const modelAwareSettings =
     endpoint === EModelEndpoint.google

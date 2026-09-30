@@ -109,7 +109,7 @@ unsuccessful outcome as an exception:
   successful lookup with no record), never to hide a query failure.
 - For an expected failure the caller can handle without aborting the operation, prefer a typed
   discriminated result such as `{ ok: true; value: T } | { ok: false; error: { code: string;
-  message?: string } }`. Keep an existing domain-specific result shape when changing it would
+message?: string } }`. Keep an existing domain-specific result shape when changing it would
   break callers; do not introduce interchangeable `ok`, `valid`, and bare `{ message }` contracts
   in the same service. Codes should be stable, machine-readable identifiers when the caller
   needs to distinguish failures. Internal validation helpers may use the existing local pattern.
