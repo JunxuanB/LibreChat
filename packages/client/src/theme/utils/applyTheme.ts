@@ -4,7 +4,8 @@ import {
   focusFallbacks,
   pressedFallbacks,
   primaryButtonFallbacks,
-  dialogTitleFallback,
+  primaryInkFallbacks,
+  primaryInkRoles,
   MARK_NEIGHBOURHOOD,
   themeAppearanceProperties,
   themeBrandTokens,
@@ -62,10 +63,6 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
 
   if (colors['rgb-text-muted'] === undefined && colors['rgb-text-tertiary'] !== undefined) {
     variables.push(['--text-muted', colors['rgb-text-tertiary']]);
-  }
-
-  if (colors['rgb-avatar-text'] === undefined && colors['rgb-text-primary'] !== undefined) {
-    variables.push(['--avatar-text', colors['rgb-text-primary']]);
   }
 
   if (
@@ -133,10 +130,13 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
     variables.push(['--button-primary-hover', primary['rgb-button-primary-hover']]);
   }
 
-  const title = dialogTitleFallback(colors)['rgb-dialog-title'];
-  if (colors['rgb-dialog-title'] === undefined && title !== undefined) {
-    variables.push(['--dialog-title', title]);
-  }
+  const inks = primaryInkFallbacks(colors);
+  primaryInkRoles.forEach((role) => {
+    const ink = inks[role];
+    if (colors[role] === undefined && ink !== undefined) {
+      variables.push([`--${role.slice(4)}`, ink]);
+    }
+  });
 
   /**
    * Same rule as `resolveTheme`: a theme that paints what the mark is measured
