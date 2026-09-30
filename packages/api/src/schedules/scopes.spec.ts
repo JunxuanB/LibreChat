@@ -198,12 +198,15 @@ it('preserves a resource identifier trailing slash while normalizing its qualifi
   );
 });
 
-it('does not treat an observable wrong-resource or app-only JWT as opaque scope omission on renewal', () => {
+it('does not use an unrecognized audience alias to remap stored consent, and denies an observable app-only projection', () => {
   const access_token = jwt.sign(
     { aud: 'api://other', scp: 'Files.Read Files.Write' },
     'test-only-signing-key',
   );
-  expect(resolveScheduledOboScopes({ access_token }, requested, authority, binding).ok).toBe(false);
+  expect(resolveScheduledOboScopes({ access_token }, requested, authority, binding)).toEqual({
+    ok: true,
+    binding,
+  });
   const appOnly = jwt.sign(
     { aud: 'api://resource', roles: ['Files.Read', 'Files.Write'] },
     'test-only-signing-key',
@@ -211,4 +214,23 @@ it('does not treat an observable wrong-resource or app-only JWT as opaque scope 
   expect(
     resolveScheduledOboScopes({ access_token: appOnly }, requested, authority, binding).ok,
   ).toBe(false);
+});
+
+it('preserves an enrolled resource permission set on scope omission even when JWT audience aliases cannot be inferred', () => {
+  const authority = {
+    issuer: 'https://login.microsoftonline.com/tenant/v2.0',
+    tokenEndpoint: 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+  };
+  const binding = {
+    version: 1 as const,
+    resource: 'api://custom-api',
+    permissions: ['Files.Read'],
+  };
+  const access_token = jwt.sign(
+    { aud: '11111111-2222-3333-4444-555555555555', scp: 'Files.Read' },
+    'test-only',
+  );
+  expect(
+    resolveScheduledOboScopes({ access_token }, 'api://custom-api/.default', authority, binding),
+  ).toEqual({ ok: true, binding });
 });

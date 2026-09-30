@@ -84,7 +84,9 @@ function jwtPermissionProjection(
   if (!claims || typeof claims !== 'object') return null;
   const applicationId =
     /^api:\/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(resource)?.[1];
-  if (claims.aud !== resource && !(applicationId && claims.aud === applicationId)) return false;
+  // Entra resource identifiers can name application-ID audience aliases that
+  // cannot be inferred here. Treat that token as opaque; never remap consent.
+  if (claims.aud !== resource && !(applicationId && claims.aud === applicationId)) return null;
   return typeof claims.scp === 'string' ? claims.scp : false;
 }
 

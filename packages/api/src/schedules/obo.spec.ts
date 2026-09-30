@@ -1557,6 +1557,52 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(requestGrant.mock.lastCall?.[2].scope).toBe('api://resource/.default');
   });
 
+  it('renews established selector consent when a scopeless JWT uses an application audience alias', async () => {
+    const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
+    setProvider(
+      'https://login.microsoftonline.com/tenant/v2.0',
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token',
+    );
+    setServer({ ...config, obo: { scopes: 'api://custom-api/.default' } });
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'initial',
+      refresh_token: 'grant',
+      expires_in: 3600,
+      scope: 'Files.Read',
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const token = jwt.sign(
+      {
+        aud: '11111111-2222-3333-4444-555555555555',
+        scp: 'Files.Read',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      },
+      'test-only',
+    );
+    requestGrant.mockResolvedValueOnce({
+      access_token: token,
+      refresh_token: 'rotated',
+      expires_in: 3600,
+    });
+    const provider = (await service.resolve(user, {
+      context,
+      target: { ...target, scopes: 'api://custom-api/.default' },
+    }))!;
+    await expect(provider({ forceRefresh: true })).resolves.toMatchObject({ access_token: token });
+    expect(tokenStore.getAll().find((r) => r.type === 'mcp_oauth_refresh')?.token).toBe(
+      'enc:rotated',
+    );
+    expect(
+      JSON.parse(
+        tokenStore
+          .getAll()
+          .find((r) => r.type === 'mcp_oauth_client')!
+          .token.slice(4),
+      ).scheduled_obo_scope_binding,
+    ).toEqual({ version: 1, resource: 'api://custom-api', permissions: ['Files.Read'] });
+  });
+
   it('fails closed on legacy selector consent lacking a concrete binding without deleting its records', async () => {
     const { service, row, requestGrant, tokenStore, setProvider, setServer } = harness();
     setProvider(

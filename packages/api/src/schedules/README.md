@@ -118,7 +118,9 @@ When initial selector scope is omitted, a provider-returned JWT with a matching
 resource audience and delegated `scp` can establish the permission projection.
 An opaque initial selector response with no concrete scope cannot establish that
 set and is refused rather than guessed. Subsequent omitted scope retains the
-stored set unless an observable matching JWT shows narrowing. Existing literal
+stored set unless an observable matching JWT shows narrowing. An unrecognized
+resource-to-application audience alias is treated as opaque rather than used to
+invent a new permission map or reject previously established consent. Existing literal
 grants remain compatible. Older unbound selector grants require owner enrollment
 again; no database migration or browser-login refresh credential is introduced.
 
