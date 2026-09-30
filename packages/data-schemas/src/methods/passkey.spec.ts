@@ -97,11 +97,22 @@ describe('createPasskey', () => {
 
 describe('findPasskeysByUser', () => {
   it('returns only the requested user credentials, newest first', async () => {
-    await methods.createPasskey(passkeyData({ credentialId: 'a', name: 'First' }));
-    await methods.createPasskey(passkeyData({ credentialId: 'b', name: 'Second' }));
-    await methods.createPasskey(
-      passkeyData({ credentialId: 'c', name: 'Other user', user: otherUserId.toString() }),
-    );
+    // Explicit dates keep the ordering assertion independent of insertion speed.
+    // Insert oldest first so natural insertion order cannot satisfy the assertion.
+    await mongoose.models.Passkey.insertMany([
+      {
+        ...passkeyData({ credentialId: 'a', name: 'First' }),
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+      },
+      {
+        ...passkeyData({ credentialId: 'b', name: 'Second' }),
+        createdAt: new Date('2024-01-02T00:00:00Z'),
+      },
+      {
+        ...passkeyData({ credentialId: 'c', name: 'Other user', user: otherUserId.toString() }),
+        createdAt: new Date('2024-01-03T00:00:00Z'),
+      },
+    ]);
 
     const found = await methods.findPasskeysByUser(userId.toString());
 
