@@ -18,11 +18,13 @@
  *   Run:        npm run sort-imports
  *   Check only: npm run sort-imports:check
  *   Targeted:   node scripts/sort-imports.mts path/to/file.ts [...]
+ *   Compact:    npm run sort-imports -- --compact-types path/to/file.ts [...]
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compactTypeImports } from './imports/compact.mts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -50,6 +52,7 @@ const SKIP_DIR_NAMES = new Set([
 
 const args = process.argv.slice(2);
 const CHECK = args.includes('--check');
+const COMPACT_TYPES = args.includes('--compact-types');
 const FILE_ARGS = args.filter((arg) => !arg.startsWith('--'));
 
 const LOCAL_PREFIXES = ['~/', 'src/', 'test/', './', '../'];
@@ -91,15 +94,9 @@ function sortSegment(stmts: Stmt[]): string[] {
       if (aReact !== bReact) return aReact - bReact;
       return a.len - b.len;
     });
-  const g2 = stmts
-    .filter((s) => s.isType && !s.isLocal)
-    .sort((a, b) => b.len - a.len);
-  const g3 = stmts
-    .filter((s) => s.isType && s.isLocal)
-    .sort((a, b) => b.len - a.len);
-  const g4 = stmts
-    .filter((s) => !s.isType && s.isLocal)
-    .sort((a, b) => b.len - a.len);
+  const g2 = stmts.filter((s) => s.isType && !s.isLocal).sort((a, b) => b.len - a.len);
+  const g3 = stmts.filter((s) => s.isType && s.isLocal).sort((a, b) => b.len - a.len);
+  const g4 = stmts.filter((s) => !s.isType && s.isLocal).sort((a, b) => b.len - a.len);
   return [...g1, ...g2, ...g3, ...g4].map((s) => s.raw);
 }
 
@@ -119,7 +116,7 @@ function sortFileImports(content: string): string | null {
       t.startsWith('/*') ||
       t.startsWith('*') ||
       t.startsWith('*/') ||
-      t.startsWith('\'use ') ||
+      t.startsWith("'use ") ||
       t.startsWith('"use ')
     ) {
       i++;
@@ -184,11 +181,7 @@ function sortFileImports(content: string): string | null {
   if (originalRaws.length < 2) return null;
   if (originalRaws.join('\n') === emitted.join('\n')) return null;
 
-  return [
-    ...lines.slice(0, importStart),
-    ...emitted,
-    ...lines.slice(importEnd),
-  ].join('\n');
+  return [...lines.slice(0, importStart), ...emitted, ...lines.slice(importEnd)].join('\n');
 }
 
 /** Recursively yields absolute paths of every source file under `dir`. */
@@ -229,15 +222,24 @@ async function collectFiles(): Promise<string[]> {
   return files;
 }
 
+const printWidth = COMPACT_TYPES
+  ? (JSON.parse(await readFile(resolve(ROOT, '.prettierrc'), 'utf8')) as { printWidth: number })
+      .printWidth
+  : 0;
+
 let changed = 0;
 let total = 0;
 
 for (const filePath of await collectFiles()) {
   const rel = relative(ROOT, filePath);
   const content = await readFile(filePath, 'utf8');
-  const result = sortFileImports(content);
+  const compacted =
+    COMPACT_TYPES && !content.split('\n').some((line) => IGNORE_MARKER.test(line))
+      ? compactTypeImports(content, filePath, printWidth)
+      : content;
+  const result = sortFileImports(compacted) ?? compacted;
   total++;
-  if (result === null) continue;
+  if (result === content) continue;
   changed++;
   if (CHECK) {
     console.log(`  ✗ ${rel}`);
@@ -248,10 +250,12 @@ for (const filePath of await collectFiles()) {
 }
 
 if (CHECK && changed) {
-  console.log(`\n${changed}/${total} files need sorting. Run: npm run sort-imports`);
+  console.log(
+    `\n${changed}/${total} files need cleanup. Run: npm run sort-imports${COMPACT_TYPES ? ' -- --compact-types' : ''}`,
+  );
   process.exit(1);
 } else if (changed) {
-  console.log(`\nSorted ${changed}/${total} files.`);
+  console.log(`\nCleaned ${changed}/${total} files.`);
 } else {
   console.log(`All ${total} files already sorted.`);
 }
