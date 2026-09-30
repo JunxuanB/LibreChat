@@ -35,6 +35,7 @@ jest.mock('@librechat/api', () => ({
   collectToolCallIds: jest.requireActual('@librechat/api').collectToolCallIds,
   captureSubagentIdentity: jest.requireActual('@librechat/api').captureSubagentIdentity,
   createToolTimingAdapter: jest.requireActual('@librechat/api').createToolTimingAdapter,
+  stampCommandExecutor: jest.requireActual('@librechat/api').stampCommandExecutor,
 }));
 
 jest.mock('@librechat/data-schemas', () => ({
