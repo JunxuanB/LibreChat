@@ -162,7 +162,7 @@ export default function MCPToolItem({
               expanded ? 'opacity-100' : 'opacity-0',
             )}
           >
-            <p className="text-text-secondary max-h-44 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap">
+            <p className="text-text-secondary max-h-44 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed">
               {description || localize('com_ui_mcp_no_description')}
             </p>
           </div>
