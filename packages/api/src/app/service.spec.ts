@@ -737,6 +737,65 @@ describe('createAppConfigService', () => {
       expect(config.interfaceConfig?.modelSelect).toBe(true);
     });
 
+    it.each([true, false])(
+      'preserves tenant isolation through a theme override (valid: %s), including cache hits',
+      async (valid) => {
+        const custom = [
+          { name: 'Global', baseURL: 'https://global.example' },
+          { name: 'Private', tenantId: 'owner-tenant', baseURL: 'https://private.example' },
+        ];
+        const base = {
+          interfaceConfig: { theme: 'clickhouse' },
+          endpoints: { custom },
+          config: { endpoints: { custom } },
+        };
+        const deps = createDeps({
+          loadBaseConfig: jest.fn().mockResolvedValue(base),
+          getApplicableConfigs: jest.fn().mockResolvedValue([
+            {
+              priority: 10,
+              isActive: true,
+              overrides: {
+                interface: {
+                  theme: {
+                    version: 1,
+                    name: 'override',
+                    modes: {
+                      light: {
+                        colors: {
+                          'rgb-surface-primary': valid ? '1 2 3' : '300 16 32',
+                          'surface-future': '4 5 6',
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          ]),
+        });
+        const { getAppConfig } = createAppConfigService(deps);
+        for (const tenantId of ['other-tenant', 'owner-tenant', 'other-tenant']) {
+          const config = await getAppConfig({ role: 'USER', tenantId });
+          const names = tenantId === 'owner-tenant' ? ['Global', 'Private'] : ['Global'];
+          expect(config.endpoints?.custom?.map((endpoint) => endpoint.name)).toEqual(names);
+          expect(config.config.endpoints?.custom?.map((endpoint) => endpoint.name)).toEqual(names);
+          expect(config.interfaceConfig?.theme).toEqual(
+            valid
+              ? {
+                  version: 1,
+                  name: 'override',
+                  modes: { light: { colors: { 'rgb-surface-primary': '1 2 3' } } },
+                }
+              : 'clickhouse',
+          );
+        }
+        expect(custom).toHaveLength(2);
+        expect(base.interfaceConfig.theme).toBe('clickhouse');
+        expect(deps.getApplicableConfigs).toHaveBeenCalledTimes(2);
+      },
+    );
+
     it('keeps the base theme when a DB override supplies an invalid one', async () => {
       const deps = createDeps({
         loadBaseConfig: jest

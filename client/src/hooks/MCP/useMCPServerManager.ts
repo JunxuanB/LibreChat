@@ -33,6 +33,7 @@ import {
   shouldFailMCPOAuthFallback,
   isTerminalMCPOAuthPollingError,
   shouldUseMCPConnectionStatus,
+  applyPendingOAuthState,
   applyMCPDiscoveryAuthorizationState,
 } from './polling';
 import {
@@ -233,7 +234,10 @@ export function useMCPServerManager({
   });
   const connectionStatus = useMemo(() => {
     if (!polledConnectionStatus) {
-      return applyMCPDiscoveryAuthorizationState(polledConnectionStatus, discoveredMCPTools);
+      return applyPendingOAuthState(
+        applyMCPDiscoveryAuthorizationState(polledConnectionStatus, discoveredMCPTools),
+        serverInitStates,
+      );
     }
 
     let changed = false;
@@ -247,8 +251,11 @@ export function useMCPServerManager({
       nextStatus[serverName] = { ...status, requestScoped: true };
     }
     const normalizedStatus = changed ? nextStatus : polledConnectionStatus;
-    return applyMCPDiscoveryAuthorizationState(normalizedStatus, discoveredMCPTools);
-  }, [polledConnectionStatus, loadedServers, discoveredMCPTools]);
+    return applyPendingOAuthState(
+      applyMCPDiscoveryAuthorizationState(normalizedStatus, discoveredMCPTools),
+      serverInitStates,
+    );
+  }, [polledConnectionStatus, loadedServers, discoveredMCPTools, serverInitStates]);
 
   const updateServerInitState = useCallback(
     (serverName: string, updates: Partial<MCPServerInitState>) => {

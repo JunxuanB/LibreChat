@@ -58,6 +58,7 @@ import type { CodeExecutionContext } from './execution';
 import type { TextContentFragment } from '~/protection';
 import type { RunFileSession } from './files/session';
 import type { ServerRequest } from '~/types';
+import type { TextEdit } from './edits';
 import {
   backgroundTaskRegistry,
   runCheckBackgroundTask,
@@ -147,6 +148,7 @@ import { cleanCodeToolOutput } from './cleanup';
 import { primeSkillFiles } from './skillFiles';
 import { instrumentPtcToolMap } from './ptc';
 import { markSandboxReady } from './prewarm';
+import { normalizeEditArgs } from './edits';
 
 export interface ToolEndCallbackData {
   /** The executed call's arguments. The stream-consumer tool-end path cannot
@@ -1065,13 +1067,6 @@ type ParsedSkillAuthoringPath = {
   displayPath: string;
 };
 
-type TextEdit = {
-  old_text: string;
-  new_text: string;
-  /** Replaces every location instead of requiring exactly one. */
-  replace_all?: boolean;
-};
-
 type MatchedRange = { index: number; length: number };
 
 type MatchStatus =
@@ -1662,73 +1657,6 @@ function getAuthorInfo(req: ServerRequest): {
   };
 }
 
-/* Models often stringify nested JSON (JSON-in-JSON) instead of passing a
-   real array/object, which would otherwise fail validation and cost a retry
-   round-trip. Parse a JSON string back to its value; leave non-strings and
-   unparseable strings untouched so the explicit errors below still fire. */
-function coerceJsonValue(value: unknown): unknown {
-  if (typeof value !== 'string') {
-    return value;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-/** `replace_all` as a boolean, tolerating the stringified form some models send. */
-function normalizeReplaceAll(value: unknown): boolean | undefined | string {
-  if (value === true || value === 'true') return true;
-  if (value === undefined || value === null || value === false || value === 'false') {
-    return undefined;
-  }
-  return 'replace_all must be true or false.';
-}
-
-function textEdit(oldText: string, newText: string, rawReplaceAll: unknown): TextEdit | string {
-  if (oldText.length === 0) {
-    return 'old_text cannot be empty.';
-  }
-  const replaceAll = normalizeReplaceAll(rawReplaceAll);
-  if (typeof replaceAll === 'string') return replaceAll;
-  return replaceAll
-    ? { old_text: oldText, new_text: newText, replace_all: true }
-    : { old_text: oldText, new_text: newText };
-}
-
-function normalizeEditArgs(args: {
-  old_text?: unknown;
-  new_text?: unknown;
-  replace_all?: unknown;
-  edits?: unknown;
-}): TextEdit[] | string {
-  const coercedEdits = coerceJsonValue(args.edits);
-  if (Array.isArray(coercedEdits) && coercedEdits.length > 0) {
-    const edits: TextEdit[] = [];
-    for (const rawEdit of coercedEdits) {
-      const edit = coerceJsonValue(rawEdit);
-      if (!edit || typeof edit !== 'object') {
-        return 'Each edit must be an object with old_text and new_text.';
-      }
-      const entry = edit as { old_text?: unknown; new_text?: unknown; replace_all?: unknown };
-      if (typeof entry.old_text !== 'string' || typeof entry.new_text !== 'string') {
-        return 'Each edit requires string old_text and new_text.';
-      }
-      const normalized = textEdit(entry.old_text, entry.new_text, entry.replace_all);
-      if (typeof normalized === 'string') return normalized;
-      edits.push(normalized);
-    }
-    return edits;
-  }
-
-  if (typeof args.old_text !== 'string' || typeof args.new_text !== 'string') {
-    return 'Provide old_text and new_text, or a non-empty edits array.';
-  }
-  const normalized = textEdit(args.old_text, args.new_text, args.replace_all);
-  return typeof normalized === 'string' ? normalized : [normalized];
-}
-
 /**
  * Ranges a whitespace-tolerant strategy collects before it stops looking. An
  * internal memory bound, not a policy: ambiguity only needs a second match, and
@@ -1851,29 +1779,85 @@ function findLineWindowMatch(
   }
 
   const starts = lineStarts(content);
-  const normalizedNeedle =
-    strategy === 'line-trimmed'
-      ? needleLines.map((line) => line.trimEnd()).join('\n')
-      : stripCommonIndent(needle);
   const matches: Array<{ index: number; length: number }> = [];
-
-  for (
-    let i = 0;
-    i <= contentLines.length - needleLines.length && matches.length <= MAX_EDIT_MATCHES;
-    i++
-  ) {
-    const windowLines = contentLines.slice(i, i + needleLines.length);
-    const candidate =
-      strategy === 'line-trimmed'
-        ? windowLines.map((line) => line.trimEnd()).join('\n')
-        : stripCommonIndent(windowLines.join('\n'));
-    if (candidate !== normalizedNeedle) {
-      continue;
-    }
-    const index = starts[i];
-    const endLine = i + needleLines.length;
+  const addMatch = (startLine: number) => {
+    const index = starts[startLine];
+    const endLine = startLine + needleLines.length;
     const end = endLine < starts.length ? starts[endLine] - 1 : content.length;
     matches.push({ index, length: end - index });
+  };
+
+  if (strategy === 'line-trimmed') {
+    // Intern normalized lines so KMP compares integer IDs, not overlapping strings.
+    const ids = new Map<string, number>();
+    const pattern = needleLines.map((line) => {
+      const normalized = line.trimEnd();
+      let id = ids.get(normalized);
+      if (id == null) {
+        id = ids.size;
+        ids.set(normalized, id);
+      }
+      return id;
+    });
+    const prefixes = new Uint32Array(pattern.length);
+    let matched = 0;
+    for (let i = 1; i < pattern.length; i++) {
+      while (matched > 0 && pattern[i] !== pattern[matched]) {
+        matched = prefixes[matched - 1];
+      }
+      if (pattern[i] === pattern[matched]) matched++;
+      prefixes[i] = matched;
+    }
+
+    matched = 0;
+    for (let i = 0; i < contentLines.length && matches.length <= MAX_EDIT_MATCHES; i++) {
+      const id = ids.get(contentLines[i].trimEnd());
+      while (matched > 0 && id !== pattern[matched]) {
+        matched = prefixes[matched - 1];
+      }
+      if (id === pattern[matched]) matched++;
+      if (matched === pattern.length) {
+        addMatch(i - pattern.length + 1);
+        // Keep overlapping occurrences for ambiguity detection and replace_all.
+        matched = prefixes[matched - 1];
+      }
+    }
+  } else {
+    // This fallback runs only after line-trimmed and whitespace-normalized miss.
+    // Two nonblank needle lines imply at least two tokens: any indentation match
+    // would already have matched whitespace-normalized. An all-blank needle would
+    // already have matched line-trimmed. Only a single nonblank line remains.
+    let anchor = -1;
+    for (let i = 0; i < needleLines.length; i++) {
+      if (needleLines[i].trim().length === 0) continue;
+      if (anchor !== -1) return { status: 'none' };
+      anchor = i;
+    }
+    if (anchor === -1) return { status: 'none' };
+
+    const normalizedNeedle = stripCommonIndent(needle).split('\n');
+    const nonblank = new Uint32Array(contentLines.length + 1);
+    for (let i = 0; i < contentLines.length; i++) {
+      nonblank[i + 1] = nonblank[i] + Number(contentLines[i].trim().length > 0);
+    }
+    for (let i = anchor; i < contentLines.length && matches.length <= MAX_EDIT_MATCHES; i++) {
+      if (nonblank[i + 1] === nonblank[i]) continue;
+      const start = i - anchor;
+      const end = start + needleLines.length;
+      if (end > contentLines.length) break;
+      if (nonblank[end] - nonblank[start] !== 1) continue;
+      const indent = contentLines[i].length - contentLines[i].trimStart().length;
+      let matchesNeedle = true;
+      // Eligible windows have one nonblank line at a fixed offset. Each file line
+      // can belong to at most two of them, so these comparisons stay linear too.
+      for (let j = 0; j < needleLines.length; j++) {
+        if (contentLines[start + j].slice(indent) !== normalizedNeedle[j]) {
+          matchesNeedle = false;
+          break;
+        }
+      }
+      if (matchesNeedle) addMatch(start);
+    }
   }
 
   if (matches.length === 1) {
