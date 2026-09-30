@@ -16,6 +16,7 @@ import type {
   ScheduleLimits,
   FireResult,
 } from './types';
+import type { ScheduleWritePreflight } from './context';
 import type { ServerRequest } from '~/types';
 import {
   isValidCronExpression,
@@ -396,11 +397,13 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
     limits: ScheduleLimits,
     scheduleId: string,
     activationPreflight = false,
+    writePreflight?: ScheduleWritePreflight,
   ): Promise<boolean> {
     try {
       await deps.preflightMCP(agentId, requestUser(req), {
         scheduleId,
         ...(activationPreflight && { activationPreflight: true }),
+        ...(writePreflight && { writePreflight }),
         signal,
         concurrency: limits.mcpPreflightConcurrency,
         deadlineMs: Date.now() + limits.mcpPreflightTimeoutMs,
@@ -1007,6 +1010,7 @@ export function createSchedulesHandlers(deps: SchedulesHandlersDeps): SchedulesH
         limits,
         existing.id,
         existing.enabled === false && parsed.data.enabled === true,
+        { agentId: existing.agent_id, configRevision: existing.configRevision },
       ))
     )
       return;

@@ -105,6 +105,19 @@ admission snapshot cannot select the consumed generation. Revocation fences
 credential snapshots before publishing its pause and holds that fence through
 deletion, so activations arriving during teardown cannot use the new revision.
 
+Owner updates validate the prospective root agent while the persisted row still
+has its old agent. The write preflight carries the persisted agent and revision
+read by the handler; that snapshot must still match, and the prospective agent's
+access is checked independently. The final update keeps its revision CAS. This
+write-only context never comes from request-body fields, dispatched runs, tool
+arguments or restored jobs; actual runs still require the persisted root agent.
+
+A rejected renewal only requires new authorization if the redeemed generation
+is still current. If new owner consent superseded it, the failure is retryable
+and cannot permanently disable recurrence. The retirement fence observes the
+current generation before deletion, including structured provider rejections;
+legacy failures are also reclassified against a coherent current snapshot.
+
 The host's signal-aware IdP adapter cancels the coordinator's network request on
 teardown without aborting unrelated browser requests sharing the SDK configuration.
 Grant-store outages fail the list request; the frontend keeps its existing retry

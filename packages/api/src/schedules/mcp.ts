@@ -28,10 +28,10 @@ import type {
   UpstreamTokenTarget,
 } from '../mcp/oauth/obo';
 import type { ParsedServerConfig, UserMCPConnectionOptions } from '../mcp/types';
+import type { ScheduledTokenContext, ScheduleWritePreflight } from './context';
 import type { CheckAccessParams } from '../middleware/access';
 import type { MCPToolsSnapshot } from '../mcp/connection';
 import type { GetAppConfigOptions } from '../app/service';
-import type { ScheduledTokenContext } from './context';
 import type { ScheduleMCPPreflight } from './types';
 import {
   MCPAuthenticationRejectedError,
@@ -75,6 +75,7 @@ export type HostUpstreamTokenProviderResolver = (
     target?: UpstreamTokenTarget;
     /** Trusted write-side readiness probe, never present on a dispatched run. */
     activationPreflight?: boolean;
+    writePreflight?: ScheduleWritePreflight;
   },
 ) => ReturnType<UpstreamTokenProviderResolver>;
 
@@ -85,9 +86,11 @@ export function bindUpstreamTokenProviderResolver(
   signal?: AbortSignal,
   context?: ScheduledTokenContext,
   activationPreflight = false,
+  writePreflight?: ScheduleWritePreflight,
 ): UpstreamTokenProviderResolver | undefined {
   if (!resolve) return undefined;
   const capturedContext = context && Object.freeze({ ...context });
+  const capturedWrite = context && writePreflight && Object.freeze({ ...writePreflight });
   const pending = new Map<string, Promise<UpstreamTokenProvider | undefined>>();
   return (options) => {
     signal?.throwIfAborted();
@@ -103,6 +106,7 @@ export function bindUpstreamTokenProviderResolver(
           ...(capturedContext ? { context: capturedContext } : {}),
           ...(target ? { target } : {}),
           ...(activationPreflight ? { activationPreflight: true } : {}),
+          ...(capturedWrite ? { writePreflight: capturedWrite } : {}),
         });
       })
       .then((provider) => {
@@ -718,6 +722,7 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
           }
         : undefined,
       options.activationPreflight === true && options.scheduleId != null,
+      options.writePreflight,
     );
     throwIfAborted();
     const requestBody = {

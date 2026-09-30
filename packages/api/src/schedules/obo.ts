@@ -8,6 +8,7 @@ import type {
   PluginAuthMethods,
 } from '@librechat/data-schemas';
 import type { Response } from 'express';
+import type { ScheduledTokenContext, ScheduleWritePreflight } from './context';
 import type { SessionOpenIDTokens } from '../auth/openid/types';
 import type { HostUpstreamTokenProviderResolver } from './mcp';
 import type { UpstreamTokenTarget } from '../mcp/oauth/obo';
@@ -16,7 +17,6 @@ import type { GetAppConfigOptions } from '../app/service';
 import type { MCPOAuthTokens } from '../mcp/oauth/types';
 import type { FlowStateManager } from '../flow/manager';
 import type { ParsedServerConfig } from '../mcp/types';
-import type { ScheduledTokenContext } from './context';
 import type { ScheduleMCPPreflight } from './types';
 import type { ServerRequest } from '../types/http';
 import {
@@ -292,6 +292,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     context: ScheduledTokenContext,
     target: UpstreamTokenTarget,
     allowDisabled = false,
+    writePreflight?: ScheduleWritePreflight,
   ) => {
     if (context.ownerId !== userId || context.invocationMode !== 'delegated') throw missingGrant();
     const [user, schedule, ownerActive] = await Promise.all([
@@ -306,7 +307,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       String(schedule.user) !== userId ||
       user.tenantId !== context.tenantId ||
       schedule.tenantId !== context.tenantId ||
-      schedule.agent_id !== context.agentId ||
+      (writePreflight
+        ? schedule.agent_id !== writePreflight.agentId ||
+          schedule.configRevision !== writePreflight.configRevision
+        : schedule.agent_id !== context.agentId) ||
       (!allowDisabled && !schedule.enabled) ||
       !user.openidId ||
       !user.openidIssuer
@@ -370,11 +374,12 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     target: UpstreamTokenTarget,
     forceRefresh = false,
     activationPreflight = false,
+    writePreflight?: ScheduleWritePreflight,
   ): Promise<MCPOAuthTokens> => {
     if (!target.url) throw missingGrant();
     let authorized: Awaited<ReturnType<typeof validate>>;
     try {
-      authorized = await validate(userId, context, target, activationPreflight);
+      authorized = await validate(userId, context, target, activationPreflight, writePreflight);
     } catch (error) {
       if (error instanceof OboTokenResolutionError) throw error;
       throw new OboTokenResolutionError(
@@ -479,10 +484,40 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           `${target.scopes} offline_access`
       )
         throw new ReauthenticationRequiredError(key, 'binding');
+      const rejectRenewal = async (reason: 'expired' | 'invalid_client'): Promise<never> => {
+        const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
+        if (!lease)
+          throw new MCPTokenRefreshUnavailableError(
+            key,
+            new Error('Grant retirement fence unavailable'),
+          );
+        try {
+          const current = await tokens.findToken({
+            userId,
+            type: 'mcp_oauth_refresh',
+            identifier: `${identifier}:refresh`,
+          });
+          if (current && metadata(current).credential_set_id !== stored.credentialSetId)
+            throw new MCPTokenRefreshUnavailableError(
+              key,
+              new Error('Failed renewal was superseded'),
+            );
+          const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          await tokens.deleteTokens({
+            userId,
+            identifier: new RegExp(`^${escaped}(?::refresh|:client)?$`),
+            metadataCredentialSetId: stored.credentialSetId,
+          });
+          throw new ReauthenticationRequiredError(key, reason);
+        } finally {
+          await lease.release();
+        }
+      };
       let next: GrantResponse;
       try {
         next = await provider.refresh(secret, target.scopes, signal);
       } catch (error) {
+        signal?.throwIfAborted();
         if (isRetryableOboExchangeError(error))
           throw new MCPTokenRefreshUnavailableError(key, error);
         const code =
@@ -500,10 +535,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             'access_denied',
           ].includes(code)
         )
-          throw new ReauthenticationRequiredError(
-            key,
-            code === 'invalid_client' ? 'invalid_client' : 'expired',
-          );
+          return rejectRenewal(code === 'invalid_client' ? 'invalid_client' : 'expired');
         throw error;
       }
       signal?.throwIfAborted();
@@ -513,26 +545,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           throw new ReauthenticationRequiredError(key, 'expired');
         expiresIn = expiresInSeconds(next);
       } catch {
-        // A received response may have consumed the refresh token, even when
-        // its access token cannot be used. Retire the redeemed generation,
-        // never the earlier admission snapshot or a new owner enrollment.
-        const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
-        if (!lease)
-          throw new MCPTokenRefreshUnavailableError(
-            key,
-            new Error('Grant retirement fence unavailable'),
-          );
-        try {
-          const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          await tokens.deleteTokens({
-            userId,
-            identifier: new RegExp(`^${escaped}(?::refresh|:client)?$`),
-            metadataCredentialSetId: stored.credentialSetId,
-          });
-        } finally {
-          await lease.release();
-        }
-        throw new ReauthenticationRequiredError(key, 'expired');
+        // A received response may have consumed the refresh token. Retire only
+        // its generation; a new owner enrollment is a transient supersession,
+        // not evidence that the schedule has lost unattended authorization.
+        return rejectRenewal('expired');
       }
       return {
         access_token: next.access_token,
@@ -578,8 +594,22 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       await snapshot(result.credential_set_id);
       return result;
     } catch (error) {
-      if (error instanceof ReauthenticationRequiredError && error.reason !== 'binding')
+      if (
+        (error instanceof ReauthenticationRequiredError && error.reason !== 'binding') ||
+        (error instanceof OboTokenResolutionError && !error.retryable)
+      ) {
+        try {
+          await snapshot(generation);
+        } catch (current) {
+          if (current instanceof OboTokenResolutionError) throw current;
+          throw new OboTokenResolutionError(
+            'session_refresh_failed',
+            'Scheduled OBO authorization changed during renewal.',
+            true,
+          );
+        }
         throw missingGrant();
+      }
       if (
         error instanceof MCPTokenRefreshUnavailableError ||
         error instanceof ReauthenticationRequiredError
@@ -602,11 +632,18 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
 
   const resolve: HostUpstreamTokenProviderResolver = async (
     user,
-    { context, target, activationPreflight },
+    { context, target, activationPreflight, writePreflight },
   ) => {
     if (!context || !target || user.id !== context.ownerId) return undefined;
     return async ({ forceRefresh } = {}) => {
-      const result = await read(user.id, context, target, forceRefresh, activationPreflight);
+      const result = await read(
+        user.id,
+        context,
+        target,
+        forceRefresh,
+        activationPreflight,
+        writePreflight,
+      );
       return {
         scheduledObo: true,
         access_token: result.access_token,

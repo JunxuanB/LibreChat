@@ -1,6 +1,8 @@
 import { AgentCapabilities, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type { IUser, IRole, AppConfig, AgentGraphNode } from '@librechat/data-schemas';
+import type { HostUpstreamTokenProviderResolver } from './mcp';
 import type { UpstreamTokenProvider } from '../mcp/oauth/obo';
+import type { ScheduleWritePreflight } from './context';
 import type { ParsedServerConfig } from '../mcp/types';
 import {
   bindUpstreamTokenProviderResolver,
@@ -100,6 +102,7 @@ function setup(tools = ['search_mcp_docs']) {
         deadlineMs?: number;
         scheduleId?: string;
         activationPreflight?: boolean;
+        writePreflight?: ScheduleWritePreflight;
         oboOnly?: boolean;
         inspectOboTarget?: {
           serverName: string;
@@ -190,6 +193,51 @@ it('allows disabled-grant reads only in the owner activation preflight context',
   expect(jest.mocked(deps.resolveUpstreamTokenProvider!).mock.lastCall?.[1]).not.toHaveProperty(
     'activationPreflight',
   );
+});
+
+it('captures a trusted prospective snapshot only for scoped write preflight', async () => {
+  const lookup = jest.fn<
+    ReturnType<HostUpstreamTokenProviderResolver>,
+    Parameters<HostUpstreamTokenProviderResolver>
+  >(async () => jest.fn(async () => ({ access_token: 'token' })));
+  const snapshot = { agentId: 'persisted', configRevision: 7 };
+  const context = {
+    scheduleId: 'schedule',
+    ownerId: 'owner',
+    agentId: 'prospective',
+    invocationMode: 'delegated' as const,
+  };
+  const bound = bindUpstreamTokenProviderResolver(
+    principal,
+    lookup,
+    undefined,
+    context,
+    false,
+    snapshot,
+  )!;
+  snapshot.agentId = 'injected';
+  snapshot.configRevision = 9;
+  await bound();
+  expect(lookup).toHaveBeenLastCalledWith(
+    principal,
+    expect.objectContaining({
+      context,
+      writePreflight: { agentId: 'persisted', configRevision: 7 },
+    }),
+  );
+  const run = bindUpstreamTokenProviderResolver(principal, lookup, undefined, context)!;
+  await run();
+  expect(lookup.mock.lastCall?.[1]).not.toHaveProperty('writePreflight');
+  const unscoped = bindUpstreamTokenProviderResolver(
+    principal,
+    lookup,
+    undefined,
+    undefined,
+    false,
+    snapshot,
+  )!;
+  await unscoped();
+  expect(lookup.mock.lastCall?.[1]).not.toHaveProperty('writePreflight');
 });
 
 it('resume preflight checks OBO targets without probing unrelated direct OAuth servers', async () => {

@@ -727,6 +727,19 @@ describe('separately authorized scheduled OBO grants', () => {
       await expect(preflight('root', user, options)).resolves.toEqual([
         { server: 'Files', status: 'ready' },
       ]);
+      const writePreflight = { agentId: row.agent_id, configRevision: row.configRevision };
+      await expect(preflight('new-agent', user, { ...options, writePreflight })).resolves.toEqual([
+        { server: 'Files', status: 'ready' },
+      ]);
+      await expect(preflight('new-agent', user, options)).rejects.toBeInstanceOf(ScheduleMCPError);
+      row.agent_id = 'new-agent';
+      row.configRevision += 1;
+      await expect(
+        preflight('new-agent', user, { ...options, writePreflight }),
+      ).rejects.toBeInstanceOf(ScheduleMCPError);
+      await expect(preflight('new-agent', user, options)).resolves.toEqual([
+        { server: 'Files', status: 'ready' },
+      ]);
     } finally {
       await mcp.close();
     }
@@ -1188,30 +1201,89 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(tokenStore.getAll()).toEqual([]);
   });
 
-  it('does not retire a fresh enrollment when an older renewal returns narrower scopes', async () => {
-    const { service, row, requestGrant, tokenStore } = harness();
+  it.each(['narrow', 'unusable', 'structured', 'legacy'] as const)(
+    'treats a superseded %s renewal failure as transient while new authorization remains usable',
+    async (failure) => {
+      const { service, row, requestGrant, tokenStore } = harness();
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      row.enabled = true;
+      requestGrant.mockImplementationOnce(async () => {
+        requestGrant.mockResolvedValueOnce({
+          access_token: 'new-consent',
+          refresh_token: 'new-grant',
+          expires_in: 3600,
+        });
+        await service.enroll(user.id, row.id, 'Files', 'new-assertion');
+        if (failure === 'structured')
+          throw Object.assign(new Error('server responded with an error in the response body'), {
+            error: 'invalid_grant',
+            status: 400,
+          });
+        if (failure === 'legacy') throw new Error('invalid_grant: old grant rejected');
+        return {
+          access_token: 'failed-old',
+          refresh_token: 'consumed-old',
+          expires_in: failure === 'unusable' ? 0 : 3600,
+          scope: failure === 'narrow' ? 'openid' : target.scopes,
+        };
+      });
+      const provider = (await service.resolve(user, { context, target }))!;
+      await expect(provider({ forceRefresh: true })).rejects.toMatchObject({
+        reason: 'session_refresh_failed',
+        retryable: true,
+      });
+      expect(tokenStore.getAll()).toHaveLength(3);
+      await expect(provider()).resolves.toMatchObject({ access_token: 'new-consent' });
+      expect(row.enabled).toBe(true);
+    },
+  );
+
+  it('probes an accessible prospective agent without giving a dispatched run the write exception', async () => {
+    const { service, row, setAgentAllowed, requestGrant } = harness();
     await service.enroll(user.id, row.id, 'Files', 'assertion');
     row.enabled = true;
-    requestGrant.mockImplementationOnce(async () => {
-      requestGrant.mockResolvedValueOnce({
-        access_token: 'new-consent',
-        refresh_token: 'new-grant',
-        expires_in: 3600,
-      });
-      await service.enroll(user.id, row.id, 'Files', 'new-assertion');
-      return {
-        access_token: 'narrow-old',
-        refresh_token: 'consumed-old',
-        expires_in: 3600,
-        scope: 'openid',
-      };
-    });
-    const provider = (await service.resolve(user, { context, target }))!;
-    await expect(provider({ forceRefresh: true })).rejects.toMatchObject({ retryable: false });
-    expect(tokenStore.getAll()).toHaveLength(3);
-    await expect(provider()).resolves.toMatchObject({ access_token: 'new-consent' });
+    const prospective = { ...context, agentId: 'new-agent' };
+    const writePreflight = { agentId: row.agent_id, configRevision: row.configRevision };
+    const run = (await service.resolve(user, { context: prospective, target }))!;
+    await expect(run()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    const admission = (await service.resolve(user, {
+      context: prospective,
+      target,
+      writePreflight,
+    }))!;
+    await expect(admission()).resolves.toMatchObject({ access_token: 'first' });
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+    setAgentAllowed(false);
+    await expect(admission()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    setAgentAllowed(true);
+    row.configRevision += 1;
+    await expect(admission()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    row.agent_id = prospective.agentId;
+    await expect(run()).resolves.toMatchObject({ access_token: 'first' });
   });
 
+  it('requires the persisted agent snapshot and activation flag for a paused prospective update', async () => {
+    const { service, row } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    const prospective = { ...context, agentId: 'new-agent' };
+    const writePreflight = { agentId: row.agent_id, configRevision: row.configRevision };
+    const denied = (await service.resolve(user, { context: prospective, target, writePreflight }))!;
+    await expect(denied()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    const activation = (await service.resolve(user, {
+      context: prospective,
+      target,
+      writePreflight,
+      activationPreflight: true,
+    }))!;
+    await expect(activation()).resolves.toMatchObject({ access_token: 'first' });
+    const mismatched = (await service.resolve(user, {
+      context: prospective,
+      target,
+      writePreflight: { ...writePreflight, agentId: 'wrong' },
+      activationPreflight: true,
+    }))!;
+    await expect(mismatched()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
   it('blocks an activation that reads the new paused revision while revocation is still deleting', async () => {
     const { service, row, tokenStore } = harness();
     await service.enroll(user.id, row.id, 'Files', 'assertion');

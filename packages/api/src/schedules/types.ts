@@ -7,6 +7,7 @@ import type {
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { AgentTriggerEnqueueOptions, AgentTriggerEnvelope } from '../agents/triggers';
+import type { ScheduleWritePreflight } from './context';
 import type { SlotClaimResult } from './capacity';
 
 export interface ScheduleLimits {
@@ -337,6 +338,7 @@ export type ScheduleMCPPreflight = (
     scheduleId?: string;
     /** Only a disabled row being explicitly activated may probe its already-enrolled grant. */
     activationPreflight?: boolean;
+    writePreflight?: ScheduleWritePreflight;
     /** Resume admission checks existing OBO targets even after enrollment policy removal. */
     oboOnly?: boolean;
     inspectOboTarget?: {

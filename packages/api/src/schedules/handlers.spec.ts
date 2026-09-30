@@ -1277,6 +1277,75 @@ describe('scheduled OBO activation preflight', () => {
     expect(preflightMCP.mock.calls[0][2]).not.toHaveProperty('activationPreflight');
   });
 
+  it('passes the persisted snapshot to prospective-agent preflight and revision-fences the final edit', async () => {
+    const current = fullScheduleDoc({
+      enabled: true,
+      agent_id: 'agent-1',
+      configRevision: 7,
+      file_ids: [],
+    });
+    const deps = makeCreateDeps({ isUserDeleting: async () => false });
+    jest.mocked(deps.methods.getScheduleById).mockResolvedValue(current);
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).updateSchedule(
+      {
+        params: { id: current.id },
+        body: {
+          agent_id: 'agent-2',
+          expectedConfigRevision: 7,
+          writePreflight: { agentId: 'injected', configRevision: 123 },
+        },
+        user: { id: 'user-1', tenantId: 't1', role: 'USER' },
+      } as unknown as ServerRequest,
+      res,
+    );
+    expect(captured.status ?? 200).toBe(200);
+    expect(deps.preflightMCP).toHaveBeenCalledWith(
+      'agent-2',
+      expect.objectContaining({ id: 'user-1' }),
+      expect.objectContaining({ writePreflight: { agentId: 'agent-1', configRevision: 7 } }),
+    );
+    expect(deps.methods.updateScheduleById).toHaveBeenCalledWith(
+      current.id,
+      'user-1',
+      expect.objectContaining({ agent_id: 'agent-2' }),
+      undefined,
+      { expectedConfigRevision: 7 },
+    );
+    expect(jest.mocked(deps.methods.updateScheduleById).mock.calls[0][2]).not.toHaveProperty(
+      'writePreflight',
+    );
+  });
+
+  it('does not commit a prospective-agent update after a concurrent revision change', async () => {
+    const current = fullScheduleDoc({
+      enabled: true,
+      agent_id: 'agent-1',
+      configRevision: 7,
+      file_ids: [],
+    });
+    const deps = makeCreateDeps({ isUserDeleting: async () => false });
+    jest.mocked(deps.methods.getScheduleById).mockResolvedValue(current);
+    jest.mocked(deps.methods.updateScheduleById).mockResolvedValue(null);
+    const { res, captured } = makeRes();
+    await createSchedulesHandlers(deps).updateSchedule(
+      {
+        params: { id: current.id },
+        body: { agent_id: 'agent-2', expectedConfigRevision: 7 },
+        user: { id: 'user-1', tenantId: 't1' },
+      } as unknown as ServerRequest,
+      res,
+    );
+    expect(captured.status).toBe(409);
+    expect(deps.methods.updateScheduleById).toHaveBeenCalledWith(
+      current.id,
+      'user-1',
+      expect.objectContaining({ agent_id: 'agent-2' }),
+      undefined,
+      { expectedConfigRevision: 7 },
+    );
+  });
+
   it('does not probe a disabled schedule whose edit leaves it paused', async () => {
     const preflightMCP = jest.fn(async () => []);
     const deps = makeCreateDeps({ preflightMCP, isUserDeleting: async () => false });
