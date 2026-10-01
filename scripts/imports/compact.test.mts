@@ -346,8 +346,8 @@ test('preserves unbound call and tag receivers, including optional and wrapped c
   const model =
     'export function receiver() { return this === undefined; } export function tag() { return this === undefined; }';
   const output = compact(source, 40);
-  assert.match(output, /\(0, m.receiver\)\(\)/);
-  assert.match(output, /\(0, m.receiver\)\?\.\(\)/);
+  assert.match(output, /\(void 0, m.receiver\)\(\)/);
+  assert.match(output, /\(void 0, m.receiver\)\?\.\(\)/);
   const before = await executeModule(source, model);
   assert.equal(before.trim(), '[true,true,true,true,true,true,true]');
   assert.equal(await executeModule(output, model), before);
@@ -365,6 +365,40 @@ test('preserves unbound call and tag receivers, including optional and wrapped c
     ).length,
     0,
   );
+});
+
+test('preserves receivers through generic instantiation expressions and template tags', async () => {
+  const source =
+    "import { receiver, tag, receiver as call } from './models';\n" +
+    'console.log(JSON.stringify([receiver<string>(), (receiver<string>)(), (receiver<string>)?.(), ((receiver<string>)!)(), (call<number>)(), (tag<string>)`value`]));\n';
+  const model =
+    'export function receiver<T>(this: void) { return this === undefined; } export function tag<T>(this: void) { return this === undefined; }';
+  const output = compact(source, 40);
+  assert.match(output, /\(void 0, m.receiver\)/);
+  const before = await executeModule(source, model);
+  assert.equal(before.trim(), '[true,true,true,true,true,true]');
+  assert.equal(await executeModule(output, model), before);
+  const typed =
+    "import { receiver, other } from './models';\n(receiver<string>)();\n(receiver<typeof other>)();\n(receiver as typeof receiver)();\n";
+  const typedModel = 'export function receiver<T>(this: void): void {} export const other = 1;';
+  assert.equal(diagnostics(typed, typedModel).length, 0);
+  assert.equal(diagnostics(compact(typed, 30), typedModel).length, 0);
+});
+
+test('expands __proto__ shorthand as an own property, including escaped identifiers', async () => {
+  for (const name of ['__proto__', '\\u005f\\u005fproto__']) {
+    const source =
+      "import { value as __proto__, other, another } from './models';\n" +
+      `const obj = { ${name} };\nconsole.log(JSON.stringify([Object.hasOwn(obj, '__proto__'), Object.getPrototypeOf(obj) === Object.prototype, Object.keys(obj), obj['__proto__']]));\n`;
+    const output = compact(source, 40);
+    assert.match(output, /\['__proto__'\]: m.value/);
+    for (const value of ['{ inherited: true }', 'null', '7']) {
+      const model = `export const value = ${value}; export const other = 1; export const another = 2;`;
+      const before = await executeModule(source, model);
+      assert.ok(before.startsWith('[true,true,'));
+      assert.equal(await executeModule(output, model), before);
+    }
+  }
 });
 
 test('preserves live bindings, existing member receivers, constructors and shorthand keys', async () => {
@@ -425,7 +459,7 @@ test('keeps short runtime imports, mixed inline types, defaults, comments, expor
 });
 
 test('preserves direct hook calls so hook lint remains effective', () => {
-  for (const call of ['useState()', '(useState)()', 'useState?.()']) {
+  for (const call of ['useState()', '(useState)()', 'useState?.()', '(useState<number>)()']) {
     const source = "import { useState, useEffect, useCallback } from 'react';\n" + call + ';\n';
     assert.equal(compact(source, 30), source);
   }
@@ -442,7 +476,7 @@ test('preserves side-effect imports and formatting around runtime compaction', a
     singleQuote: true,
   });
   assert.equal(compact(formatted), formatted);
-  assert.match(formatted, /\(0, m.Widget\)\(\)/);
+  assert.match(formatted, /\(void 0, m.Widget\)\(\)/);
 });
 
 test('handles JavaScript, JSX and Windows runtime import paths, with collision-free namespaces', () => {
