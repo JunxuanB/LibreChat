@@ -182,12 +182,15 @@ Imports have three sections: package values (shortest line first, with `react` f
 (longest line first, package types before local types), and local/project values (longest line first).
 Use standalone `import type { ... }`, not inline `type` within a value import. Run the scoped
 import sorter on files you change: `npm run sort-imports -- path/to/file.ts`, then run
-Prettier on those files. Long named type imports are automatically rewritten to a
-collision-free `import type * as t` namespace using `.prettierrc`'s `printWidth`.
+Prettier on those files. Long named value and type imports are automatically rewritten
+to collision-free `import * as m` and `import type * as t` namespaces using `.prettierrc`'s
+`printWidth`. References, JSX tags, and object shorthand keys are updated together;
+bare function calls and template tags stay unbound to preserve their `this` behavior.
 Compaction is required wherever it is safe: the pre-commit hook applies it to staged
 source files, and Static Checks rejects eligible imports in changed source files.
-Runtime imports and short type imports stay unchanged; default aliases, commented
-import clauses, re-exported types, and unsupported references are left alone. Existing
+Short imports, default/mixed imports, commented clauses, re-exported bindings, and
+unsupported references stay unchanged. Runtime candidates with writes, direct `eval`,
+or direct hook calls are skipped to preserve semantics and hook lint coverage. Existing
 `sort-imports-ignore` markers still apply. Add `--check` to verify cleanup without writing.
 Untouched source files are not migrated or rejected by the changed-file CI gate.
 

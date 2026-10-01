@@ -7,11 +7,11 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { compactTypeImports } from './compact.mts';
+import { compactImports } from './compact.mts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const compact = (source: string, width = 60): string =>
-  compactTypeImports(source, 'consumer.tsx', width);
+  compactImports(source, 'consumer.tsx', width);
 const header = "import type { Message, Conversation, Agent as Assistant } from './models';\n";
 
 function diagnostics(
@@ -77,9 +77,8 @@ test('respects printWidth rather than existing line breaks', () => {
   assert.equal(compact(header, header.trimEnd().length), header);
 });
 
-test('leaves values, inline types, defaults, and existing namespaces untouched', () => {
+test('leaves inline types, defaults, and existing namespaces untouched', () => {
   for (const source of [
-    "import { Message, Conversation, Agent } from './models';\n",
     "import { type Message, type Conversation, Agent } from './models';\n",
     "import type Models from './models';\n",
     "import type * as models from './models';\n",
@@ -201,7 +200,7 @@ test('compacts consistently with Windows, POSIX, and relative filenames', () => 
     'src\\consumer.tsx',
     'src/consumer.tsx',
   ])
-    assert.equal(compactTypeImports(source, file, 60), expected, file);
+    assert.equal(compactImports(source, file, 60), expected, file);
 });
 
 test('output stays compact after Prettier formats it', async () => {
@@ -221,7 +220,7 @@ test('output stays compact after Prettier formats it', async () => {
   );
 });
 
-test('normal CLI and pre-commit cleanup compact types, and checks reject eligible imports', async () => {
+test('normal CLI and pre-commit cleanup enforce value and type compaction', async () => {
   const directory = await mkdtemp(join(ROOT, 'client/src/.compact-imports-test-'));
   const file = join(directory, 'fixture.ts');
   const source =
@@ -267,6 +266,19 @@ test('normal CLI and pre-commit cleanup compact types, and checks reject eligibl
     assert.equal(hook.status, 0, hook.stderr);
     assert.equal(await readFile(file, 'utf8'), output);
 
+    const values = source.replace('import type {', 'import {');
+    await writeFile(file, values);
+    assert.equal(run('--check').status, 1);
+    assert.equal(staticCheck().status, 1);
+    const valueHook = spawnSync(process.execPath, [...args, file], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(valueHook.status, 0, valueHook.stderr);
+    assert.equal(
+      await readFile(file, 'utf8'),
+      output.replace('import type * as t', 'import * as m').replace('t.Message', 'm.Message'),
+    );
+    assert.equal(run('--check').status, 0);
+    assert.equal(staticCheck().status, 0);
+
     await writeFile(file, '// sort-imports-ignore\n' + source);
     assert.equal(run('--check').status, 0);
     assert.equal(run().status, 0);
@@ -277,7 +289,6 @@ test('normal CLI and pre-commit cleanup compact types, and checks reject eligibl
       longImport + 'export type { Message };\n',
       longImport.replace('Message,', 'Message, /* retained */'),
       "import type { default as Message, Conversation, AgentConfiguration, AgentPermission } from './models';\n",
-      "import { Message, Conversation, AgentConfiguration, AgentPermission, AgentCapability } from './models';\n",
       "import type { Message, Conversation } from './models';\n",
     ]) {
       await writeFile(file, exempt);
@@ -288,4 +299,176 @@ test('normal CLI and pre-commit cleanup compact types, and checks reject eligibl
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+async function executeModule(source: string, model: string): Promise<string> {
+  const directory = await mkdtemp(join(ROOT, 'scripts/imports/.runtime-imports-'));
+  const emit = (text: string): string =>
+    ts.transpileModule(text, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        jsx: ts.JsxEmit.React,
+        jsxFactory: 'render',
+      },
+    }).outputText;
+  try {
+    await writeFile(join(directory, 'models.mjs'), emit(model));
+    await writeFile(
+      join(directory, 'consumer.mjs'),
+      emit(source.replaceAll("'./models'", "'./models.mjs'")),
+    );
+    const result = spawnSync(process.execPath, [join(directory, 'consumer.mjs')], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('compacts runtime aliases, classes, callbacks and object shorthand without capturing locals', () => {
+  const source =
+    "import { Message, Conversation, Agent as Assistant } from './models';\n" +
+    'type Row = Message;\nconst row = new Message();\nconst props = { Assistant };\nconst callback = Conversation;\nfunction scoped<Message>(value: Message) { return value; }\n';
+  assert.equal(
+    compact(source),
+    "import * as m from './models';\n" +
+      'type Row = m.Message;\nconst row = new m.Message();\nconst props = { Assistant: m.Agent };\nconst callback = m.Conversation;\nfunction scoped<Message>(value: Message) { return value; }\n',
+  );
+});
+
+test('preserves unbound call and tag receivers, including optional and wrapped calls', async () => {
+  const source =
+    "import { receiver, tag, receiver as call } from './models';\n" +
+    'console.log(JSON.stringify([receiver(), receiver?.(), (receiver)(), (receiver!)(), call(), tag`value`, (tag)`value`]));\n';
+  const model =
+    'export function receiver() { return this === undefined; } export function tag() { return this === undefined; }';
+  const output = compact(source, 40);
+  assert.match(output, /\(0, m.receiver\)\(\)/);
+  assert.match(output, /\(0, m.receiver\)\?\.\(\)/);
+  const before = await executeModule(source, model);
+  assert.equal(before.trim(), '[true,true,true,true,true,true,true]');
+  assert.equal(await executeModule(output, model), before);
+  assert.equal(
+    diagnostics(
+      "import { receiver, other } from './models';\nreceiver();\n",
+      'export function receiver(this: void): void {} export const other = 1;',
+    ).length,
+    0,
+  );
+  assert.equal(
+    diagnostics(
+      compact("import { receiver, other } from './models';\nreceiver();\n", 30),
+      'export function receiver(this: void): void {} export const other = 1;',
+    ).length,
+    0,
+  );
+});
+
+test('preserves live bindings, existing member receivers, constructors and shorthand keys', async () => {
+  const source =
+    "import { counter, increment, service, Thing } from './models';\n" +
+    'const before = counter;\nincrement();\nconst props = { counter };\nconsole.log(JSON.stringify([before, counter, props.counter, service.read(), new Thing().value]));\n';
+  const model =
+    'export let counter = 1; export function increment() { counter++; } export const service = { value: 3, read() { return this.value; } }; export class Thing { value = 4; }';
+  const output = compact(source);
+  assert.match(output, /counter: m.counter/);
+  assert.match(output, /m.service.read\(\)/);
+  const before = await executeModule(source, model);
+  assert.equal(before.trim(), '[1,2,2,3,4]');
+  assert.equal(await executeModule(output, model), before);
+});
+
+test('updates opening, closing and member JSX tags without changing attributes or intrinsic tags', async () => {
+  const source =
+    "import { Button as Primary, Panel, Group } from './models';\n" +
+    'const render = (component, props, ...children) => [component, props, children];\n' +
+    'const view = <Primary Panel={Panel}><Group.Item /><div>body</div></Primary>;\nconsole.log(JSON.stringify(view));\n';
+  const model =
+    "export const Button = 'button'; export const Panel = 'panel'; export const Group = { Item: 'item' };";
+  const output = compact(source, 40);
+  assert.match(output, /<m.Button Panel=\{m.Panel\}>/);
+  assert.match(output, /<m.Group.Item \/>/);
+  assert.match(output, /<\/m.Button>/);
+  assert.match(output, /<div>body<\/div>/);
+  assert.equal(await executeModule(output, model), await executeModule(source, model));
+});
+
+test('keeps short runtime imports, mixed inline types, defaults, comments, exports and unsafe writes', () => {
+  const runtime = "import { Message, Conversation, Agent as Assistant } from './models';\n";
+  assert.equal(compact(runtime, 100), runtime);
+  for (const suffix of [
+    'export { Message };\n',
+    'export { Message as PublicMessage };\n',
+    'Message = value;\n',
+    'Message += value;\n',
+    'Message++;\n',
+    '++Message;\n',
+    '({ Message } = value);\n',
+    '[Message] = value;\n',
+    'for (Message of values) {}\n',
+    'delete Message;\n',
+    "eval('Message');\n",
+    "(eval)('Message');\n",
+    '/** {@link Message} */\n',
+  ])
+    assert.equal(compact(runtime + suffix), runtime + suffix, suffix);
+  for (const source of [
+    runtime.replace('Message,', 'Message, /* retained */'),
+    "import { default as Message, Conversation, Agent } from './models';\n",
+    "import Message, { Conversation, Agent, Configuration } from './models';\n",
+    "import { type Message, Conversation, Agent } from './models';\n",
+  ])
+    assert.equal(compact(source), source);
+});
+
+test('preserves direct hook calls so hook lint remains effective', () => {
+  for (const call of ['useState()', '(useState)()', 'useState?.()']) {
+    const source = "import { useState, useEffect, useCallback } from 'react';\n" + call + ';\n';
+    assert.equal(compact(source, 30), source);
+  }
+});
+
+test('preserves side-effect imports and formatting around runtime compaction', async () => {
+  const source =
+    "import './register';\nimport { Widget, WidgetConfiguration } from './widgets';\nWidget();\n";
+  const output = compact(source, 40);
+  assert.ok(output.startsWith("import './register';\nimport * as m from './widgets';"));
+  const formatted = await prettier.format(output, {
+    parser: 'typescript',
+    printWidth: 100,
+    singleQuote: true,
+  });
+  assert.equal(compact(formatted), formatted);
+  assert.match(formatted, /\(0, m.Widget\)\(\)/);
+});
+
+test('handles JavaScript, JSX and Windows runtime import paths, with collision-free namespaces', () => {
+  const source =
+    "import { Message, Conversation, Agent as Assistant } from './models';\n" +
+    'const m = 1;\nfunction inner(m2) { return [Message, m2]; }\nconst props = { Assistant };\n';
+  const output = compact(source);
+  assert.match(output, /import \* as m3/);
+  for (const file of ['consumer.js', 'consumer.jsx', 'consumer.ts', 'C:\\repo\\consumer.tsx'])
+    assert.equal(compactImports(source, file, 60), output, file);
+  assert.equal(compact(output), output);
+});
+
+test('type and runtime namespaces stay distinct and stable after formatting', async () => {
+  const source =
+    "import { Widget, WidgetConfiguration } from './widgets';\n" +
+    header +
+    'const value: Message = Widget;\n';
+  const output = compact(source, 40);
+  assert.match(output, /import \* as m from '\.\/widgets'/);
+  assert.match(output, /import type \* as t from '\.\/models'/);
+  assert.match(output, /const value: t.Message = m.Widget/);
+  const formatted = await prettier.format(output, {
+    parser: 'typescript',
+    printWidth: 100,
+    singleQuote: true,
+  });
+  assert.equal(compact(formatted), formatted);
 });

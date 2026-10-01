@@ -19,14 +19,14 @@
  *   Check only: npm run sort-imports:check
  *   Targeted:   node scripts/sort-imports.mts path/to/file.ts [...]
  *
- * Long type-only imports are compacted automatically when references can be
+ * Long named value and type imports are compacted automatically when references can be
  * rewritten safely. Check mode enforces the same cleanup without writing.
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compactTypeImports } from './imports/compact.mts';
+import { compactImports } from './imports/compact.mts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -235,7 +235,7 @@ for (const filePath of await collectFiles()) {
   const content = await readFile(filePath, 'utf8');
   const compacted = content.split('\n').some((line) => IGNORE_MARKER.test(line))
     ? content
-    : compactTypeImports(content, filePath, printWidth);
+    : compactImports(content, filePath, printWidth);
   const result = sortFileImports(compacted) ?? compacted;
   total++;
   if (result === content) continue;

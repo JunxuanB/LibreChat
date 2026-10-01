@@ -9,10 +9,15 @@ interface Edit {
   text: string;
 }
 
+interface Reference extends Edit {
+  unbound: boolean;
+  shorthand?: string;
+}
+
 interface Candidate {
   clause: TS.ImportClause;
   bindings: TS.NamedImports;
-  edits: Edit[];
+  edits: Reference[];
   safe: boolean;
 }
 
@@ -21,9 +26,9 @@ interface Binding {
   exported: string;
 }
 
-/** Shortens long type-only imports without resolving modules or loading a project. */
-export function compactTypeImports(content: string, fileName: string, printWidth: number): string {
-  if (!/\bimport\s+type\s*\{/.test(content)) return content;
+/** Shortens long named imports without resolving modules or loading a project. */
+export function compactImports(content: string, fileName: string, printWidth: number): string {
+  if (!/\bimport\s*(?:type\s*)?\{/.test(content)) return content;
 
   const ts: typeof TS = require('typescript');
   const normalizePath = (name: string): string => name.replaceAll('\\', '/');
@@ -44,7 +49,8 @@ export function compactTypeImports(content: string, fileName: string, printWidth
     if (bindings && ts.isNamedImports(bindings)) {
       for (const binding of bindings.elements) countName(binding.name.text);
     }
-    if (!clause?.isTypeOnly || clause.name || !bindings || !ts.isNamedImports(bindings)) continue;
+    if (!clause || clause.name || !bindings || !ts.isNamedImports(bindings)) continue;
+    if (bindings.elements.some((binding) => binding.isTypeOnly)) continue;
     if (bindings.elements.length < 2) continue;
     if (
       bindings.elements.some(
@@ -56,7 +62,7 @@ export function compactTypeImports(content: string, fileName: string, printWidth
       continue;
     }
 
-    const flat = `import type { ${bindings.elements.map((binding) => binding.getText(source)).join(', ')} } from ${statement.moduleSpecifier.getText(source)};`;
+    const flat = `import ${clause.isTypeOnly ? 'type ' : ''}{ ${bindings.elements.map((binding) => binding.getText(source)).join(', ')} } from ${statement.moduleSpecifier.getText(source)};`;
     if (flat.length <= printWidth) continue;
 
     const scanner = ts.createScanner(
@@ -95,7 +101,11 @@ export function compactTypeImports(content: string, fileName: string, printWidth
     fileExists: (name) => normalizePath(name) === normalizedFileName,
     readFile: (name) => (normalizePath(name) === normalizedFileName ? content : undefined),
   };
-  const program = ts.createProgram([normalizedFileName], { noResolve: true, noLib: true }, host);
+  const program = ts.createProgram(
+    [normalizedFileName],
+    { noResolve: true, noLib: true, allowJs: true },
+    host,
+  );
   if (program.getSyntacticDiagnostics(source).length > 0) return content;
   const checker = program.getTypeChecker();
   const bindings = new Map<TS.Symbol, Binding>();
@@ -117,7 +127,54 @@ export function compactTypeImports(content: string, fileName: string, printWidth
   }
 
   const identifiers = new Set<string>();
+  const unwrap = (node: TS.Node): TS.Node => {
+    while (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) ||
+      ts.isNonNullExpression(node) ||
+      ts.isSatisfiesExpression(node)
+    )
+      node = node.expression;
+    return node;
+  };
+  const expressionRoot = (node: TS.Node): TS.Node => {
+    while (node.parent && unwrap(node.parent) === unwrap(node)) node = node.parent;
+    return node;
+  };
+  const isWrite = (node: TS.Node): boolean => {
+    let target = expressionRoot(node);
+    while (
+      ts.isArrayLiteralExpression(target.parent) ||
+      ts.isObjectLiteralExpression(target.parent) ||
+      ts.isShorthandPropertyAssignment(target.parent) ||
+      ts.isSpreadElement(target.parent) ||
+      ts.isSpreadAssignment(target.parent) ||
+      (ts.isPropertyAssignment(target.parent) && target.parent.initializer === target)
+    )
+      target = expressionRoot(target.parent);
+    const parent = target.parent;
+    return (
+      (ts.isBinaryExpression(parent) &&
+        parent.left === target &&
+        parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+      ((ts.isForInStatement(parent) || ts.isForOfStatement(parent)) &&
+        parent.initializer === target) ||
+      ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+        (parent.operator === ts.SyntaxKind.PlusPlusToken ||
+          parent.operator === ts.SyntaxKind.MinusMinusToken)) ||
+      ts.isDeleteExpression(parent)
+    );
+  };
   const visit = (node: TS.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = unwrap(node.expression);
+      if (ts.isIdentifier(callee) && callee.text === 'eval') {
+        for (const candidate of candidates)
+          if (!candidate.clause.isTypeOnly) candidate.safe = false;
+      }
+    }
     if (ts.isIdentifier(node)) {
       identifiers.add(node.text);
       const parent = node.parent;
@@ -136,13 +193,33 @@ export function compactTypeImports(content: string, fileName: string, printWidth
         const type = ts.isTypeReferenceNode(parent) && parent.typeName === node;
         const query = ts.isTypeQueryNode(parent) && parent.exprName === node;
         const heritage = ts.isExpressionWithTypeArguments(parent) && parent.expression === node;
-        if (!qualified && !type && !query && !heritage) {
+        const typeReference = qualified || type || query || heritage;
+        const unsupported =
+          ts.isExportSpecifier(parent) ||
+          ts.isImportEqualsDeclaration(parent) ||
+          ts.isJSDocLink(parent) ||
+          ts.isJSDocLinkCode(parent) ||
+          ts.isJSDocLinkPlain(parent);
+        if (
+          unsupported ||
+          isWrite(node) ||
+          (binding.candidate.clause.isTypeOnly && !typeReference)
+        ) {
           binding.candidate.safe = false;
         } else {
+          const root = expressionRoot(node);
+          const unbound =
+            (ts.isCallExpression(root.parent) && root.parent.expression === root) ||
+            (ts.isTaggedTemplateExpression(root.parent) && root.parent.tag === root);
+          if (unbound && /^use(?:[A-Z0-9]|$)/.test(node.text)) {
+            binding.candidate.safe = false;
+          }
           binding.candidate.edits.push({
             start: node.getStart(source),
             end: node.getEnd(),
             text: binding.exported,
+            unbound,
+            shorthand: ts.isShorthandPropertyAssignment(parent) ? node.getText(source) : undefined,
           });
         }
       }
@@ -153,18 +230,24 @@ export function compactTypeImports(content: string, fileName: string, printWidth
   visit(source);
 
   const edits: Edit[] = [];
-  let suffix = 1;
   for (const candidate of candidates) {
     if (!candidate.safe) continue;
-    let namespace = 't';
-    while (identifiers.has(namespace)) namespace = `t${++suffix}`;
+    const prefix = candidate.clause.isTypeOnly ? 't' : 'm';
+    let suffix = 1;
+    let namespace = prefix;
+    while (identifiers.has(namespace)) namespace = `${prefix}${++suffix}`;
     identifiers.add(namespace);
     edits.push({
       start: candidate.clause.getStart(source),
       end: candidate.clause.getEnd(),
-      text: `type * as ${namespace}`,
+      text: `${candidate.clause.isTypeOnly ? 'type ' : ''}* as ${namespace}`,
     });
-    for (const edit of candidate.edits) edits.push({ ...edit, text: `${namespace}.${edit.text}` });
+    for (const edit of candidate.edits) {
+      let text = `${namespace}.${edit.text}`;
+      if (edit.unbound) text = `(0, ${text})`;
+      if (edit.shorthand) text = `${edit.shorthand}: ${text}`;
+      edits.push({ start: edit.start, end: edit.end, text });
+    }
   }
   if (edits.length === 0) return content;
 
