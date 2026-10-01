@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
 import { Button } from '@librechat/client';
 import {
@@ -14,6 +14,7 @@ import { cn, getToolDisplayLabel, logger, openInNewTab } from '~/utils';
 import { ToolIcon, getToolIconType, isError } from './ToolOutput';
 import { useMCPIconMap, useMCPServerNames } from '~/hooks/MCP';
 import { resolveToolCallPhase } from '~/utils/toolCallPhase';
+import { MCPAppViews } from '~/components/MCPUIResource';
 import { toolPanelSpacingClassName } from './disclosure';
 import { useToolCallIntent } from './Parts/intent';
 import { AttachmentGroup } from './Parts';
@@ -422,17 +423,17 @@ export default function ToolCall({
             <div
               className={cn(
                 toolPanelSpacingClassName,
-                'overflow-hidden rounded-lg border border-border-light bg-surface-secondary',
+                'border-border-light bg-surface-secondary overflow-hidden rounded-lg border',
               )}
             >
-              <ToolCallInfo input={args ?? ''} output={output} attachments={attachments} />
+              <ToolCallInfo input={args ?? ''} output={output} />
             </div>
           )}
         </div>
       </div>
       {showOAuth && (
         <div className="flex w-full flex-col gap-2.5">
-          <div className="mb-1 mt-2">
+          <div className="mt-2 mb-1">
             <Button
               className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium"
               variant="default"
@@ -445,7 +446,7 @@ export default function ToolCall({
             </Button>
           </div>
           {oauthError && (
-            <p role="alert" className="text-sm text-text-destructive">
+            <p role="alert" className="text-text-destructive text-sm">
               {oauthError}
             </p>
           )}
@@ -453,7 +454,10 @@ export default function ToolCall({
         </div>
       )}
       {!hideAttachments && attachments && attachments.length > 0 && (
-        <AttachmentGroup attachments={attachments} />
+        <>
+          <AttachmentGroup attachments={attachments} />
+          <MCPAppViews attachments={attachments} />
+        </>
       )}
     </>
   );
