@@ -117,6 +117,14 @@ function ControlCombobox({
     placement,
   });
 
+  const selectOpen = select.useState('open');
+  useEffect(() => {
+    // The select owns the popover; hiding it does not hide the combobox store.
+    if (!selectOpen) {
+      setSearchValue('');
+    }
+  }, [selectOpen]);
+
   const matches = useMemo(() => {
     const filteredItems = matchSorter(items, searchValue, {
       keys: ['value', 'label'],
