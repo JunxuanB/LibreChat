@@ -1339,6 +1339,8 @@ export default function useResumableSSE(
     [convertSteersToQueued],
   );
 
+  /** The epoch this pane last installed, kept so a run left mid-stream can carry it. */
+  const liveEpochRef = useRef<{ conversationId: string; createdAt: number } | null>(null);
   /** Conversation ids are reused by successive agent turns. Keep the exact
    * live epoch beside the UI controls, and only clear it if the terminal event
    * still belongs to the epoch that installed it. */
@@ -1355,6 +1357,7 @@ export default function useResumableSSE(
           return false;
         }
         set(state, next);
+        liveEpochRef.current = next == null ? null : { conversationId, createdAt: next };
         set(
           store.activeGenerationProtocolVersionByConvoId(conversationId),
           next == null ? 1 : generationProtocolVersion,
@@ -4853,9 +4856,17 @@ export default function useResumableSSE(
         closingUserMessageId != null &&
         !jotaiStore.get(stopRequestedByConvoId(closingConvoId))
       ) {
+        const liveEpoch = liveEpochRef.current;
+        const generationCreatedAt =
+          liveEpoch?.conversationId === closingConvoId
+            ? liveEpoch.createdAt
+            : (closing as TSubmission & { resumeGenerationCreatedAt?: number })
+                .resumeGenerationCreatedAt;
         jotaiStore.set(detachedRunByConvoId(closingConvoId), {
           userMessageId: closingUserMessageId,
           responseMessageId: closing?.initialResponse?.messageId,
+          ...(generationCreatedAt != null && { generationCreatedAt }),
+          ...(closing?.isRegenerate === true && { isRegenerate: true }),
         });
       }
       streamRef.current?.abort();
