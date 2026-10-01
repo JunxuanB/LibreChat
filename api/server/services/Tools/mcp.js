@@ -10,6 +10,7 @@ const {
   isMCPInitializationError,
   prepareMCPAuthorizationMutation,
   resolveMCPClientCapabilityProfile,
+  recordScheduledMCPToolAuthFailure,
 } = require('@librechat/api');
 const { CacheKeys, Constants } = require('librechat-data-provider');
 const { getMCPManager, getMCPServersRegistry, getFlowStateManager } = require('~/config');
@@ -159,6 +160,8 @@ async function reinitMCPServer({
   oauthEnd,
   recoveryPolicy,
   mcpApps,
+  streamId,
+  jobCreatedAt,
 }) {
   const capabilityProfile = resolveMCPClientCapabilityProfile(mcpApps);
   /** @type {MCPConnection | null} */

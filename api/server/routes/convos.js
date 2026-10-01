@@ -159,6 +159,14 @@ const markConvoSeenHandler = createMarkConvoSeenHandler({ markConvoSeen: db.mark
 const markConvoUnreadHandler = createMarkConvoUnreadHandler({
   markConvoUnread: db.markConvoUnread,
 });
+const backgroundTaskPolicy = createBackgroundTaskPolicyMiddleware({ getAppConfig });
+const backgroundTaskIndexHandler = createBackgroundTaskIndexHandler({
+  registry: backgroundTaskRegistry,
+  pending: pendingBackgroundToolCompletions,
+});
+const backgroundTaskCancelHandler = createBackgroundTaskCancelHandler({
+  registry: backgroundTaskRegistry,
+});
 router.use(requireJwtAuth);
 
 const isValidProjectFilter = (projectId) =>

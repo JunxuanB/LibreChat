@@ -645,6 +645,7 @@ describe('createAgentTriggerExecutionHost continue adapter', () => {
       files: [{ file_id: 'file-1' }],
       quotes: ['quoted context'],
       manualSkills: ['research'],
+      codeApprovalMode: 'acceptEdits' as const,
       reasoningOverride: { key: 'reasoning_effort' as const, value: ReasoningEffort.high },
       admissionSource,
       settleOnAdmission,
@@ -667,6 +668,7 @@ describe('createAgentTriggerExecutionHost continue adapter', () => {
       files: [{ file_id: 'file-1' }],
       quotes: ['quoted context'],
       manualSkills: ['research'],
+      codeApprovalMode: 'acceptEdits',
       reasoningOverride: { key: 'reasoning_effort', value: ReasoningEffort.high },
       agentContinuationAdmission: admissionSource,
     });

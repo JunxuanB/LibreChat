@@ -24,6 +24,7 @@ import {
   useFileMapContext,
   ComposerRestoreProvider,
 } from '~/Providers';
+import { QueuedTurnPortalProvider } from './Steering/QueuedTurnPortal';
 import ApprovalProvider from './Messages/Content/ApprovalContext';
 import ConversationStarters from './Input/ConversationStarters';
 import { pendingApprovalActionFamily } from './approval/state';
@@ -176,13 +177,14 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
     <AskAnswerHostProvider saveDrafts={saveDrafts}>
       <ChatFormProvider {...methods}>
         <ComposerRestoreProvider>
-          <ChatContext.Provider value={chatHelpers}>
-            <AddedChatContext.Provider value={addedChatHelpers}>
-              <ApprovalProvider pendingAction={pendingAction}>
-                <Presentation>
-                  <TraceSurface conversationId={conversationId}>
-                    <h1 className="sr-only">{pageHeading}</h1>
-                    {/* Marks the header's controls as this pane's, so a pane-scoped
+          <QueuedTurnPortalProvider>
+            <ChatContext.Provider value={chatHelpers}>
+              <AddedChatContext.Provider value={addedChatHelpers}>
+                <ApprovalProvider pendingAction={pendingAction}>
+                  <Presentation>
+                    <TraceSurface conversationId={conversationId}>
+                      <h1 className="sr-only">{pageHeading}</h1>
+                      {/* Marks the header's controls as this pane's, so a pane-scoped
                         shortcut pressed from them acts here, not on the first pane. */}
                       <div data-chat-pane-portal={index} className="contents">
                         <Header
@@ -222,49 +224,52 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                         popover ⇄ chat-card morph) paints the whole composer band
                         over the travelling card instead of letting it show
                         through below the composer. The background matches the
-                        page, so normal rendering is unchanged. */}
-                        <div
-                          className={cn(
-                            'bg-surface-primary-alt w-full [view-transition-name:chat-form]',
-                            !isLandingPage && 'scrollbar-gutter-spacer',
-                            isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
-                          )}
-                        >
-                          {isLandingPage && <ConversationStarters />}
-                          {isSubagentThreadReadOnly ? (
-                            <div
-                              className="text-text-secondary mx-auto w-full max-w-3xl px-4 py-3 text-center text-sm xl:max-w-4xl"
-                              role="note"
-                            >
-                              {localize('com_ui_subagent_thread_read_only')}
-                            </div>
-                          ) : (
-                            <ChatForm
-                              index={index}
-                              placeholder={chatFormPlaceholder}
-                              project={isProjectLandingPage ? project : undefined}
-                              isLandingPage={isLandingPage}
-                              showComposerTips={showComposerTips}
-                              enterToSend={enterToSend}
-                              autoSendText={autoSendText}
-                              speechSettingsInitialized={speechSettingsInitialized}
-                              footerBelow={footerBelow}
-                              centerFormOnLanding={centerFormOnLanding}
-                            />
-                          )}
-                          {/* The generic disclaimer and the policy links are the
+                        page, so normal rendering is unchanged. The named surface
+                        is a stacking context; keep it above positioned tool glyphs
+                        so they cannot paint through the approval preview. */}
+                          <div
+                            className={cn(
+                              'bg-surface-primary-alt relative z-10 w-full [view-transition-name:chat-form]',
+                              !isLandingPage && 'scrollbar-gutter-spacer',
+                              isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
+                            )}
+                          >
+                            {isLandingPage && <ConversationStarters />}
+                            {isSubagentThreadReadOnly ? (
+                              <div
+                                className="text-text-secondary mx-auto w-full max-w-3xl px-4 py-3 text-center text-sm xl:max-w-4xl"
+                                role="note"
+                              >
+                                {localize('com_ui_subagent_thread_read_only')}
+                              </div>
+                            ) : (
+                              <ChatForm
+                                index={index}
+                                placeholder={chatFormPlaceholder}
+                                project={isProjectLandingPage ? project : undefined}
+                                isLandingPage={isLandingPage}
+                                showComposerTips={showComposerTips}
+                                enterToSend={enterToSend}
+                                autoSendText={autoSendText}
+                                speechSettingsInitialized={speechSettingsInitialized}
+                                footerBelow={footerBelow}
+                                centerFormOnLanding={centerFormOnLanding}
+                              />
+                            )}
+                            {/* The generic disclaimer and the policy links are the
                               welcome screen's; a deployment's own footer stays
                               with the conversation that always showed it. */}
-                          {!isLandingPage && configuredFooter && <Footer configuredOnly />}
+                            {!isLandingPage && configuredFooter && <Footer configuredOnly />}
+                          </div>
                         </div>
-                      </div>
-                      {isLandingPage && <Footer />}
-                    </>
-                  </TraceSurface>
-                </Presentation>
-              </ApprovalProvider>
-            </AddedChatContext.Provider>
-          </ChatContext.Provider>
+                        {isLandingPage && <Footer />}
+                      </>
+                    </TraceSurface>
+                  </Presentation>
+                </ApprovalProvider>
+              </AddedChatContext.Provider>
+            </ChatContext.Provider>
+          </QueuedTurnPortalProvider>
         </ComposerRestoreProvider>
       </ChatFormProvider>
     </AskAnswerHostProvider>

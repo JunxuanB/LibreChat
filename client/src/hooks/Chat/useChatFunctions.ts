@@ -875,6 +875,14 @@ export default function useChatFunctions({
       setMessages([...submissionMessages, currentMsg, initialResponse]);
     }
 
+    /** Carry the submitted choice through the first saved-chat event instead of re-deriving it
+     *  from agent defaults. This is optimistic: the SSE error path reconciles an existing chat
+     *  with its authoritative server decision if admission fails. */
+    setConversation((current) =>
+      current == null || current.conversationId !== conversation?.conversationId
+        ? current
+        : withSubmittedCodeDecision(current, workspaceSubmission),
+    );
     /** Armed at the point of no return: every refusal above returns before it,
      *  so a rejected send never has to unwind the guard, and `ask` runs to
      *  completion synchronously, which is the whole window it has to cover. */

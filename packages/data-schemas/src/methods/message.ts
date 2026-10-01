@@ -897,6 +897,48 @@ function agentOwnershipFilter(prefix: string, agentId: string): Record<string, u
   };
 }
 
+type UpdateToolCallResultInput = {
+  userId: string;
+  messageId: string;
+  conversationId: string;
+  toolCallId: string;
+  stepId?: string;
+  /** Scopes the part match when provider tool-call ids repeat across
+   *  agents in one response message (e.g. `call_0` per response); a part
+   *  without agent identity matches any caller (single-agent runs). */
+  agentId?: string;
+  output?: string;
+  attachments?: unknown[];
+  /**
+   * Stamps `backgrounded: true` onto the patched tool call. Replacing the
+   * dispatch-handle output with the settled task's stdout destroys the only
+   * signal renderers had that this call ran detached (the handle JSON and
+   * the live status-marker attachment are both transient), so the patch
+   * that erases it must persist a durable one alongside.
+   */
+  markBackgrounded?: boolean;
+  backgroundTask?: {
+    taskId: string;
+    toolName: string;
+    status: 'completed' | 'error';
+    cancelled?: true;
+    settledAt: Date;
+    completionWakeup?: true;
+    completionReceipt?: true;
+    resultClaim?: {
+      kind: 'manual' | 'wakeup';
+      claimId: string;
+      claimedAt: Date;
+      generationId?: string;
+    };
+  };
+};
+
+type SteplessToolCallFallback = {
+  content: NonNullable<IMessage['content']>;
+  hasResultClaim: boolean;
+};
+
 export interface MessageDependencies {
   /** Read from deployment config, never from a message/request or a principal override. */
   getMCPAppMessageBudget?: () => Promise<number | undefined>;
@@ -1594,7 +1636,7 @@ export function createMessageMethods(
     };
     const settleUpdate = {
       $inc: { __v: 1 },
-      ...(Object.keys(partPatch).length > 0 ? { $set: partPatch } : {}),
+      ...(Object.keys(settlePatch).length > 0 ? { $set: settlePatch } : {}),
       ...(disarmWakeup
         ? { $unset: { 'content.$[part].tool_call.backgroundTask.completionWakeup': 1 } }
         : {}),
@@ -1779,7 +1821,7 @@ export function createMessageMethods(
           },
           {
             ...settleUpdate,
-            $set: { ...partPatch, attachments: admitted },
+            $set: { ...settlePatch, attachments: admitted },
           },
           settleOptions,
         ).lean<{ unfinished?: boolean } | null>();

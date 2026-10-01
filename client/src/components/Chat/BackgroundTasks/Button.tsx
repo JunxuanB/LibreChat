@@ -109,7 +109,12 @@ function BackgroundTasksButton({
             {(activeCount > 0 || awaitingCount > 0 || failedCount > 0 || incomplete) && (
               <span
                 aria-hidden="true"
-                className="bg-status-info ring-presentation absolute -top-0.5 -right-0.5 size-2 animate-pulse rounded-full ring-2 motion-reduce:animate-none"
+                data-testid="background-tasks-indicator"
+                className={cn(
+                  'ring-presentation absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2',
+                  failedCount > 0 || incomplete ? 'bg-status-warning' : 'bg-status-info',
+                  activeCount > 0 && 'animate-pulse motion-reduce:animate-none',
+                )}
               />
             )}
           </Ariakit.PopoverDisclosure>
@@ -151,7 +156,7 @@ function BackgroundTasksButton({
         </div>
         <div className="space-y-4 overflow-y-auto px-3 pb-3">
           {incomplete && (
-            <p role="status" className="text-sm text-status-warning">
+            <p role="status" className="text-status-warning text-sm">
               {localize('com_ui_background_tasks_incomplete')}
             </p>
           )}

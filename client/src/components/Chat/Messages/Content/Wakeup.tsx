@@ -223,17 +223,29 @@ const Wakeup = memo(function Wakeup({
         {shouldRenderBody && (
           <div className="overflow-hidden" ref={expandRef}>
             <div className="pb-1">
-              <div className="text-text-secondary mt-1 text-xs">
-                {localize('com_ui_wakeup_explainer')}
-              </div>
-              {display.tasks.map((task) => (
-                <WakeupTaskCard
-                  key={task.taskId}
-                  task={task}
-                  kind={display.kind}
-                  conversationId={conversationId}
-                />
-              ))}
+              {display.kind === 'subagent' && (
+                <div className="text-text-secondary mt-1 text-xs">
+                  {localize('com_ui_wakeup_explainer')}
+                </div>
+              )}
+              {display.tasks.map((task) =>
+                display.kind === 'background_tool' ? (
+                  <div key={task.taskId} className="my-2">
+                    <BackgroundTaskCard
+                      task={{
+                        taskId: task.taskId,
+                        toolName: task.toolName ?? '',
+                        status: task.status,
+                        result: task.result,
+                      }}
+                      mcpIconMap={mcpIconMap}
+                      mcpServerNames={mcpServerNames}
+                    />
+                  </div>
+                ) : (
+                  <WakeupTaskCard key={task.taskId} task={task} conversationId={conversationId} />
+                ),
+              )}
             </div>
           </div>
         )}

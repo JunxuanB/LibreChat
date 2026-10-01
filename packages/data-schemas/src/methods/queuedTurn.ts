@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { CODE_APPROVAL_MODES } from 'librechat-data-provider';
 import { reasoningOverrideSchema } from 'librechat-data-provider';
 import type { TReasoningOverride } from 'librechat-data-provider';
+import type { CodeApprovalMode } from 'librechat-data-provider';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type {
   AgentQueuedTurnActiveRecord,
@@ -110,6 +112,9 @@ export interface EnqueueAgentQueuedTurnInput extends AgentQueuedTurnConversation
   files?: readonly AgentQueuedTurnFileRef[];
   quotes?: readonly string[];
   manualSkills?: readonly string[];
+  codeApprovalMode?: CodeApprovalMode;
+  /** Internal publication fence, committed with approval-bearing rows. */
+  deliveryReservation?: { queuedTurnId: string; deliveryKey: string };
   reasoningOverride?: TReasoningOverride;
   expectedPredecessorCreatedAt?: number;
   priority?: boolean;
@@ -554,6 +559,9 @@ function normalizeEnqueue(input: EnqueueAgentQueuedTurnInput) {
     files: normalizeFiles(input.files),
     quotes: normalizeQuotes(input.quotes),
     manualSkills: normalizeManualSkills(input.manualSkills),
+    ...(input.codeApprovalMode != null && {
+      codeApprovalMode: requireCodeApprovalMode(input.codeApprovalMode),
+    }),
     reasoningOverride: normalizeReasoningOverride(input.reasoningOverride),
     expectedPredecessorCreatedAt: normalizePredecessor(input.expectedPredecessorCreatedAt),
     priority: input.priority === true,
@@ -627,6 +635,7 @@ function toRecord(turn: IAgentQueuedTurn): AgentQueuedTurnRecord {
     ...(turn.files != null && { files: turn.files }),
     ...(turn.quotes != null && { quotes: turn.quotes }),
     ...(turn.manualSkills != null && { manualSkills: turn.manualSkills }),
+    ...(turn.codeApprovalMode != null && { codeApprovalMode: turn.codeApprovalMode }),
     ...(turn.reasoningOverride != null && { reasoningOverride: turn.reasoningOverride }),
     ...(turn.expectedPredecessorCreatedAt != null && {
       expectedPredecessorCreatedAt: turn.expectedPredecessorCreatedAt,
@@ -689,6 +698,7 @@ function toActiveRecord(turn: IAgentQueuedTurn): AgentQueuedTurnActiveRecord {
     ...(record.files != null && { files: record.files }),
     ...(record.quotes != null && { quotes: record.quotes }),
     ...(record.manualSkills != null && { manualSkills: record.manualSkills }),
+    ...(record.codeApprovalMode != null && { codeApprovalMode: record.codeApprovalMode }),
     ...(record.reasoningOverride != null && { reasoningOverride: record.reasoningOverride }),
     ...(record.expectedPredecessorCreatedAt != null && {
       expectedPredecessorCreatedAt: record.expectedPredecessorCreatedAt,

@@ -50,6 +50,12 @@ import {
   mergeRestagedQuotes,
 } from '~/utils';
 import {
+  recoveryDispositionsFamily,
+  recoveryDisposition,
+  canRestoreRecovery,
+  blockRecovery,
+} from '~/components/Chat/Steering/recovery';
+import {
   getReasoningStateKey,
   pendingReasoningOverrideFamily,
 } from '~/components/Chat/Input/Composer/state';
@@ -1202,6 +1208,7 @@ export default function useSteering({
                 item.manualSkills.length > 0 && {
                   manualSkills: item.manualSkills,
                 }),
+              ...(codeApprovalMode != null && { codeApprovalMode }),
               ...(item.reasoningOverride != null && {
                 reasoningOverride: item.reasoningOverride,
               }),
@@ -1508,36 +1515,6 @@ export default function useSteering({
           }
           return [...restored, ...byId.values()];
         });
-      },
-    [queueKey],
-  );
-
-  /** Once a parked source is discarded it must never be retried as a recovery
-   * attempt. Downgrade the row in place so a guarded Edit that finds a newer
-   * draft can leave the same words, context, identity, and queue position as
-   * an ordinary local follow-up. */
-  const downgradeQueuedRecovery = useRecoilCallback(
-    ({ snapshot, set }) =>
-      (id: string): boolean => {
-        const queue = snapshot.getLoadable(store.queuedMessagesByConvoId(queueKey)).getValue();
-        let found = false;
-        const next = queue.map((item) => {
-          if (item.id !== id) {
-            return item;
-          }
-          found = true;
-          const {
-            clientRequestId: _clientRequestId,
-            recoverySteerId: _recoverySteerId,
-            recoveryClientSteerId: _recoveryClientSteerId,
-            ...ordinary
-          } = item;
-          return ordinary;
-        });
-        if (found) {
-          set(store.queuedMessagesByConvoId(queueKey), next);
-        }
-        return found;
       },
     [queueKey],
   );
@@ -2384,7 +2361,10 @@ export default function useSteering({
    *  boundary; it only means something on the live-run path. */
   const sendLocalQueuedNow = useCallback(
     (item: QueuedMessage, opts?: { preempt?: boolean }) => {
-      if (hasQueuedIntent(item.id)) {
+      if (
+        hasQueuedIntent(item.id) ||
+        recoveryDisposition(jotaiStore.get(recoveryDispositionsFamily(queueKey)), item) != null
+      ) {
         return;
       }
       /** In answer mode (and any other submission-owned non-steerable state)
@@ -2651,6 +2631,7 @@ export default function useSteering({
       removeQueued,
       holdQueued,
       discardQueued,
+      dismissRecovery,
       rewakeDrain,
       reorderQueued,
       restoreQueuedOrder,
@@ -2683,6 +2664,7 @@ export default function useSteering({
       removeQueued,
       holdQueued,
       discardQueued,
+      dismissRecovery,
       rewakeDrain,
       reorderQueued,
       restoreQueuedOrder,

@@ -1951,13 +1951,11 @@ export function createAgentMethods(
   }
 
   /**
-   * Get accessible agents with cursor pagination. Pages default to 100 items, and a
-   * caller that asks for no mode gets `'recent'` — the most-recently-edited order this
-   * endpoint has always served. Pass `limit: null` to opt out of pagination.
-   *
-   * All modes preserve the same projected response shape. Popularity counts are
-   * computed from compact candidate rows and unique tenant-scoped users before
-   * the selected page is fetched.
+   * Get agents by accessible IDs with cursor pagination. Pass `accessibleIds: null`
+   * only after a management-capability check, with the authenticated tenantId
+   * (or null for legacy agents); `[]` and omitted IDs match nothing.
+   * Defaults to the most-recently-edited order and a 100-page limit (max 1000);
+   * pass `limit: null` to opt out entirely. Other sort modes preserve the projection.
    */
   async function getListAgentsByAccess({
     accessibleIds = [],

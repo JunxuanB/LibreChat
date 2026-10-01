@@ -396,7 +396,9 @@ export default function ScheduleCard({ schedule, projectName }: ScheduleCardProp
               to get an MCP server back. A healthy schedule shows neither. */}
           {schedule.disabledReason != null && (
             <div className="mt-1.5">
-              <Chip tone="error">{localize(DISABLED_REASON_LABELS[schedule.disabledReason])}</Chip>
+              <Chip tone="error">
+                {localize(disabledMCPLabel ?? DISABLED_REASON_LABELS[schedule.disabledReason])}
+              </Chip>
             </div>
           )}
           <ScheduleMCPRecovery

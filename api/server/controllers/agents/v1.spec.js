@@ -4204,6 +4204,68 @@ describe('Agent Controllers - Mass Assignment Protection', () => {
       });
     });
 
+    test('refreshes only manager search results without writing or losing later cursor pages', async () => {
+      const db = require('~/models');
+      const name = 'Paged Manager Avatar';
+      const firstAgent = await Agent.create({
+        id: `agent_${nanoid(12)}`,
+        name,
+        provider: 'openai',
+        model: 'gpt-4',
+        author: userA,
+        avatar: { source: FileSources.s3, filepath: 'first.jpg' },
+      });
+      const secondAgent = await Agent.create({
+        id: `agent_${nanoid(12)}`,
+        name,
+        provider: 'openai',
+        model: 'gpt-4',
+        author: userA,
+        avatar: { source: FileSources.s3, filepath: 'second.jpg' },
+      });
+      await db.grantCapability({
+        principalType: PrincipalType.ROLE,
+        principalId: 'LIST_AVATAR_MANAGER',
+        capability: SystemCapabilities.MANAGE_AGENTS,
+      });
+      const mockReq = {
+        user: { id: userB.toString(), role: 'LIST_AVATAR_MANAGER', idOnTheSource: null },
+        query: { search: name, limit: '1' },
+      };
+      const mockRes = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+      const listSpy = jest.spyOn(db, 'getListAgentsByAccess');
+      const updateSpy = jest.spyOn(db, 'updateAgent');
+      findAccessibleResources.mockResolvedValue([]);
+      findPubliclyAccessibleResources.mockResolvedValue([]);
+      refreshS3Url.mockImplementation(async ({ filepath }) => `signed:${filepath}`);
+
+      try {
+        await getListAgentsHandler(mockReq, mockRes);
+        const pageOne = mockRes.json.mock.calls[0][0];
+        expect(pageOne.data).toHaveLength(1);
+        expect(pageOne.after).toBeTruthy();
+        expect(pageOne.data[0].avatar.filepath).toMatch(/^signed:/);
+        expect(listSpy).toHaveBeenCalledTimes(1);
+        expect(refreshS3Url).toHaveBeenCalledTimes(1);
+        expect(updateSpy).not.toHaveBeenCalled();
+
+        mockRes.json.mockClear();
+        mockReq.query.cursor = pageOne.after;
+        await getListAgentsHandler(mockReq, mockRes);
+        const pageTwo = mockRes.json.mock.calls[0][0];
+        expect(pageTwo.data).toHaveLength(1);
+        expect([pageOne.data[0].id, pageTwo.data[0].id].sort()).toEqual(
+          [firstAgent.id, secondAgent.id].sort(),
+        );
+        expect(pageTwo.data[0].avatar.filepath).toMatch(/^signed:/);
+        expect(refreshS3Url).toHaveBeenCalledTimes(2);
+        expect(updateSpy).not.toHaveBeenCalled();
+      } finally {
+        listSpy.mockRestore();
+        updateSpy.mockRestore();
+      }
+    });
+
     test('should skip avatar refresh if cache already covers the page', async () => {
       /* Coverage is only coverage while it names the filepath it was taken for: a cached
          URL for a replaced avatar is a link to a file the agent no longer shows. */
@@ -4332,8 +4394,7 @@ describe('Agent Controllers - Mass Assignment Protection', () => {
 
       const responseData = mockRes.json.mock.calls[0][0];
       const agent = responseData.data.find((a) => a.id === agentId);
-      /** The refresh runs alongside the list query, so the refreshed path must reach the
-       *  response through `urlCache` rather than through what the list query read. */
+      /** The page was read before avatar refresh, so the new path must be applied from the cache. */
       expect(agent.avatar.filepath).toBe('new-s3-path.jpg');
     });
 

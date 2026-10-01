@@ -86,6 +86,7 @@ const queuedTurnSchema: Schema<IAgentQueuedTurnDocument> = new Schema(
     files: { type: [fileRefSchema], default: undefined },
     quotes: { type: [String], default: undefined },
     manualSkills: { type: [String], default: undefined },
+    codeApprovalMode: { type: String, enum: [...CODE_APPROVAL_MODES] },
     reasoningOverride: { type: reasoningOverrideSchema },
     expectedPredecessorCreatedAt: { type: Number, min: 0 },
     attempts: { type: Number, required: true, default: 0, min: 0 },

@@ -9,7 +9,7 @@ import {
   LocalStorageKeys,
   ReasoningEffort,
 } from 'librechat-data-provider';
-import type { TConversation, TFile, TMessage } from 'librechat-data-provider';
+import type { CodeApprovalMode, TConversation, TFile, TMessage } from 'librechat-data-provider';
 import type { QueuedMessage } from '~/store/families';
 import type { ExtendedFile } from '~/common';
 import {
@@ -19,6 +19,7 @@ import {
 import { revealedQueuedTurnFamily, pendingSteerCancelClientIdsFamily } from '~/store/steer';
 import useSteering, { hasLiveRunPause, mergeQueuedTurnFileMetadata } from '../useSteering';
 import { clearAllDrafts, getPendingDraftId, getNewConversationDraftId } from '~/utils';
+import { recoveryDispositionsFamily } from '~/components/Chat/Steering/recovery';
 import { claimQueuedIntent, releaseQueuedIntent } from '~/utils/queueIntent';
 import useUpdateFiles from '~/hooks/Files/useUpdateFiles';
 import ChatSettingsProvider from '~/routes/ChatSettings';
@@ -3225,6 +3226,63 @@ describe('useSteering', () => {
       });
 
       expect(result.current.queue.map((item) => item.id)).toEqual(['second', 'first', 'third']);
+    });
+
+    it('confirms a discarded recovery but keeps it held until the guarded UI action succeeds', async () => {
+      mockCancelSteer.mockResolvedValueOnce({
+        removed: true,
+        generationProtocolVersion: 2,
+      });
+      const before: QueuedMessage = {
+        id: 'queued-before',
+        text: 'before',
+        createdAt: 0,
+      };
+      const recovered: QueuedMessage = {
+        id: 'queued-leftover',
+        text: 'edit this next',
+        createdAt: 1,
+        clientRequestId: 'recovery-attempt',
+        recoverySteerId: 'server-leftover',
+        recoveryClientSteerId: 'client-leftover',
+        expectedPredecessorCreatedAt: 41,
+        files: [
+          {
+            file_id: 'file-1',
+            filepath: '/uploads/file-1.txt',
+            type: 'text/plain',
+          },
+        ],
+        quotes: ['keep quote'],
+        manualSkills: ['keep skill'],
+        priority: true,
+      };
+      const after: QueuedMessage = {
+        id: 'queued-after',
+        text: 'after',
+        createdAt: 2,
+      };
+      const { result } = setupWithState({}, ({ set }) => {
+        set(store.queuedMessagesByConvoId(CONVO_ID), [before, recovered, after]);
+      });
+
+      let discarded = false;
+      await act(async () => {
+        discarded = await result.current.steering.discardQueued(recovered);
+      });
+
+      expect(discarded).toBe(true);
+      expect(mockCancelSteer).toHaveBeenCalledWith({
+        conversationId: CONVO_ID,
+        steerId: 'server-leftover',
+        clientSteerId: 'client-leftover',
+      });
+      expect(result.current.queue).toEqual([before, recovered, after]);
+      expect(getDefaultStore().get(recoveryDispositionsFamily(CONVO_ID))).toEqual({
+        'server-leftover': 'cancelled',
+      });
+      act(() => result.current.steering.sendQueuedNow(recovered));
+      expect(mockMutate).not.toHaveBeenCalled();
     });
 
     it('atomically discards a recovered source and downgrades its row in place', async () => {

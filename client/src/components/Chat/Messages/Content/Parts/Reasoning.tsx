@@ -90,6 +90,7 @@ export const StreamingThoughtPeek = memo(({ text }: { text: string }) => {
     <div
       aria-hidden="true"
       className="border-border-light mt-1 overflow-hidden rounded-2xl border px-4 py-3"
+      data-testid="streaming-thought-peek"
     >
       <div
         ref={ref}

@@ -20,6 +20,7 @@ import {
   pendingUsageFamily,
   removeUsageAtoms,
 } from '~/store/usage';
+import { recoveryDispositionsFamily } from '~/components/Chat/Steering/recovery';
 import { pendingApprovalActionFamily } from '~/components/Chat/approval/state';
 
 type SSEEventListener = (e: Partial<MessageEvent> & { responseCode?: number }) => void;

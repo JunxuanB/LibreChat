@@ -124,7 +124,7 @@ export default function useSteerConvert() {
            * already created a receipt-bound item before the claim reached an
            * old replica, that source no longer exists. Downgrade the existing
            * item in place to an ordinary local follow-up. */
-          const existing = shouldBindRecoverySource
+          const existing: QueuedMessage[] = shouldBindRecoverySource
             ? prev
             : prev.map((item) => {
                 const matchesClaimedSource =
@@ -166,17 +166,20 @@ export default function useSteerConvert() {
                 local?.files,
                 fileMapRef.current,
               );
-              const recoveryFields = shouldBindRecoverySource
-                ? {
-                    // One UUID is stable for this queued attempt and all of
-                    // its POST retries. A later failed generation re-converts
-                    // the durable source and receives a new key, so the old
-                    // started idempotency tombstone cannot make it unsendable.
-                    clientRequestId: v4(),
-                    recoverySteerId: steer.steerId,
-                    ...(steer.clientSteerId && { recoveryClientSteerId: steer.clientSteerId }),
-                  }
-                : {};
+              const held =
+                jotaiStore.get(recoveryDispositionsFamily(conversationId))[steer.steerId] != null;
+              const recoveryFields =
+                shouldBindRecoverySource || held
+                  ? {
+                      // One UUID is stable for this queued attempt and all of
+                      // its POST retries. A later failed generation re-converts
+                      // the durable source and receives a new key, so the old
+                      // started idempotency tombstone cannot make it unsendable.
+                      clientRequestId: v4(),
+                      recoverySteerId: steer.steerId,
+                      ...(steer.clientSteerId && { recoveryClientSteerId: steer.clientSteerId }),
+                    }
+                  : {};
               const explicitSend = needsExplicitSend === true ? { needsExplicitSend: true } : {};
               const item =
                 queuedOrigin != null

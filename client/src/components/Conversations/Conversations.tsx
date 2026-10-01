@@ -33,6 +33,7 @@ import {
   useUnpinDroppedConversation,
 } from './dnd';
 import { useLocalize, TranslationKeys, useElementSize, useOuterScrollWindow } from '~/hooks';
+import { groupConversationsWithRunning, RUNNING_CHATS_GROUP } from './running';
 import { facetFilterCountAtom, resetFacetsAtom } from './facets';
 import { groupConversations, cn } from '~/utils';
 import { useActiveJobs } from '~/data-provider';
@@ -172,10 +173,14 @@ const DateLabel: FC<{ groupName: string; isFirst?: boolean; isAlphabetical?: boo
     const displayName = localize(groupName as TranslationKeys) || groupName;
     return (
       <h2
-        aria-label={localize(
-          isAlphabetical ? 'com_a11y_chats_alpha_section' : 'com_a11y_chats_date_section',
-          isAlphabetical ? { letter: displayName } : { date: displayName },
-        )}
+        aria-label={
+          groupName === RUNNING_CHATS_GROUP
+            ? localize('com_a11y_chats_running_section')
+            : localize(
+                isAlphabetical ? 'com_a11y_chats_alpha_section' : 'com_a11y_chats_date_section',
+                isAlphabetical ? { letter: displayName } : { date: displayName },
+              )
+        }
         className={cn(
           'text-text-secondary pt-0.5 pl-1 text-xs',
           isFirst === true ? 'mt-0' : 'mt-1.5',

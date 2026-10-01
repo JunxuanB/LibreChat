@@ -173,10 +173,15 @@ describe('agent queued turn methods', () => {
   it('keeps the selected approval mode on queued, claimed, and retried turns', async () => {
     const input = enqueueInput({
       codeApprovalMode: 'fullAccess',
+      reasoningOverride: { key: 'reasoning_effort', value: ReasoningEffort.high },
       deliveryReservation: { queuedTurnId: '507f191e810c19729de860ea', deliveryKey: 'v2-key' },
     });
     const first = await methods.enqueueAgentQueuedTurn(input);
     expect(first.turn.codeApprovalMode).toBe('fullAccess');
+    expect(first.turn.reasoningOverride).toEqual({
+      key: 'reasoning_effort',
+      value: ReasoningEffort.high,
+    });
     expect(first.turn).toMatchObject({ deliveryKey: 'v2-key', deliveryState: 'publishing' });
     const scope = {
       user,
@@ -195,9 +200,20 @@ describe('agent queued turn methods', () => {
     await expect(
       methods.enqueueAgentQueuedTurn({ ...input, codeApprovalMode: 'ask' }),
     ).rejects.toBeInstanceOf(AgentQueuedTurnConflictError);
+    await expect(
+      methods.enqueueAgentQueuedTurn({
+        ...input,
+        reasoningOverride: { key: 'reasoning_effort', value: ReasoningEffort.low },
+      }),
+    ).rejects.toBeInstanceOf(AgentQueuedTurnConflictError);
     const claimed = await methods.claimNextAgentQueuedTurn(claimInput(first.turn.queuedTurnId));
     expect(claimed.outcome).toBe('acquired');
-    if (claimed.outcome === 'acquired') expect(claimed.claim.codeApprovalMode).toBe('fullAccess');
+    if (claimed.outcome === 'acquired') {
+      expect(claimed.claim).toMatchObject({
+        codeApprovalMode: 'fullAccess',
+        reasoningOverride: { key: 'reasoning_effort', value: ReasoningEffort.high },
+      });
+    }
     const listed = await methods.listActiveAgentQueuedTurns({
       user,
       tenantId: 'tenant-1',

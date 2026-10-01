@@ -48,15 +48,15 @@ import {
   getPartKeyIndex,
 } from '~/utils';
 import {
-  getReasoningStateKey,
-  pendingReasoningOverrideFamily,
-} from '~/components/Chat/Input/Composer/state';
-import {
   startupConfigKey,
   queueTitleGeneration,
   markTitleGenerationProcessed,
   useReconcileConversationCodeEnvironmentMutation,
 } from '~/data-provider';
+import {
+  getReasoningStateKey,
+  pendingReasoningOverrideFamily,
+} from '~/components/Chat/Input/Composer/state';
 import {
   getFailedCodeDecisionRequest,
   withSubmittedCodeDecision,
@@ -1321,6 +1321,7 @@ export default function useEventHandlers({
       attachmentHandler,
       setSubmissionStart,
       restorePendingContext,
+      reconcileFailedCodeDecision,
     ],
   );
 

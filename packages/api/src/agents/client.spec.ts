@@ -3,6 +3,9 @@ import { Providers, StandardGraph } from '@librechat/agents';
 import { HumanMessage, SystemMessage } from '@librechat/agents/langchain/messages';
 import { ContentTypes, DEFAULT_MAX_RETAINED_TOOL_COUNT_CHARS } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
+import type { LCTool } from '@librechat/agents';
+import type { FormattedMessageWithContent } from './client';
+import type { EncodingName } from '~/utils/tokenizer';
 import type { ServerRequest } from '~/types';
 import {
   collectToolCallIds,

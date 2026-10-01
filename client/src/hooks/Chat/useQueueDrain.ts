@@ -1,10 +1,15 @@
 import { useRef, useEffect, useMemo } from 'react';
-import { useAtomValue } from 'jotai';
+import { useAtomValue, useStore } from 'jotai';
 import { useRecoilValue, useRecoilCallback } from 'recoil';
 import { Constants, DEFAULT_QUEUED_SEND_LOCK_TIMEOUT_MS } from 'librechat-data-provider';
 import type { DrainAfterAbort, QueuedMessage, QueuedMessageOrigin, RunEnd } from '~/store/families';
 import type { QueueSendLock } from '~/utils/queueIntent';
 import type { TAskFunction } from '~/common';
+import {
+  recoveryDispositionsFamily,
+  recoveryDisposition,
+  canRestoreRecovery,
+} from '~/components/Chat/Steering/recovery';
 import { acquireQueueSendLock, releaseQueueSendLock, hasQueuedIntent } from '~/utils/queueIntent';
 import { useGetStartupConfig, useMarkFilesUsageMutation } from '~/data-provider';
 import { selectQueuedTurnReveal } from '~/hooks/Chat/useQueuedTurnReveal';
@@ -346,8 +351,22 @@ export default function useQueueDrain(
           return reveal == null ? null : { kind: 'reveal', item: reveal, end };
         }
 
-        // Consume only after server authority has yielded the boundary: a
-        // hard double-fire guard even if the effect re-runs before propagation.
+        const head = merged[0];
+        if (
+          shouldDrain &&
+          head != null &&
+          recoveryDisposition(jotaiStore.get(recoveryDispositionsFamily(conversationId)), head) !=
+            null
+        ) {
+          // The first row still owns this boundary. Keep it until dismissal, even when
+          // a later local row is immediately sendable; a user must choose its fate.
+          if (shouldMigrate && newConvoQueue.length > 0) {
+            set(store.queuedMessagesByConvoId(Constants.NEW_CONVO), []);
+            set(store.queuedMessagesByConvoId(conversationId), merged);
+          }
+          return null;
+        }
+        // Intent-held and explicitly refused rows are skipped by the redesigned rail.
         consumeEnd();
 
         /** A row the rail is mid-edit or mid-remove on is spoken for: its words
@@ -359,7 +378,15 @@ export default function useQueueDrain(
          * Both are skipped rather than blocking the whole queue, so an
          * untouched follow-up behind them still goes on this run end. */
         const nextIndex = shouldDrain
-          ? merged.findIndex((item) => !hasQueuedIntent(item.id) && item.needsExplicitSend !== true)
+          ? merged.findIndex(
+              (item) =>
+                !hasQueuedIntent(item.id) &&
+                item.needsExplicitSend !== true &&
+                recoveryDisposition(
+                  jotaiStore.get(recoveryDispositionsFamily(conversationId)),
+                  item,
+                ) == null,
+            )
           : -1;
         const next = nextIndex >= 0 ? merged[nextIndex] : null;
         const remainder = nextIndex >= 0 ? merged.filter((_, at) => at !== nextIndex) : merged;
@@ -391,6 +418,8 @@ export default function useQueueDrain(
   const restoreQueued = useRecoilCallback(
     ({ set }) =>
       (convoId: string, origin: QueuedMessageOrigin) => {
+        if (!canRestoreRecovery(jotaiStore.get(recoveryDispositionsFamily(convoId)), origin.item))
+          return;
         set(store.queuedMessagesByConvoId(convoId), (prev) => insertQueuedOrigin(prev, origin));
       },
     [jotaiStore],

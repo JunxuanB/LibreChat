@@ -11,18 +11,18 @@ import {
   AgentQueuedTurnLaneRetiredError,
 } from '@librechat/data-schemas';
 import type {
-  AgentQueuedTurnActiveRecord,
-  AgentQueuedTurnMethods,
-  AgentQueuedTurnRecord,
-  IMongoFile,
-} from '@librechat/data-schemas';
-import type {
   CodeApprovalMode,
   TAgentQueuedTurnFileRef,
   TAgentQueuedTurnReceipt,
   TFile,
   TReasoningOverride,
 } from 'librechat-data-provider';
+import type {
+  AgentQueuedTurnActiveRecord,
+  AgentQueuedTurnMethods,
+  AgentQueuedTurnRecord,
+  IMongoFile,
+} from '@librechat/data-schemas';
 import type { Request, RequestHandler } from 'express';
 import type { AgentQueuedTurnLifecycle } from './queuedTurns';
 import type { SteerFileFetcher } from './steering/request';
@@ -92,6 +92,7 @@ function receipt(
     ...(turn.files != null && { files: turn.files }),
     ...(turn.quotes != null && { quotes: turn.quotes }),
     ...(turn.manualSkills != null && { manualSkills: turn.manualSkills }),
+    ...(turn.codeApprovalMode != null && { codeApprovalMode: turn.codeApprovalMode }),
     ...(turn.reasoningOverride != null && { reasoningOverride: turn.reasoningOverride }),
     priority: turn.priority,
     ...(turn.expectedPredecessorCreatedAt != null && {
@@ -153,6 +154,7 @@ function matchesReplayIntent(
     clientRequestId: string;
     files?: readonly TAgentQueuedTurnFileRef[];
     manualSkills?: readonly string[];
+    codeApprovalMode?: CodeApprovalMode;
     reasoningOverride?: TReasoningOverride;
     expectedPredecessorCreatedAt?: number;
   },
@@ -169,6 +171,7 @@ function matchesReplayIntent(
     ) &&
     sameStrings(turn.quotes, quotes) &&
     sameStrings(turn.manualSkills, uniqueStrings(input.manualSkills)) &&
+    turn.codeApprovalMode === input.codeApprovalMode &&
     sameReasoningOverride(turn.reasoningOverride, input.reasoningOverride) &&
     turn.expectedPredecessorCreatedAt === input.expectedPredecessorCreatedAt
   );
@@ -357,6 +360,7 @@ export async function handleAgentQueuedTurnEnqueue(
       ...(resolvedFiles.files != null && { files: resolvedFiles.files }),
       ...(quotes != null && { quotes }),
       ...(input.manualSkills != null && { manualSkills: input.manualSkills }),
+      ...(input.codeApprovalMode != null && { codeApprovalMode: input.codeApprovalMode }),
       ...(input.reasoningOverride != null && { reasoningOverride: input.reasoningOverride }),
       priority: false,
       ...(input.expectedPredecessorCreatedAt != null && {

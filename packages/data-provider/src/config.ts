@@ -42,7 +42,12 @@ import {
   resolveMCPAppCspLimits,
   type MCPAppCspLimits,
 } from './mcp/csp';
-import { CODE_ENVIRONMENT_DECISION_VERSION, CODE_ENVIRONMENT_MOVE_VERSION } from './code/workspace';
+import {
+  CODE_ENVIRONMENT_DECISION_VERSION,
+  CODE_ENVIRONMENT_MOVE_VERSION,
+  CODE_ENVIRONMENT_TRANSITION_VERSION,
+  CODE_WORKSPACE_RECOVERY_VERSION,
+} from './code/workspace';
 import { ComponentTypes, SettingTypes, OptionTypes } from './generate';
 import { STATEFUL_CODE_ENVIRONMENTS } from './stateful-code';
 import { specsConfigSchema, TSpecsConfig } from './models';
@@ -2340,6 +2345,23 @@ export type TThemeDefinitionConfig = z.infer<typeof themeDefinitionSchema>;
 
 /** A bundled theme name or an inline theme definition applied to every user. */
 export const deploymentThemeSchema = z.union([z.string().trim().min(1), themeDefinitionSchema]);
+/** Single source for the agents panel selector's unsearched list cap; the
+ * schema default and the client fallback both read it. */
+export const DEFAULT_AGENT_SELECTOR_LIMIT = 10;
+export const AGENT_SELECTOR_LIMIT_MIN = 1;
+export const AGENT_SELECTOR_LIMIT_MAX = 100;
+
+/** Runtime guard for values that bypass `interfaceSchema`: raw librechat.yaml
+ * reads and principal-scoped admin overrides reach the client unparsed, so an
+ * out-of-bounds value falls back to the default instead of emptying the list. */
+export function normalizeAgentSelectorLimit(value: unknown): number {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= AGENT_SELECTOR_LIMIT_MIN &&
+    value <= AGENT_SELECTOR_LIMIT_MAX
+    ? value
+    : DEFAULT_AGENT_SELECTOR_LIMIT;
+}
 
 /** Retention modes that apply expiration deadlines to all data, not just user-marked temporary chats. */
 export const isAllDataRetention = (mode?: RetentionMode | null): boolean =>

@@ -17,10 +17,7 @@ const {
   replaceEdgeSourceId,
   mergeDeploymentSkillIds,
   getAgentListAccess,
-  isFullAgentListAvatarCacheEntry,
   getAgentListAvatarRefreshKey,
-  refreshAgentListAvatarsBeforePage,
-  refreshManagedAgentListPageAvatars,
   mergeAgentOcrConversion,
   sanitizeModelParameters,
   collectToolResourceFileIds,
@@ -1840,16 +1837,6 @@ const getListAgentsHandler = async (req, res) => {
     if (!agents.length) {
       return res.json(data);
     }
-
-    const cachedRefresh = await refreshManagedAgentListPageAvatars({
-      accessibleIds,
-      agents,
-      cachedEntry: cachedRefreshBeforePage,
-      refreshS3Url,
-      cacheSet: cache.set.bind(cache),
-      cacheKey: refreshKey,
-      ttl: Time.THIRTY_MINUTES,
-    });
 
     const accessibleSkillSet = canReturnSkillConfig
       ? null
