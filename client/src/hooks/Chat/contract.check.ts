@@ -9,8 +9,10 @@
  * types consumers read.
  */
 import type { ContextType } from 'react';
+import type { ChatContract, AddedChatContract, ChatSettings, Transport } from './contract';
+import type { ChatTransportContext } from '~/Providers/ChatTransportContext';
+import type { ChatSettingsContext } from '~/Providers/ChatSettingsContext';
 import type { AddedChatContext } from '~/Providers/AddedChatContext';
-import type { ChatContract, AddedChatContract } from './contract';
 import type { ChatContext } from '~/Providers/ChatContext';
 import type useAddedResponse from './useAddedResponse';
 import type useChatFunctions from './useChatFunctions';
@@ -34,4 +36,10 @@ export type ChatContractChecks = [
 export type AddedChatContractChecks = [
   Expect<Equal<ReturnType<typeof useAddedResponse>, AddedChatContract>>,
   Expect<Equal<ContextType<typeof AddedChatContext>, AddedChatContract>>,
+];
+
+/** The host supplies settings and transport through the contract's types, nothing wider. */
+export type ChatHostContractChecks = [
+  Expect<Equal<ContextType<typeof ChatSettingsContext>, ChatSettings>>,
+  Expect<Equal<ContextType<typeof ChatTransportContext>, Transport>>,
 ];
