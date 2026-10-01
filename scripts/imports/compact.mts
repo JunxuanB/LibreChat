@@ -10,7 +10,6 @@ interface Edit {
 }
 
 interface Reference extends Edit {
-  unbound?: { start: number; end: number };
   shorthand?: string;
 }
 
@@ -201,20 +200,18 @@ export function compactImports(content: string, fileName: string, printWidth: nu
           ts.isJSDocLink(parent) ||
           ts.isJSDocLinkCode(parent) ||
           ts.isJSDocLinkPlain(parent);
+        const root = expressionRoot(node);
+        const directlyInvoked =
+          (ts.isCallExpression(root.parent) && root.parent.expression === root) ||
+          (ts.isTaggedTemplateExpression(root.parent) && root.parent.tag === root);
         if (
           unsupported ||
+          directlyInvoked ||
           isWrite(node) ||
           (binding.candidate.clause.isTypeOnly && !typeReference)
         ) {
           binding.candidate.safe = false;
         } else {
-          const root = expressionRoot(node);
-          const unbound =
-            (ts.isCallExpression(root.parent) && root.parent.expression === root) ||
-            (ts.isTaggedTemplateExpression(root.parent) && root.parent.tag === root);
-          if (unbound && /^use(?:[A-Z0-9]|$)/.test(node.text)) {
-            binding.candidate.safe = false;
-          }
           let shorthand: string | undefined;
           if (ts.isShorthandPropertyAssignment(parent)) {
             shorthand = node.text === '__proto__' ? "['__proto__']" : node.getText(source);
@@ -223,7 +220,6 @@ export function compactImports(content: string, fileName: string, printWidth: nu
             start: node.getStart(source),
             end: node.getEnd(),
             text: binding.exported,
-            unbound: unbound ? { start: root.getStart(source), end: root.getEnd() } : undefined,
             shorthand,
           });
         }
@@ -249,19 +245,13 @@ export function compactImports(content: string, fileName: string, printWidth: nu
     });
     for (const edit of candidate.edits) {
       let text = `${namespace}.${edit.text}`;
-      if (edit.unbound) {
-        edits.push(
-          { start: edit.unbound.start, end: edit.unbound.start, text: '(void 0, ' },
-          { start: edit.unbound.end, end: edit.unbound.end, text: ')' },
-        );
-      }
       if (edit.shorthand) text = `${edit.shorthand}: ${text}`;
       edits.push({ start: edit.start, end: edit.end, text });
     }
   }
   if (edits.length === 0) return content;
 
-  edits.sort((a, b) => a.start - b.start || a.end - b.end);
+  edits.sort((a, b) => a.start - b.start);
   const parts: string[] = [];
   let start = 0;
   for (const edit of edits) {

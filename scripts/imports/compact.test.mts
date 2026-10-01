@@ -339,15 +339,14 @@ test('compacts runtime aliases, classes, callbacks and object shorthand without 
   );
 });
 
-test('preserves unbound call and tag receivers, including optional and wrapped calls', async () => {
+test('leaves direct call and tag imports named to preserve receivers and call analysis', async () => {
   const source =
     "import { receiver, tag, receiver as call } from './models';\n" +
     'console.log(JSON.stringify([receiver(), receiver?.(), (receiver)(), (receiver!)(), call(), tag`value`, (tag)`value`]));\n';
   const model =
     'export function receiver() { return this === undefined; } export function tag() { return this === undefined; }';
   const output = compact(source, 40);
-  assert.match(output, /\(void 0, m.receiver\)\(\)/);
-  assert.match(output, /\(void 0, m.receiver\)\?\.\(\)/);
+  assert.equal(output, source);
   const before = await executeModule(source, model);
   assert.equal(before.trim(), '[true,true,true,true,true,true,true]');
   assert.equal(await executeModule(output, model), before);
@@ -374,7 +373,7 @@ test('preserves receivers through generic instantiation expressions and template
   const model =
     'export function receiver<T>(this: void) { return this === undefined; } export function tag<T>(this: void) { return this === undefined; }';
   const output = compact(source, 40);
-  assert.match(output, /\(void 0, m.receiver\)/);
+  assert.equal(output, source);
   const before = await executeModule(source, model);
   assert.equal(before.trim(), '[true,true,true,true,true,true]');
   assert.equal(await executeModule(output, model), before);
@@ -403,11 +402,12 @@ test('expands __proto__ shorthand as an own property, including escaped identifi
 
 test('preserves live bindings, existing member receivers, constructors and shorthand keys', async () => {
   const source =
-    "import { counter, increment, service, Thing } from './models';\n" +
+    "import { increment } from './models';\nimport { counter, service, Thing } from './models';\n" +
     'const before = counter;\nincrement();\nconst props = { counter };\nconsole.log(JSON.stringify([before, counter, props.counter, service.read(), new Thing().value]));\n';
   const model =
     'export let counter = 1; export function increment() { counter++; } export const service = { value: 3, read() { return this.value; } }; export class Thing { value = 4; }';
-  const output = compact(source);
+  const output = compact(source, 40);
+  assert.notEqual(output, source);
   assert.match(output, /counter: m.counter/);
   assert.match(output, /m.service.read\(\)/);
   const before = await executeModule(source, model);
@@ -467,7 +467,7 @@ test('preserves direct hook calls so hook lint remains effective', () => {
 
 test('preserves side-effect imports and formatting around runtime compaction', async () => {
   const source =
-    "import './register';\nimport { Widget, WidgetConfiguration } from './widgets';\nWidget();\n";
+    "import './register';\nimport { Widget, WidgetConfiguration } from './widgets';\nconst widget = new Widget();\n";
   const output = compact(source, 40);
   assert.ok(output.startsWith("import './register';\nimport * as m from './widgets';"));
   const formatted = await prettier.format(output, {
@@ -476,7 +476,7 @@ test('preserves side-effect imports and formatting around runtime compaction', a
     singleQuote: true,
   });
   assert.equal(compact(formatted), formatted);
-  assert.match(formatted, /\(void 0, m.Widget\)\(\)/);
+  assert.match(formatted, /new m.Widget\(\)/);
 });
 
 test('handles JavaScript, JSX and Windows runtime import paths, with collision-free namespaces', () => {
@@ -505,4 +505,84 @@ test('type and runtime namespaces stay distinct and stable after formatting', as
     singleQuote: true,
   });
   assert.equal(compact(formatted), formatted);
+});
+
+test('preserves imported assertion signatures and never-return statement narrowing', () => {
+  for (const [source, model] of [
+    [
+      "import { assertJobStoreV2, getMissingJobStoreV2Methods, JOB_STORE_V2_REQUIRED_METHODS } from './models';\ndeclare const store: object;\nassertJobStoreV2(store);\nconst version: 2 = store.version;\n",
+      'export interface IJobStoreV2 { version: 2 } export function assertJobStoreV2(value: object): asserts value is IJobStoreV2 { throw "unused"; } export const getMissingJobStoreV2Methods = 1; export const JOB_STORE_V2_REQUIRED_METHODS = 2;',
+    ],
+    [
+      "import { fail, configuration, metadata } from './models';\ndeclare const value: string | undefined;\nif (value === undefined) fail();\nconst result: string = value;\n",
+      'export function fail(): never { throw "unused"; } export const configuration = 1; export const metadata = 2;',
+    ],
+  ]) {
+    assert.equal(diagnostics(source, model).length, 0);
+    const output = compact(source, 40);
+    assert.equal(output, source);
+    assert.equal(diagnostics(output, model).length, 0);
+  }
+});
+
+test('skips a directly invoked module while compacting an independent value import', () => {
+  const source =
+    "import { assertStore, validateStore, REQUIRED_METHODS } from './assertions';\n" +
+    "import { Widget, WidgetConfiguration } from './widgets';\n" +
+    'assertStore(store);\nconst props = { Widget };\n';
+  const output = compact(source, 40);
+  assert.ok(
+    output.startsWith(
+      "import { assertStore, validateStore, REQUIRED_METHODS } from './assertions';",
+    ),
+  );
+  assert.match(output, /import \* as m from '\.\/widgets'/);
+  assert.match(output, /assertStore\(store\)/);
+  assert.match(output, /Widget: m.Widget/);
+});
+
+test('skips every direct invocation wrapper, including assertions and satisfies expressions', () => {
+  const prefix = "import { receiver, configuration, metadata } from './models';\n";
+  for (const use of [
+    'receiver();',
+    '(receiver)();',
+    'receiver?.();',
+    'receiver<string>();',
+    '(receiver<string>)();',
+    '(receiver!)();',
+    '(receiver as typeof receiver)();',
+    '(receiver satisfies typeof receiver)();',
+    '(<typeof receiver>receiver)();',
+    'receiver`value`;',
+    '(receiver<string>)`value`;',
+  ]) {
+    const source = prefix + use + '\n';
+    assert.equal(compactImports(source, 'consumer.ts', 40), source, use);
+  }
+});
+
+test('preserves qualified assertion calls and constructor typechecking after safe namespace conversion', () => {
+  const source =
+    "import { service, Widget, WidgetConfiguration } from './models';\n" +
+    'declare const value: string | undefined;\nservice.assertValue(value);\nconst result: string = value;\nconst widget: Widget = new Widget();\n';
+  const model =
+    'export const service: { assertValue(value: string | undefined): asserts value is string } = { assertValue(value) { if (value === undefined) throw "missing"; } }; export class Widget {} export const WidgetConfiguration = 1;';
+  assert.equal(diagnostics(source, model).length, 0);
+  const output = compact(source, 40);
+  assert.notEqual(output, source);
+  assert.match(output, /m.service.assertValue\(value\)/);
+  assert.equal(diagnostics(output, model).length, 0);
+});
+
+test('retains unbound callback values and function-object member receivers', async () => {
+  const source =
+    "import { receiver, service, metadata } from './models';\n" +
+    'const callback = receiver;\nconsole.log(JSON.stringify([callback(), receiver.call(undefined), service.read()]));\n';
+  const model =
+    'export function receiver() { return this === undefined; } export const service = { value: 3, read() { return this.value; } }; export const metadata = 1;';
+  const output = compact(source, 40);
+  assert.notEqual(output, source);
+  assert.match(output, /const callback = m.receiver/);
+  assert.match(output, /m.receiver.call\(undefined\)/);
+  assert.equal(await executeModule(output, model), await executeModule(source, model));
 });
