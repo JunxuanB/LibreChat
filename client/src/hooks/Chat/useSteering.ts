@@ -26,9 +26,9 @@ import type {
   SettledQueuedTurnReceipt,
 } from '~/store/families';
 import type { AgentQueuedTurnReceipt, GenerationProtocolVersion } from '~/data-provider';
-import type { DuringRunAction } from '~/Providers/ChatSettingsContext';
 import type { QueueSendLock } from '~/utils/queueIntent';
 import type { ExtendedFile, FileSetter } from '~/common';
+import type { DuringRunAction } from './contract';
 import {
   useGetStartupConfig,
   useCancelSteerMutation,

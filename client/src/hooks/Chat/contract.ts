@@ -1,5 +1,23 @@
-import type { TConversation, TMessage, TPreset } from 'librechat-data-provider';
+import type {
+  TPreset,
+  TMessage,
+  TConversation,
+  ChatTransport,
+  ChatTransportRequest,
+} from 'librechat-data-provider';
 import type { SetStateAction, Dispatch, MouseEvent } from 'react';
+import type {
+  ArmSteerParams,
+  ArmSteerResponse,
+  AbortStreamParams,
+  CancelSteerParams,
+  SteerMessageParams,
+  CancelSteerResponse,
+  AbortStreamResponse,
+  SteerMessageResponse,
+  AgentQueuedTurnReceipt,
+  EnqueueAgentQueuedTurnRequest,
+} from '~/data-provider';
 import type { NewConversationParams, TOptionSettings, ExtendedFile, TAskFunction } from '~/common';
 
 /** Options accepted by {@link ChatConversationContract.newConversation}: the shared params plus
@@ -138,3 +156,73 @@ export type AddedChatContract = {
   /** Builds and stores a conversation for the added pane from a template and/or preset. */
   generateConversation: (params?: NewConversationParams) => TConversation;
 };
+
+/** Composer action while a run is in flight: fold the text into the run, or queue a new turn. */
+export type DuringRunAction = 'steer' | 'queue';
+
+/**
+ * App-global preferences the chat reads but does not own. The host supplies them, so the chat
+ * hooks never reach into the app's state store for shell settings. A preference belongs here only
+ * once every chat reader of it takes it from here: a reader left on the store would act on a
+ * different value than a host that supplies its own.
+ */
+export type ChatSettings = {
+  /** Default composer action while a run is in flight. */
+  duringRunDefaultAction: DuringRunAction;
+  setDuringRunDefaultAction: (action: DuringRunAction) => void;
+  /** Whether a steer interrupts the running step instead of waiting for the next one. */
+  steerInterruptsByDefault: boolean;
+  /** Closes the artifacts panel, called when the active conversation changes. */
+  resetVisibleArtifacts: () => void;
+};
+
+/** The assistants abort route and the run it stops. */
+export type AbortRunRequest = {
+  /** The assistants endpoint whose `/abort` route owns the run. */
+  endpoint: string;
+  /** `conversationId:responseMessageId` of the run to stop. */
+  abortKey: string;
+};
+
+/**
+ * The wire the chat runs over, supplied by the host: starting a turn, streaming it, stopping
+ * it, and steering or queueing behind it. A host that substitutes its own (a test, another
+ * backend) changes no chat hook for those. Answers that resume a paused run (tool approvals,
+ * ask-user replies) still post to the stock resume route directly.
+ *
+ * AI SDK: `ChatTransport`, widened by the control requests a resumable, steerable run needs.
+ */
+export interface Transport {
+  /**
+   * The stream side for one bearer token: `send` streams a turn that carries its own response
+   * (Assistants), `reconnectToStream` attaches to a generation running on the server.
+   */
+  stream: (auth: { token?: string }) => ChatTransport;
+  /**
+   * POSTs a turn to a resumable generation route. Resolves to the start response, which names
+   * the stream to attach to; rejects with the HTTP failure, its body on `response.data`.
+   */
+  start: (request: ChatTransportRequest, options?: { signal?: AbortSignal }) => Promise<unknown>;
+  /** Stops a resumable generation; the stream then reports the abort. AI SDK: `stop`. */
+  abort: (params: AbortStreamParams) => Promise<AbortStreamResponse>;
+  /** Stops an Assistants run, which has no resumable generation to address. */
+  abortRun: (request: AbortRunRequest, auth: { token?: string }) => Promise<Response>;
+  /** Queues a message for injection into the running generation. */
+  steer: (params: SteerMessageParams) => Promise<SteerMessageResponse>;
+  /** Withdraws a steer that has not been injected yet. */
+  cancelSteer: (params: CancelSteerParams) => Promise<CancelSteerResponse>;
+  /** Escalates a queued steer to interrupt the running step. */
+  armSteer: (params: ArmSteerParams) => Promise<ArmSteerResponse>;
+  /** Reads the server's queued turns for a conversation, narrowed to known request ids. */
+  listQueued: (
+    conversationId: string,
+    clientRequestIds?: string[],
+  ) => Promise<AgentQueuedTurnReceipt[]>;
+  /** Adds a turn to the server's queue behind the running generation. */
+  enqueue: (input: EnqueueAgentQueuedTurnRequest) => Promise<AgentQueuedTurnReceipt>;
+  /** Withdraws a queued turn the server has not admitted yet. */
+  cancelQueued: (input: {
+    conversationId: string;
+    queuedTurnId: string;
+  }) => Promise<AgentQueuedTurnReceipt>;
+}
