@@ -554,6 +554,31 @@ describe('initializeAgent: ChatProject context', () => {
     );
     expect(agent.additional_instructions).toBe(originalAdditionalInstructions);
   });
+  it('keys Project guidance into the cache identity of the copy, not the definition', async () => {
+    const { agent, loadTools, db } = createMocks();
+    agent.instructions = 'Follow the Agent instructions.';
+    agent.additional_instructions = 'Agent dynamic guidance.';
+
+    const result = (await initializeAgent(
+      {
+        runtime: projectRuntime(),
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        useChatProjectContext: true,
+      },
+      db,
+    )) as Agent & { configuredAdditionalInstructions?: string };
+
+    const configured = result.configuredAdditionalInstructions ?? '';
+    expect(configured).toContain('Agent dynamic guidance.');
+    expect(configured).toContain(projectContext.instructions);
+    expect(
+      (agent as Agent & { configuredAdditionalInstructions?: string })
+        .configuredAdditionalInstructions,
+    ).toBeUndefined();
+  });
   it('propagates Project guidance and files to a discovered child through real initialization', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.id = 'child-agent';

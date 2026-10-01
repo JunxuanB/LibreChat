@@ -1183,12 +1183,6 @@ export async function initializeAgent(
     isInitialAgent = false,
     useChatProjectContext,
   } = params;
-  /**
-   * Before anything appends to the instruction tail: the author's text is the
-   * identity's starting point, and every configuration-derived addition below
-   * accumulates onto it while request-scoped ones opt out.
-   */
-  captureConfiguredAdditionalInstructions(agent);
   const runtime =
     params.runtime ?? (params.req ? createRequestAgentExecutionContext(params.req) : null);
   if (runtime == null) {
@@ -1197,6 +1191,12 @@ export async function initializeAgent(
   const shouldUseChatProjectContext =
     useChatProjectContext ?? params.req?.chatProjectContextEnabled === true;
   const agent = shouldUseChatProjectContext ? { ...inputAgent } : inputAgent;
+  /**
+   * Before anything appends to the instruction tail: the author's text is the
+   * identity's starting point, and every configuration-derived addition below
+   * accumulates onto it while request-scoped ones opt out.
+   */
+  captureConfiguredAdditionalInstructions(agent);
   const { user, appConfig } = runtime;
   const requestFileOwnerId = user?.id;
   const requestFileOwnerScope: FileOwnerScope | undefined = requestFileOwnerId
