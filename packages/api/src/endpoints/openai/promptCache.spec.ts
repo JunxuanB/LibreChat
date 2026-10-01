@@ -144,6 +144,22 @@ describe('buildPromptCacheKey', () => {
       );
     });
 
+    it('retires the key for a changed default value', () => {
+      /** Zod keeps a default behind a thunk, and the tool schema serializes its result. */
+      const withDefault = (value: string) =>
+        z.object({
+          orderId: z.string().default(value),
+          mode: z.literal('full'),
+          filter: z.union([z.string(), z.number()]),
+        });
+      expect(key({ tools: [action(withDefault('a'))] })).not.toBe(
+        key({ tools: [action(withDefault('b'))] }),
+      );
+      expect(key({ tools: [action(withDefault('a'))] })).toBe(
+        key({ tools: [action(withDefault('a'))] }),
+      );
+    });
+
     it('keeps one key for the same regex pattern', () => {
       const withPattern = () =>
         z.object({

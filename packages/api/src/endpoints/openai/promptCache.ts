@@ -470,12 +470,28 @@ const RUNTIME_SHAPE_MAX_DEPTH = 64;
  * means the next one is a collision, so every own entry is walked and the
  * type carries no privilege.
  *
- * Reading `_def` is reading an internal, and that is the safe direction — a
+ * Reading `_def` is reading an internal, and that is the safe direction: a
  * Zod release that reshapes it changes every digest at once, which retires
  * keys rather than colliding them. Functions are recorded as their presence
- * only: a refinement body cannot be hashed stably and does not reach the
- * wire.
+ * only, except a default's thunk: a refinement body cannot be hashed stably
+ * and does not reach the wire.
  */
+/**
+ * A Zod default is stored as a thunk, and the JSON schema the model is shown
+ * carries its result, so the result is what the identity hashes. A thunk that
+ * throws is recorded as its presence, like any other function.
+ */
+function serializedThunk(key: string, entry: unknown): unknown {
+  if (key !== 'defaultValue' || typeof entry !== 'function') {
+    return entry;
+  }
+  try {
+    return { default: (entry as () => unknown)() };
+  } catch {
+    return entry;
+  }
+}
+
 function runtimeSchemaShape(
   value: unknown,
   seen: Set<object>,
@@ -518,7 +534,10 @@ function runtimeSchemaShape(
       source != null && typeof source === 'object' && !Array.isArray(source)
         ? Object.keys(source as Record<string, unknown>)
             .sort()
-            .map((key) => [key, walk((source as Record<string, unknown>)[key])])
+            .map((key) => [
+              key,
+              walk(serializedThunk(key, (source as Record<string, unknown>)[key])),
+            ])
         : walk(source);
     /**
      * `shape` is a getter on a Zod object and its keys are the schema the
