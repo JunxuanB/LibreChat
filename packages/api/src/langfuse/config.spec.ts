@@ -1093,6 +1093,44 @@ describe('buildLangfuseConfig', () => {
     }
   });
 
+  it('drops allowlisted user and request trace fields under metricsOnly', async () => {
+    delete process.env.TENANT_ISOLATION_STRICT;
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk-env';
+    process.env.LANGFUSE_SECRET_KEY = 'sk-env';
+    const { buildLangfuseConfig } = await import('./config');
+    const trace = {
+      userIdField: 'email',
+      userMetadataFields: ['email', 'username'],
+      conversationMetadataFields: ['conversationId', 'model'],
+    };
+    const input = {
+      runId: 'run-1',
+      user: { id: 'user-1', email: 'alice@example.com', username: 'alice' },
+      traceContext: { conversationId: 'convo-1', model: 'gpt-5' },
+    };
+
+    const full = buildLangfuseConfig({
+      ...input,
+      appConfig: { langfuse: { trace } } as unknown as AppConfig,
+    });
+    expect(full).toEqual(
+      expect.objectContaining({
+        userId: 'alice@example.com',
+        metadata: expect.objectContaining({ 'librechat.user.email': 'alice@example.com' }),
+      }),
+    );
+
+    const masked = buildLangfuseConfig({
+      ...input,
+      appConfig: {
+        langfuse: { trace, privacy: { mode: 'metricsOnly' } },
+      } as unknown as AppConfig,
+    });
+    expect(masked).not.toHaveProperty('userId');
+    expect(masked).not.toHaveProperty('metadata');
+    expect(masked).toEqual(expect.objectContaining({ privacy: { mode: 'metricsOnly' } }));
+  });
+
   it('keeps full privacy mode exporting tenant trace data untouched', async () => {
     delete process.env.TENANT_ISOLATION_STRICT;
     process.env.LANGFUSE_PUBLIC_KEY = 'pk-env';
