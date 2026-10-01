@@ -2227,6 +2227,39 @@ describe('prompt caching', () => {
     expect(kwargs).not.toHaveProperty('prompt_cache_options');
   });
 
+  it.each([
+    ['prompt_cache_options', { mode: 'explicit' }],
+    ['prompt_cache_breakpoint', { mode: 'explicit' }],
+  ])('promotes a model group %s onto the explicit-cache field', (name, value) => {
+    const result = getOpenAILLMConfig({
+      apiKey: 'test-api-key',
+      streaming: true,
+      endpoint: EModelEndpoint.openAI,
+      modelOptions: { model: 'gpt-5.6' },
+      addParams: { [name]: value },
+    });
+
+    const kwargs = (result.llmConfig.modelKwargs ?? {}) as Record<string, unknown>;
+    /** Only the constructor field makes the SDK add the breakpoints as well. */
+    expect(result.llmConfig.promptCacheExplicit).toBe(true);
+    expect(kwargs).not.toHaveProperty(name);
+  });
+
+  it('lets a wire-spelled model group opt out of endpoint explicit caching', () => {
+    const result = getOpenAILLMConfig({
+      apiKey: 'test-api-key',
+      streaming: true,
+      endpoint: EModelEndpoint.openAI,
+      modelOptions: { model: 'gpt-5.6' },
+      promptCacheExplicit: true,
+      addParams: { prompt_cache_options: { mode: 'implicit' } },
+    });
+
+    const kwargs = (result.llmConfig.modelKwargs ?? {}) as Record<string, unknown>;
+    expect(result.llmConfig.promptCacheExplicit).toBe(false);
+    expect(kwargs).not.toHaveProperty('prompt_cache_options');
+  });
+
   it('honors a wire-spelled explicit-cache drop', () => {
     const result = getOpenAILLMConfig({
       apiKey: 'test-api-key',
@@ -2388,6 +2421,25 @@ describe('prompt caching', () => {
     });
 
     expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
+  });
+
+  it('falls back to the visible model when the Azure deployment name names no model', () => {
+    /** An administrator-chosen label proves nothing about what it serves. */
+    const result = getOpenAILLMConfig({
+      azure: {
+        azureOpenAIApiInstanceName: 'test-instance',
+        azureOpenAIApiDeploymentName: 'production-chat',
+        azureOpenAIApiVersion: '2025-04-01-preview',
+        azureOpenAIApiKey: 'test-api-key',
+      },
+      apiKey: 'test-api-key',
+      streaming: true,
+      endpoint: EModelEndpoint.azureOpenAI,
+      modelOptions: { model: 'gpt-5.6' },
+      promptCacheExplicit: true,
+    });
+
+    expect(result.llmConfig.promptCacheExplicit).toBe(true);
   });
 
   it('lets a supported Azure deployment enable them behind an unsupported alias', () => {

@@ -22,6 +22,7 @@ import {
   PROMPT_CACHE_EXPLICIT_LEVER,
   isPromptCacheLeverDropped,
   supportsExplicitPromptCache,
+  namesOpenAIModel,
 } from './promptCache';
 import {
   sanitizeModelName,
@@ -1136,6 +1137,23 @@ export function getOpenAILLMConfig({
     delete modelKwargs.prompt_cache_retention;
   }
   /**
+   * The explicit controls get the same promotion. A raw `prompt_cache_options`
+   * left in the kwargs reaches the wire without the breakpoints, which the SDK
+   * adds only for the constructor field, and an endpoint-wide `true` replaces
+   * it anyway. Presence opts in unless its `mode` names something else.
+   */
+  if (firstPartyEndpoint) {
+    for (const name of PROMPT_CACHE_EXPLICIT_LEVER.wire) {
+      const value = modelKwargs[name];
+      if (value == null) {
+        continue;
+      }
+      const mode = (value as { mode?: unknown }).mode;
+      llmConfig.promptCacheExplicit = typeof mode !== 'string' || mode === 'explicit';
+      delete modelKwargs[name];
+    }
+  }
+  /**
    * Explicit cache controls require a model that accepts them, because OpenAI
    * rejects unknown body parameters outright rather than ignoring them. The
    * decision is deferred to `applyExplicitPromptCache` below, once the wire
@@ -1159,22 +1177,23 @@ export function getOpenAILLMConfig({
     /**
      * By precedence, not by agreement: each name decides alone when it is
      * present, and only then does the next one get a say. The `modelKwargs`
-     * override is the model the request addresses, so it comes first —
-     * permitting a supported deployment behind an unsupported visible name,
-     * and vetoing the reverse. An Azure deployment name is next, because it is
-     * what the URL addresses while the visible model is a label over it, and
-     * the visible model is the fallback when there is no deployment.
+     * override is the model the request addresses, so it comes first,
+     * permitting a supported deployment behind an unsupported visible name
+     * and vetoing the reverse. An Azure deployment name that names a model is
+     * next, because it is what the URL addresses while the visible model is a
+     * label over it. The visible model decides when there is no deployment, or
+     * when the deployment is an opaque label such as `production-chat` that
+     * says nothing about the model it serves.
      *
      * Asking whether *any* of them looks supported is what this must not do:
      * a supported-looking alias over a `gpt-4o` deployment would send body
-     * parameters that deployment rejects outright, and a rejected request is
-     * worse than the caching an opaque deployment name costs.
+     * parameters that deployment rejects outright.
      */
     const resolveExplicitSupport = (): boolean => {
       if (typeof wireModel === 'string') {
         return supportsExplicitPromptCache(wireModel);
       }
-      if (typeof deploymentName === 'string' && deploymentName !== '') {
+      if (namesOpenAIModel(deploymentName)) {
         return supportsExplicitPromptCache(deploymentName);
       }
       return supportsExplicitPromptCache(llmConfig.model);

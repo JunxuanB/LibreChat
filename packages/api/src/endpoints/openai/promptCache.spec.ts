@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AgentInputs } from '@librechat/agents';
-import { buildPromptCacheKey, supportsExplicitPromptCache } from './promptCache';
+import { buildPromptCacheKey, namesOpenAIModel, supportsExplicitPromptCache } from './promptCache';
 
 describe('supportsExplicitPromptCache', () => {
   it.each([
@@ -24,6 +24,22 @@ describe('supportsExplicitPromptCache', () => {
     [undefined, false],
   ])('reports %s as %s', (model, supported) => {
     expect(supportsExplicitPromptCache(model)).toBe(supported);
+  });
+});
+
+describe('namesOpenAIModel', () => {
+  it.each([
+    ['gpt-4o-prod', true],
+    ['gpt-5-6', true],
+    ['chatgpt-4o-latest', true],
+    ['my-o3-deployment', true],
+    ['codex-mini', true],
+    ['production-chat', false],
+    ['prod-eastus', false],
+    ['gpt', false],
+    [undefined, false],
+  ])('reports %s as %s', (name, names) => {
+    expect(namesOpenAIModel(name)).toBe(names);
   });
 });
 

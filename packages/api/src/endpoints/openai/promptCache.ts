@@ -27,6 +27,17 @@ export function supportsExplicitPromptCache(model?: string | null): boolean {
 }
 
 /**
+ * Whether a name identifies an OpenAI model family at all. An Azure deployment
+ * name is an administrator's label: one that names a family can veto explicit
+ * caching, but an opaque one proves nothing about the model behind it.
+ */
+const openAIModelNamePattern = /\b(?:(?:chat)?gpt-\d|o\d+\b|codex\b)/i;
+
+export function namesOpenAIModel(name?: string | null): boolean {
+  return typeof name === 'string' && openAIModelNamePattern.test(name);
+}
+
+/**
  * Everything a projection needs that is not the value itself.
  */
 interface PromptCacheProjectionContext {
