@@ -18,7 +18,9 @@
  *   Run:        npm run sort-imports
  *   Check only: npm run sort-imports:check
  *   Targeted:   node scripts/sort-imports.mts path/to/file.ts [...]
- *   Compact:    npm run sort-imports -- --compact-types path/to/file.ts [...]
+ *
+ * Long type-only imports are compacted automatically when references can be
+ * rewritten safely. Check mode enforces the same cleanup without writing.
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
@@ -52,7 +54,6 @@ const SKIP_DIR_NAMES = new Set([
 
 const args = process.argv.slice(2);
 const CHECK = args.includes('--check');
-const COMPACT_TYPES = args.includes('--compact-types');
 const FILE_ARGS = args.filter((arg) => !arg.startsWith('--'));
 
 const LOCAL_PREFIXES = ['~/', 'src/', 'test/', './', '../'];
@@ -222,10 +223,9 @@ async function collectFiles(): Promise<string[]> {
   return files;
 }
 
-const printWidth = COMPACT_TYPES
-  ? (JSON.parse(await readFile(resolve(ROOT, '.prettierrc'), 'utf8')) as { printWidth: number })
-      .printWidth
-  : 0;
+const { printWidth } = JSON.parse(await readFile(resolve(ROOT, '.prettierrc'), 'utf8')) as {
+  printWidth: number;
+};
 
 let changed = 0;
 let total = 0;
@@ -233,10 +233,9 @@ let total = 0;
 for (const filePath of await collectFiles()) {
   const rel = relative(ROOT, filePath);
   const content = await readFile(filePath, 'utf8');
-  const compacted =
-    COMPACT_TYPES && !content.split('\n').some((line) => IGNORE_MARKER.test(line))
-      ? compactTypeImports(content, filePath, printWidth)
-      : content;
+  const compacted = content.split('\n').some((line) => IGNORE_MARKER.test(line))
+    ? content
+    : compactTypeImports(content, filePath, printWidth);
   const result = sortFileImports(compacted) ?? compacted;
   total++;
   if (result === content) continue;
@@ -250,12 +249,10 @@ for (const filePath of await collectFiles()) {
 }
 
 if (CHECK && changed) {
-  console.log(
-    `\n${changed}/${total} files need cleanup. Run: npm run sort-imports${COMPACT_TYPES ? ' -- --compact-types' : ''}`,
-  );
+  console.log(`\n${changed}/${total} files need cleanup. Run: npm run sort-imports -- <files>`);
   process.exit(1);
 } else if (changed) {
   console.log(`\nCleaned ${changed}/${total} files.`);
 } else {
-  console.log(`All ${total} files already sorted.`);
+  console.log(`All ${total} files already clean.`);
 }

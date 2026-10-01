@@ -3,6 +3,7 @@ import ts from 'typescript';
 import * as prettier from 'prettier';
 import { strict as assert } from 'node:assert';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -220,11 +221,11 @@ test('output stays compact after Prettier formats it', async () => {
   );
 });
 
-test('CLI opt-in, check-only mode, sorting, ignore marker, and idempotence', async () => {
+test('normal CLI and pre-commit cleanup compact types, and checks reject eligible imports', async () => {
   const directory = await mkdtemp(join(ROOT, 'client/src/.compact-imports-test-'));
   const file = join(directory, 'fixture.ts');
   const source =
-    "import type { Message, Conversation, AgentConfiguration, AgentPermission, AgentCapability } from './models';\nimport { useState } from 'react';\n\ntype Row = Message;\n";
+    "import { useState } from 'react';\nimport type { Message, Conversation, AgentConfiguration, AgentPermission, AgentCapability } from './models';\n\ntype Row = Message;\n";
   const run = (...flags: string[]) =>
     spawnSync(process.execPath, ['scripts/sort-imports.mts', ...flags, file], {
       cwd: ROOT,
@@ -232,25 +233,58 @@ test('CLI opt-in, check-only mode, sorting, ignore marker, and idempotence', asy
     });
   try {
     await writeFile(file, source);
-    const normal = run();
-    assert.equal(normal.status, 0, normal.stderr);
-    const sorted = await readFile(file, 'utf8');
-    assert.match(sorted, /import type \{/);
-    const check = run('--compact-types', '--check');
+    const check = run('--check');
     assert.equal(check.status, 1, check.stderr);
-    assert.equal(await readFile(file, 'utf8'), sorted);
-    const converted = run('--compact-types');
+    assert.equal(await readFile(file, 'utf8'), source);
+    const staticCheck = (): ReturnType<typeof spawnSync> =>
+      spawnSync(process.execPath, ['scripts/static-checks.mts', '--only', 'imports', file], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+    const rejected = staticCheck();
+    assert.equal(rejected.status, 1, String(rejected.stderr));
+    assert.equal(await readFile(file, 'utf8'), source);
+    const converted = run();
     assert.equal(converted.status, 0, converted.stderr);
     const output = await readFile(file, 'utf8');
     assert.equal(
       output,
       "import { useState } from 'react';\nimport type * as t from './models';\n\ntype Row = t.Message;\n",
     );
-    assert.equal(run('--compact-types', '--check').status, 0);
     assert.equal(run('--check').status, 0);
+    const accepted = staticCheck();
+    assert.equal(accepted.status, 0, String(accepted.stderr));
+    assert.equal(run().status, 0);
+    assert.equal(await readFile(file, 'utf8'), output);
+
+    await writeFile(file, source);
+    const hooks: { '*.{js,jsx,ts,tsx}': string[] } = createRequire(import.meta.url)(
+      join(ROOT, '.husky/lint-staged.config.js'),
+    );
+    const [command, ...args] = hooks['*.{js,jsx,ts,tsx}'][0].split(' ');
+    assert.equal(command, 'node');
+    const hook = spawnSync(process.execPath, [...args, file], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(hook.status, 0, hook.stderr);
+    assert.equal(await readFile(file, 'utf8'), output);
+
     await writeFile(file, '// sort-imports-ignore\n' + source);
-    assert.equal(run('--compact-types').status, 0);
+    assert.equal(run('--check').status, 0);
+    assert.equal(run().status, 0);
     assert.equal(await readFile(file, 'utf8'), '// sort-imports-ignore\n' + source);
+
+    const longImport = source.split('\n')[1] + '\n';
+    for (const exempt of [
+      longImport + 'export type { Message };\n',
+      longImport.replace('Message,', 'Message, /* retained */'),
+      "import type { default as Message, Conversation, AgentConfiguration, AgentPermission } from './models';\n",
+      "import { Message, Conversation, AgentConfiguration, AgentPermission, AgentCapability } from './models';\n",
+      "import type { Message, Conversation } from './models';\n",
+    ]) {
+      await writeFile(file, exempt);
+      assert.equal(run('--check').status, 0, exempt);
+      assert.equal(run().status, 0, exempt);
+      assert.equal(await readFile(file, 'utf8'), exempt);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
