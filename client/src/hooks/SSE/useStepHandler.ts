@@ -1,7 +1,13 @@
 import { useCallback, useRef } from 'react';
 import { useStore } from 'jotai';
 import { useRecoilCallback } from 'recoil';
-import { Constants, StepTypes, StepEvents, ContentTypes } from 'librechat-data-provider';
+import {
+  Constants,
+  StepTypes,
+  StepEvents,
+  ContentTypes,
+  getToolTimingDurations,
+} from 'librechat-data-provider';
 import type {
   Agents,
   TMessage,
@@ -615,6 +621,15 @@ export default function useStepHandler({
             response,
             runStep,
             editPrefixOffset,
+            (callId) => ({
+              toolPreparationStartedAt:
+                firstFragmentByCall.current.get(toolTimingKey(runStep.id, callId)) ??
+                (runStep.stepDetails.type === StepTypes.TOOL_CALLS &&
+                (runStep.stepDetails.tool_calls?.length ?? 0) <= 1
+                  ? firstFragmentByStep.current.get(runStep.id)
+                  : undefined),
+              toolDispatchedAt: dispatchedByCall.current.get(toolTimingKey(runStep.id, callId)),
+            }),
           );
           if (toolCallId) {
             toolCallIdMap.current.set(runStep.id, toolCallId);
@@ -833,6 +848,14 @@ export default function useStepHandler({
             runStepDelta,
             toolCallIdMap.current.get(runStepDelta.id) ?? '',
             editPrefixOffset,
+            (callId, index) => ({
+              toolPreparationStartedAt:
+                firstFragmentByCall.current.get(toolTimingKey(runStepDelta.id, callId)) ??
+                (index === 0 ? firstFragmentByStep.current.get(runStepDelta.id) : undefined),
+              toolDispatchedAt: dispatchedByCall.current.get(
+                toolTimingKey(runStepDelta.id, callId),
+              ),
+            }),
           );
         if (updatedResponse) {
           messageMap.current.set(responseMessageId, updatedResponse);
@@ -948,7 +971,37 @@ export default function useStepHandler({
           return;
         }
 
-        const updatedResponse = applyRunStepClosed(response, runStep, closed, editPrefixOffset);
+        const existing = response.content?.[runStep.index + editPrefixOffset];
+        if (existing?.type !== ContentTypes.TOOL_CALL || !existing.tool_call) {
+          return;
+        }
+        const existingToolCall = existing.tool_call;
+        const callId = existingToolCall.id ?? '';
+        const key = toolTimingKey(closed.id, callId);
+        const singleCallStep =
+          runStep.stepDetails.type === StepTypes.TOOL_CALLS &&
+          (runStep.stepDetails.tool_calls?.length ?? 0) <= 1;
+        const observedAt = Math.min(
+          firstFragmentByCall.current.get(key) ?? Infinity,
+          existingToolCall.toolPreparationStartedAt ?? Infinity,
+          singleCallStep ? (firstFragmentByStep.current.get(closed.id) ?? Infinity) : Infinity,
+        );
+        const timing = getToolTimingDurations({
+          observedAt: Number.isFinite(observedAt) ? observedAt : undefined,
+          dispatchedAt: existingToolCall.toolDispatchedAt ?? dispatchedByCall.current.get(key),
+          completedAt: completedByCall.current.get(key),
+        });
+        firstFragmentByCall.current.delete(key);
+        firstFragmentByStep.current.delete(closed.id);
+        dispatchedByCall.current.delete(key);
+        completedByCall.current.delete(key);
+        const updatedResponse = applyRunStepClosed(
+          response,
+          runStep,
+          closed,
+          editPrefixOffset,
+          timing,
+        );
         if (!updatedResponse) {
           return;
         }

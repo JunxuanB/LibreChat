@@ -1,6 +1,5 @@
 import { memo, useId, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
-import { Button } from '@librechat/client';
 import { useTranslation } from 'react-i18next';
 import { ContentTypes } from 'librechat-data-provider';
 import { Check, Lightbulb, ChevronDown, TriangleAlert } from 'lucide-react';
@@ -28,7 +27,6 @@ import { AttachmentGroup, StreamingThoughtPeek } from './Parts';
 import { useMCPIconMap, useMCPServerNames } from '~/hooks/MCP';
 import { getActivityLabelText } from '~/utils/activityLabels';
 import { getOutcomeStatus, summarizeSpan } from './outcome';
-import { ROW_GLYPH_SLOT, TOOL_ROW_CLASSES } from './rows';
 import { MCPAppViews } from '~/components/MCPUIResource';
 import { sandboxStartingByToolCallId } from '~/store';
 import useClockFormat from '~/hooks/useClockFormat';
@@ -420,8 +418,13 @@ function LivePhaseHeader({
            *  the failed rows. Only a stop count has no pill and stays visible.
            *  The verdict is the span's, not the newest line's, so it keeps its
            *  own separator from whatever the row happens to be saying. */}
-          <span className="text-text-secondary mr-1">·</span>
-          <span>{detail}</span>
+          {failedNote !== '' && <span className="sr-only">· {failedNote}</span>}
+          {cancelledNote !== '' && (
+            <>
+              <span className="text-text-secondary mr-1">·</span>
+              <span>{cancelledNote}</span>
+            </>
+          )}
         </span>
       )}
     </>
@@ -450,7 +453,7 @@ function FailedPeekTime({ failedAt }: { failedAt: number | Date }) {
     <time
       dateTime={timestamp.iso}
       title={timestamp.absolute}
-      className="min-w-0 shrink truncate text-xs text-text-secondary"
+      className="text-text-secondary min-w-0 shrink truncate text-xs"
       data-testid="activity-phase-failed-time"
     >
       {timestamp.relative}
@@ -796,11 +799,10 @@ export default function ActivityPhaseGroup({
         /** Pinned while open, so a run long enough to scroll keeps its name
          *  at the top of the viewport. The containing block is this card, so
          *  the header stops pinning where its own rows end. */
-        className={cn(isExpanded && 'sticky top-0 z-[1] bg-presentation')}
+        className={cn(isExpanded && 'bg-presentation sticky top-0 z-[1]')}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          <Button
-            variant="ghost"
+          <button
             type="button"
             /** `ring-inset` is not decoration: the clip above is permanent (the
              *  grid rows need it), so an outset ring would be drawn entirely
@@ -855,7 +857,7 @@ export default function ActivityPhaseGroup({
               )}
               aria-hidden="true"
             />
-          </Button>
+          </button>
           <FailedRevealPill count={failedCount} total={toolCount} onReveal={handleRevealFailed} />
         </div>
       </div>

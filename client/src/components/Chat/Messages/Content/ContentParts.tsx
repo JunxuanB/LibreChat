@@ -1318,6 +1318,16 @@ const ContentParts = memo(function ContentParts(props: ContentPartsProps) {
     () => new Set(messageAppAttachments),
     [messageAppAttachments],
   );
+  const messageContext = useMemo(
+    () => ({
+      messageId,
+      conversationId,
+      isExpanded: false as const,
+      isSubmitting: isLatestMessage === true && isSubmitting,
+      isLatestMessage,
+    }),
+    [messageId, conversationId, isSubmitting, isLatestMessage],
+  );
   const toolState = useRef<{
     messageId: string;
     conversationId: string | null | undefined;
@@ -1364,16 +1374,21 @@ const ContentParts = memo(function ContentParts(props: ContentPartsProps) {
   const attachmentsByName = useMemo(() => buildAttachmentsByName(attachments), [attachments]);
   const media = useMemo(() => ({ attachmentsByName }), [attachmentsByName]);
   return (
-    <MediaContext.Provider value={media}>
-      <ReasoningDisclosureContext.Provider value={reasoningDisclosures}>
-        <ToolDisclosureContext.Provider value={toolDisclosures}>
-          <MCPAppSuppressionContext.Provider value={suppressedAppAttachments}>
-            <ContentPartsBody {...props} />
-          </MCPAppSuppressionContext.Provider>
-          <MCPAppViews key={`message-apps-${appRenderScope}`} attachments={messageAppAttachments} />
-        </ToolDisclosureContext.Provider>
-      </ReasoningDisclosureContext.Provider>
-    </MediaContext.Provider>
+    <MessageContext.Provider value={messageContext}>
+      <MediaContext.Provider value={media}>
+        <ReasoningDisclosureContext.Provider value={reasoningDisclosures}>
+          <ToolDisclosureContext.Provider value={toolDisclosures}>
+            <MCPAppSuppressionContext.Provider value={suppressedAppAttachments}>
+              <ContentPartsBody {...props} />
+            </MCPAppSuppressionContext.Provider>
+            <MCPAppViews
+              key={`message-apps-${appRenderScope}`}
+              attachments={messageAppAttachments}
+            />
+          </ToolDisclosureContext.Provider>
+        </ReasoningDisclosureContext.Provider>
+      </MediaContext.Provider>
+    </MessageContext.Provider>
   );
 });
 

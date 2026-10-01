@@ -44,15 +44,6 @@ import {
   BadgeRowProvider,
 } from '~/Providers';
 import {
-  cn,
-  getModelSpec,
-  hasIncompleteFiles,
-  removeFocusRings,
-  getComposerDraftId,
-  getFilesDraftCached,
-  isPastedTextFileMarked,
-} from '~/utils';
-import {
   PendingToolApprovalButton,
   PendingToolApprovalPanel,
 } from '~/components/Chat/approval/Review';
@@ -607,6 +598,7 @@ const ChatForm = memo(function ChatForm({
           {steering.canControlGeneration && (
             <InterruptSteerButton
               steering={steering}
+              isNewConversation={isNewConversation}
               getText={() => methods.getValues('text')}
               onConsumed={consumeComposer}
               disabled={filesLoading}
@@ -616,6 +608,7 @@ const ChatForm = memo(function ChatForm({
             ref={submitButtonRef}
             control={methods.control}
             steering={steering}
+            isNewConversation={isNewConversation}
             getText={() => methods.getValues('text')}
             onConsumed={consumeComposer}
             disabled={filesLoading}
@@ -628,6 +621,7 @@ const ChatForm = memo(function ChatForm({
     return stopButton;
   }, [
     consumeComposer,
+    isNewConversation,
     steering,
     textValue,
     methods,

@@ -1,4 +1,4 @@
-import { useId, useEffect, useMemo } from 'react';
+import { useId, useContext, useEffect, useMemo } from 'react';
 import { Button, TextareaAutosize } from '@librechat/client';
 import { Check, X, Pencil, MessageSquare, ShieldQuestion, TriangleAlert } from 'lucide-react';
 import type { Agents } from 'librechat-data-provider';
@@ -219,18 +219,18 @@ export default function ToolApproval({
   }
 
   const descriptionNode = safeDescription != null && safeDescription.length > 0 && (
-    <p className="text-sm text-text-secondary">{safeDescription}</p>
+    <p className="text-text-secondary text-sm">{safeDescription}</p>
   );
 
   if (deferToComposer) {
     return (
       <div
-        className="my-2 flex w-full flex-col gap-2 rounded-lg border border-border-light bg-surface-secondary p-3"
+        className="border-border-light bg-surface-secondary my-2 flex w-full flex-col gap-2 rounded-lg border p-3"
         data-testid="tool-approval"
         data-tool-call-id={toolCallId}
       >
         {descriptionNode}
-        <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+        <p className="text-text-secondary flex items-center gap-1.5 text-xs">
           <ShieldQuestion className="size-4 shrink-0" aria-hidden="true" />
           {localize('com_ui_approval_review_in_composer')}
         </p>
@@ -244,9 +244,7 @@ export default function ToolApproval({
       data-testid="tool-approval"
       data-tool-call-id={toolCallId}
     >
-      {safeDescription != null && safeDescription.length > 0 && (
-        <p className="text-text-secondary text-sm">{safeDescription}</p>
-      )}
+      {descriptionNode}
       <div className="flex flex-wrap gap-2">
         {allowedDecisions.map((decision) => {
           const Icon = DECISION_ICON[decision];

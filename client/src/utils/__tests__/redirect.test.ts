@@ -3,6 +3,7 @@ import {
   getPostLoginRedirect,
   isSafeRedirect,
   withBasePath,
+  hasStoredRedirect,
   SESSION_KEY,
 } from '../redirect';
 

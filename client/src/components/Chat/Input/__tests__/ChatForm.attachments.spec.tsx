@@ -70,7 +70,7 @@ let commits = 0;
 
 function Harness() {
   const [files, setFiles] = useRecoilState(store.filesByIndex(0));
-  const [isSubmitting] = useRecoilState(store.isSubmittingFamily(0));
+  const [isSubmitting, setIsSubmitting] = useRecoilState(store.isSubmittingFamily(0));
   /* ChatView owns this read and passes it in; the harness stands in for it. */
   const [speechSettingsInitialized] = useRecoilState(store.speechSettingsInitialized);
   const [, setFilesLoading] = useState(false);

@@ -1,4 +1,9 @@
-import { StepTypes, ContentTypes, getRunStepDurationMs } from 'librechat-data-provider';
+import {
+  StepTypes,
+  ContentTypes,
+  getRunStepDurationMs,
+  getRunStepCloseMetadata,
+} from 'librechat-data-provider';
 import type { Agents, TMessage, PartMetadata } from 'librechat-data-provider';
 import { getStepMetadata, updateContent } from './content';
 
@@ -60,6 +65,7 @@ export function applyToolCallsStep(
   message: TMessage,
   runStep: Agents.RunStep,
   editPrefixOffset: number,
+  getTiming?: ToolTimingLookup,
 ): { message: TMessage; toolCallId?: string } {
   if (runStep.stepDetails.type !== StepTypes.TOOL_CALLS) {
     return { message };
@@ -81,7 +87,13 @@ export function applyToolCallsStep(
       index,
       {
         type: ContentTypes.TOOL_CALL,
-        tool_call: { name: toolCall.name ?? '', args: toolCall.args, id, stepId: runStep.id },
+        tool_call: {
+          name: toolCall.name ?? '',
+          args: toolCall.args,
+          id,
+          stepId: runStep.id,
+          ...getTiming?.(id),
+        },
       },
       false,
       metadata,
@@ -100,6 +112,7 @@ export function applyToolCallDelta(
   delta: Agents.RunStepDeltaEvent,
   toolCallId: string,
   editPrefixOffset: number,
+  getTiming?: ToolTimingLookup,
 ): TMessage | undefined {
   if (delta.delta.type !== StepTypes.TOOL_CALLS || !delta.delta.tool_calls) {
     return undefined;
@@ -108,13 +121,15 @@ export function applyToolCallDelta(
   const metadata = getStepMetadata(runStep);
   let next: TMessage = { ...message };
   for (const toolCallDelta of delta.delta.tool_calls) {
+    const id = toolCallDelta.id || toolCallId;
     const contentPart: Agents.MessageContentComplex = {
       type: ContentTypes.TOOL_CALL,
       tool_call: {
         name: toolCallDelta.name ?? '',
         args: toolCallDelta.args ?? '',
-        id: toolCallId,
+        id,
         stepId: delta.id,
+        ...getTiming?.(id, toolCallDelta.index),
       },
     };
     if (delta.delta.auth != null) {
@@ -175,7 +190,9 @@ export function applyRunStepClosed(
     [ContentTypes.TOOL_CALL]: {
       ...existingToolCall,
       runStepStatus: closed.status,
+      ...getRunStepCloseMetadata(closed),
       ...(durationMs != null && { runStepDurationMs: durationMs }),
+      ...timing,
     },
   };
   return { ...message, content };

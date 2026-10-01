@@ -32,8 +32,9 @@ type DuringRunSendButtonProps = {
  * composer holds text: submitting steers or queues per the effective action.
  * Hovering it reveals the full action list with its shortcuts: steer, queue
  * (⌘/Ctrl+Enter routes to the non-default action), interrupt & steer
- * (⌘/Ctrl+Shift+Enter: stops writing now but keeps what is written), and
- * interrupt & send (⌥/Alt+Enter: discards the answer and starts over).
+ * (⌘/Ctrl+Shift+Enter — requests an earlier safe point when a conversation
+ * exists, otherwise stops and sends a new turn), and
+ * interrupt & send (⌥/Alt+Enter — discards the answer and starts over).
  * Clearing the composer restores the Stop button.
  */
 const DuringRunSendButton = React.memo(

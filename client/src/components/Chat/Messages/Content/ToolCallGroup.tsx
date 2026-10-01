@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useRecoilValue } from 'recoil';
-import { Button } from '@librechat/client';
 import { Tools, Constants, ContentTypes } from 'librechat-data-provider';
 import { ChevronDown, ListChecks, MessageCircleQuestion, Users } from 'lucide-react';
 import type { TAttachment, TMessageContentParts } from 'librechat-data-provider';
@@ -27,6 +26,7 @@ import { ToolAuthWarning, ToolAuthWarningContext } from './auth';
 import { useMCPIconMap, useMCPServerNames } from '~/hooks/MCP';
 import { AttachmentGroup, ReasoningCompact } from './Parts';
 import { getOutcomeStatus, summarizeSpan } from './outcome';
+import { FOLD_RAIL_CLASSES, ROW_GLYPH_SLOT } from './rows';
 import { MCPAppViews } from '~/components/MCPUIResource';
 import { StackedToolIcons } from './ToolOutput';
 import { mapAttachments } from '~/utils/map';
@@ -578,7 +578,7 @@ export default function ToolCallGroup({
             )}
             aria-hidden="true"
           />
-        </Button>
+        </button>
         {!withinActivityPhase && !parentPhaseOwnsFailurePill && (
           <FailedRevealPill
             count={activitySummary.failedCount}
@@ -586,32 +586,7 @@ export default function ToolCallGroup({
             onReveal={handleRevealFailed}
           />
         )}
-        <span
-          className={cn(
-            'tool-status-text min-w-0 truncate font-medium',
-            activityFailed && 'text-text-warning',
-          )}
-          role="status"
-          title={groupLabel}
-        >
-          {groupLabel}
-        </span>
-        {groupDetail && (
-          <span
-            className="text-text-secondary max-w-[40%] min-w-0 truncate text-xs font-normal"
-            title={groupDetail}
-          >
-            · {groupDetail}
-          </span>
-        )}
-        <ChevronDown
-          className={cn(
-            'text-text-secondary size-4 shrink-0 transition-transform duration-200 ease-out',
-            isExpanded && 'rotate-180',
-          )}
-          aria-hidden="true"
-        />
-      </Button>
+      </div>
       <div
         style={expandStyle}
         onTransitionEnd={handleTransitionEnd}

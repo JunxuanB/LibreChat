@@ -569,9 +569,13 @@ export function createAppConfigService(deps: AppConfigServiceDeps): {
     try {
       const configs = await getApplicableConfigs(principals);
       if (configs.length > 0) {
-        merged = checkOverrideTheme(
-          baseConfig,
-          materializeConfigModelSpecs(mergeConfigOverrides(baseConfig, configs)),
+        merged = scopeCustomEndpoints(
+          checkOverrideTheme(
+            scopedBaseConfig,
+            materializeConfigModelSpecs(mergeConfigOverrides(scopedBaseConfig, configs)),
+          ),
+          effectiveTenantId,
+          hiddenEndpoints,
         );
       }
     } catch (error) {

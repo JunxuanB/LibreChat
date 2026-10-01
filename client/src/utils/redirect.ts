@@ -31,6 +31,35 @@ function resolvesToSameOrigin(url: string): boolean {
   }
 }
 
+/** Session storage is blocked outright in embedded and private contexts, where it throws on
+ * access rather than returning null. The destination is a convenience, never a credential, so a
+ * blocked store must cost the deep link, never the sign-in that carries it: every access
+ * degrades to "no destination stored". Every other session-storage consumer in the client is
+ * already guarded this way; the redirect flow was the one reaching for the store bare-handed. */
+export const readStoredRedirect = (): string | null => {
+  try {
+    return sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+};
+
+export const dropStoredRedirect = (): void => {
+  try {
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // A blocked store holds nothing to drop.
+  }
+};
+
+const writeStoredRedirect = (value: string): void => {
+  try {
+    sessionStorage.setItem(SESSION_KEY, value);
+  } catch {
+    // The destination cannot cross a document swap in this context; the sign-in continues.
+  }
+};
+
 /** Validates that a redirect target is a safe relative path (not an absolute or protocol-relative URL) */
 export function isSafeRedirect(url: string): boolean {
   if (hasControlChar(url)) {

@@ -33,6 +33,8 @@ jest.mock('@librechat/api', () => ({
   isCodeArtifactToolOutput: jest.requireActual('@librechat/api').isCodeArtifactToolOutput,
   isCodeSessionToolName: jest.requireActual('@librechat/api').isCodeSessionToolName,
   collectToolCallIds: jest.requireActual('@librechat/api').collectToolCallIds,
+  captureSubagentIdentity: jest.requireActual('@librechat/api').captureSubagentIdentity,
+  createToolTimingAdapter: jest.requireActual('@librechat/api').createToolTimingAdapter,
   stampCommandExecutor: jest.requireActual('@librechat/api').stampCommandExecutor,
 }));
 

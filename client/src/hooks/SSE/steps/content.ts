@@ -324,6 +324,11 @@ export function updateContent(
       type: ToolCallTypes.TOOL_CALL,
       auth: contentPart.tool_call.auth,
       expires_at: contentPart.tool_call.expires_at,
+      toolPreparationStartedAt:
+        contentPart.tool_call.toolPreparationStartedAt ??
+        existingToolCall?.toolPreparationStartedAt,
+      toolDispatchedAt:
+        contentPart.tool_call.toolDispatchedAt ?? existingToolCall?.toolDispatchedAt,
     };
 
     if (finalUpdate) {

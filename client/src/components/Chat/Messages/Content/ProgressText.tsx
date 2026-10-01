@@ -237,27 +237,24 @@ export default function ProgressText({
             {text}
           </span>
           {subtitle && (
-            <span className="min-w-0 shrink truncate font-normal text-text-secondary">
+            <span className="text-text-secondary min-w-0 shrink truncate font-normal">
               {subtitle}
             </span>
           )}
         </span>
         {errorSuffix && (
-          <span className="shrink-0 font-normal text-status-error">· {errorSuffix}</span>
+          <span className="text-status-error shrink-0 font-normal">· {errorSuffix}</span>
         )}
         {errorSuffix && verdict && (
           <span className="text-text-secondary shrink-0 font-normal">· {verdict}</span>
         )}
-        {duration && (
-          <>
-            {/* The compact form is the readable one on screen but a poor
-                thing to hear ("one point four s"), so it is hidden from
-                assistive technology and paired with a spoken equivalent.
-                Both live inside the button, so its accessible name carries
-                the duration — this is not an `aria-live` region and does not
-                re-announce. */}
-            <span className="text-text-secondary font-normal" aria-hidden="true">
-              · {localize(duration.key, duration.values)}
+        {isRunning && phaseStartAt != null && localPhaseStart != null && (
+          <ElapsedTimer start={localPhaseStart} />
+        )}
+        {durationParts.map(({ label, duration }) => (
+          <span key={label} className="text-text-secondary shrink-0 font-normal">
+            <span aria-hidden="true">
+              · {label} {localize(duration.key, duration.values)}
             </span>
             <span className="sr-only">
               {label} {localize(duration.announcedKey, duration.announcedValues)}

@@ -54,7 +54,15 @@ const steeringStub = ({
     interruptAndSend: mockInterruptAndSend,
   }) as unknown as SteeringControls;
 
-function Harness({ steering, enterToSend }: { steering: SteeringControls; enterToSend: boolean }) {
+function Harness({
+  steering,
+  isNewConversation,
+  enterToSend,
+}: {
+  steering: SteeringControls;
+  isNewConversation: boolean;
+  enterToSend: boolean;
+}) {
   const methods = useForm<{ text: string }>({ defaultValues: { text: TEXT } });
   return (
     <DuringRunSendButton
@@ -95,6 +103,7 @@ function openMenu(options: MenuOptions = {}) {
       <Harness
         steering={steeringStub({ ...stub, steerInterruptsByDefault: enterInterrupts })}
         enterToSend={enterToSend}
+        isNewConversation={isNewConversation}
       />
     </RecoilRoot>,
   );

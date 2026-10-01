@@ -20,14 +20,20 @@ import {
   anthropicSettings,
 } from './types';
 import {
+  hasAlwaysOnThinking,
+  hasBetweenToolsThinkingFloor,
+  supportsPromptCache,
+  supportsAdaptiveThinking,
+} from './bedrock';
+import {
   getModelKey,
   getSettingsKeys,
   reasoningOverrideSchema,
   ReasoningParameterFormat,
 } from './schemas';
-import { isOpus55Model, supportsPromptCache, supportsAdaptiveThinking } from './bedrock';
 import { resolveEffectiveUseResponsesApi } from './file-config';
 import { clampSettingRange } from './generate';
+import { gpt6Tier } from './families';
 
 // Base definitions
 const baseDefinitions: Record<string, SettingDefinition> = {

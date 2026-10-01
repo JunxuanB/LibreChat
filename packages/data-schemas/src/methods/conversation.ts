@@ -3042,6 +3042,7 @@ export function createConversationMethods(
         delete sanitized.lastResponseMessageId;
         delete sanitized.lastResponseIsManual;
         delete sanitized.lastSeenAt;
+        delete sanitized.codeApprovalMode;
         delete sanitized.initial_agent_id;
         delete sanitized.codeEnvironmentRevision;
         stripActorCheckpointFields(sanitized);

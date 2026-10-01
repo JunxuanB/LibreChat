@@ -1961,6 +1961,7 @@ const ResumeAgentController = async (req, res, next, initializeClient, addTitle)
         checkpointNamespace,
         foregroundRunId: mcpRequestBody.messageId,
         requestBody: mcpRequestBody,
+        toolTimingReplayEvents: resumeState?.replayEvents,
       });
       client = result.client;
 

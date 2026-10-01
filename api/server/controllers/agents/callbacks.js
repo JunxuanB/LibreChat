@@ -35,6 +35,7 @@ const {
   captureSubagentIdentity,
   getAttachmentOwnership,
   collectToolCallIds,
+  createToolTimingAdapter,
   stampCommandExecutor,
 } = require('@librechat/api');
 const { processFileCitations } = require('~/server/services/Files/Citations');

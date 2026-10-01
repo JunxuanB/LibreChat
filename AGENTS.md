@@ -109,7 +109,7 @@ unsuccessful outcome as an exception:
   successful lookup with no record), never to hide a query failure.
 - For an expected failure the caller can handle without aborting the operation, prefer a typed
   discriminated result such as `{ ok: true; value: T } | { ok: false; error: { code: string;
-  message?: string } }`. Keep an existing domain-specific result shape when changing it would
+message?: string } }`. Keep an existing domain-specific result shape when changing it would
   break callers; do not introduce interchangeable `ok`, `valid`, and bare `{ message }` contracts
   in the same service. Codes should be stable, machine-readable identifiers when the caller
   needs to distinguish failures. Internal validation helpers may use the existing local pattern.
@@ -145,16 +145,10 @@ For frontend work, compose existing `@librechat/client` primitives and variants 
 feature-local styles. Use semantic theme/Tailwind roles for color and shared appearance; do not
 introduce raw palette utilities, hard-coded colors, or arbitrary theme CSS. If the system cannot
 express a reusable design need, deepen the shared primitive or versioned theme-token registry
-instead of copying classes into a feature. Keep genuine layout and behavior local, and document
-why any new custom CSS cannot be expressed by the shared system.
-
-`npm run lint` enforces this: `@shadcn/lint` reads each primitive's `cva` variants and reports a
-`className` that overrides what the primitive owns, naming the variant, size or file to use
-instead. Do not reach for `eslint-disable`, and do not widen a file's recorded count in
-`eslint-suppressions.json` to land a restyle — that file holds the backlog the rules inherited, so
-raising an entry is a reviewable claim that the override is right. After fixing violations, run
-`npm run lint:design:prune`; after moving a file that carries suppressions, run
-`npm run lint:design:suppress`. See the detailed policy in `CLAUDE.md` under “Theming and styling.”
+instead of copying classes into a feature. Theme definitions select semantic colors and appearance,
+not selectors, app behavior, or alternate layouts. Keep genuine layout and behavior local, and
+explain why any new custom CSS cannot use shared primitives. Support light/dark and reduced motion;
+preserve defaults and test a deliberately different reference theme for reusable new variants.
 
 ## Backend auth cache
 
@@ -195,6 +189,12 @@ independent reads in parallel. Do not weaken authorization or tenant checks or w
 before those checks succeed.
 
 ## Frontend rules
+
+Use the chat Share/Export action-menu pattern: `DropdownPopup` from `@librechat/client` with
+`Ariakit.MenuButton` (see `HeaderMenu.tsx` and `useExportShare.tsx`). Never introduce or reintroduce
+the Radix `DropdownMenu` family for app action or sort menus. Preserve the Share/Export
+dialog-item contract (`hideOnClick: false`, item ref, button render, and dialog `triggerRef`)
+when a menu action opens a dialog.
 
 Use `useLocalize()` for all visible copy and update only English keys in
 `client/src/locales/en/translation.json`. Use semantic HTML, keyboard behavior, and ARIA labels.
