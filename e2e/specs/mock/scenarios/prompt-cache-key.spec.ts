@@ -110,8 +110,25 @@ function persistedText(message: TMessage): string {
     .join('');
 }
 
-async function sendAssertion(page: Page, agentName: string, distinctText: string): Promise<string> {
-  await selectAgent(page, agentName);
+/**
+ * Without `path` the agent is chosen through the builder; with it, the page
+ * opens a route that already names the agent, which is the only way a new
+ * chat keeps a `projectId` the builder's navigation would drop.
+ */
+async function sendAssertion(
+  page: Page,
+  agentName: string,
+  distinctText: string,
+  path?: string,
+): Promise<string> {
+  if (path == null) {
+    await selectAgent(page, agentName);
+  } else {
+    await page.goto(path, { timeout: 10000 });
+    await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible({
+      timeout: 30000,
+    });
+  }
   const response = await sendMessageAndWaitForCompletion(
     page,
     `${PROMPT_CACHE_MARKER}${distinctText}\n${distinctText}`,
@@ -205,6 +222,67 @@ test.describe('prompt cache key', () => {
     expect(secondKey).not.toBe('');
     expect(secondKey).not.toBe('none');
     expect(secondKey).not.toBe(firstKey);
+  });
+
+  test('keys project guidance into the cache identity and shares it within the project @scenario:project-guidance-retires-the-cache-key', async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180000);
+    await page.goto(NEW_CHAT_PATH, { timeout: 10000 });
+    const token = await getAccessToken(page);
+    const agent = await createAgent(
+      page,
+      token,
+      OPENAI_PROVIDER,
+      OPENAI_MODEL,
+      'Use the stable instructions for this project cache scenario.',
+    );
+    let projectId: string | undefined;
+
+    try {
+      const plainKey = await sendAssertion(page, agent.name, 'outside any project');
+      expect(plainKey).not.toBe('');
+      expect(plainKey).not.toBe('none');
+
+      const created = await request.post('/api/projects', {
+        headers: { Authorization: `Bearer ${token}` },
+        data: {
+          name: uniqueAgentName('E2E Prompt Cache Project'),
+          instructions: 'Answer every question in this project with a short summary first.',
+        },
+      });
+      expect(created.status()).toBe(201);
+      projectId = ((await created.json()) as { _id?: string })._id;
+      expect(projectId, 'project should have an id').toBeTruthy();
+
+      const projectPath = `${NEW_CHAT_PATH}?agent_id=${encodeURIComponent(
+        agent.id,
+      )}&projectId=${encodeURIComponent(projectId as string)}`;
+      const firstProjectKey = await sendAssertion(
+        page,
+        agent.name,
+        'first chat in the project',
+        projectPath,
+      );
+      const secondProjectKey = await sendAssertion(
+        page,
+        agent.name,
+        'second chat in the project',
+        projectPath,
+      );
+
+      expect(firstProjectKey).not.toBe('');
+      expect(firstProjectKey).not.toBe('none');
+      expect(firstProjectKey).not.toBe(plainKey);
+      expect(secondProjectKey).toBe(firstProjectKey);
+    } finally {
+      if (projectId != null) {
+        await request.delete(`/api/projects/${encodeURIComponent(projectId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
+    }
   });
 
   test('sends no cache key for a gateway endpoint @scenario:gateway-endpoint-sends-no-cache-key', async ({
