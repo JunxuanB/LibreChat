@@ -11,6 +11,7 @@ export const darkTheme: IThemeRGB = {
   'rgb-text-secondary-alt': '153 150 150', // #999696 (gray-400)
   'rgb-text-tertiary': '153 150 150', // #999696 (gray-400)
   'rgb-text-muted': '179 182 189', // #b3b6bd (Click UI text.muted)
+  'rgb-badge-label': '236 236 236', // #ececec (gray-100, matching text-primary)
   'rgb-text-warning': '245 158 11', // #f59e0b (amber-500)
   'rgb-text-destructive': '248 113 113', // #f87171 (red-400)
   'rgb-shimmer-base': '255 255 255', // #ffffff, carried at 0.8 alpha
@@ -79,6 +80,7 @@ export const darkTheme: IThemeRGB = {
   'rgb-border-xheavy': '153 150 150', // #999696 (gray-400)
   'rgb-border-destructive': '239 68 68', // #ef4444 (red-500)
   'rgb-border-control': '33 33 33', // #212121 (gray-800), the stock field edge
+  'rgb-border-field-focus': '236 236 236', // #ececec (gray-100, matching focus-control)
   'rgb-surface-disabled': '47 47 47', // #2f2f2f (gray-700)
   'rgb-text-disabled': '153 150 150', // #999696 (gray-400)
   'rgb-border-disabled': '57 57 57', // #393939 (gray-650)

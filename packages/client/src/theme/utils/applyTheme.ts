@@ -4,7 +4,8 @@ import {
   focusFallbacks,
   pressedFallbacks,
   primaryButtonFallbacks,
-  dialogTitleFallback,
+  primaryInkFallbacks,
+  primaryInkRoles,
   MARK_NEIGHBOURHOOD,
   themeAppearanceProperties,
   themeBrandTokens,
@@ -64,10 +65,6 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
     variables.push(['--text-muted', colors['rgb-text-tertiary']]);
   }
 
-  if (colors['rgb-avatar-text'] === undefined && colors['rgb-text-primary'] !== undefined) {
-    variables.push(['--avatar-text', colors['rgb-text-primary']]);
-  }
-
   if (
     colors['rgb-chart-widget-surface'] === undefined &&
     colors['rgb-surface-primary'] !== undefined
@@ -104,6 +101,12 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
   if (colors['rgb-focus-control'] === undefined && focus['rgb-focus-control'] !== undefined) {
     variables.push(['--focus-control', focus['rgb-focus-control']]);
   }
+  if (
+    colors['rgb-border-field-focus'] === undefined &&
+    focus['rgb-border-field-focus'] !== undefined
+  ) {
+    variables.push(['--border-field-focus', focus['rgb-border-field-focus']]);
+  }
 
   const pressed = pressedFallbacks(colors);
   if (colors['rgb-surface-pressed'] === undefined && pressed['rgb-surface-pressed'] !== undefined) {
@@ -127,10 +130,13 @@ function mapColors(colors: IThemeRGB, base?: IThemeRGB): Array<[string, string]>
     variables.push(['--button-primary-hover', primary['rgb-button-primary-hover']]);
   }
 
-  const title = dialogTitleFallback(colors)['rgb-dialog-title'];
-  if (colors['rgb-dialog-title'] === undefined && title !== undefined) {
-    variables.push(['--dialog-title', title]);
-  }
+  const inks = primaryInkFallbacks(colors);
+  primaryInkRoles.forEach((role) => {
+    const ink = inks[role];
+    if (colors[role] === undefined && ink !== undefined) {
+      variables.push([`--${role.slice(4)}`, ink]);
+    }
+  });
 
   /**
    * Same rule as `resolveTheme`: a theme that paints what the mark is measured
@@ -173,11 +179,18 @@ export const THEME_DISABLED_ATTRIBUTE = 'data-theme-disabled';
  */
 export const THEME_SCOPE_ATTRIBUTE = 'data-theme-scope';
 
+/**
+ * Mirrors the applied theme's `fieldFocusStyle` on the root, where the `theme-field-border:`
+ * variant reads it. Absent means the default `ring` style.
+ */
+export const THEME_FIELD_FOCUS_ATTRIBUTE = 'data-theme-field-focus';
+
 export function clearAppliedTheme(root: HTMLElement = document.documentElement): void {
   themeOwnedProperties.forEach((property) => root.style.removeProperty(property));
   root.removeAttribute('data-theme');
   root.removeAttribute(THEME_DISABLED_ATTRIBUTE);
   root.removeAttribute(THEME_SCOPE_ATTRIBUTE);
+  root.removeAttribute(THEME_FIELD_FOCUS_ATTRIBUTE);
 }
 
 export function applyResolvedTheme(
@@ -198,6 +211,11 @@ export function applyResolvedTheme(
     root.setAttribute(THEME_DISABLED_ATTRIBUTE, 'fill');
   } else {
     root.removeAttribute(THEME_DISABLED_ATTRIBUTE);
+  }
+  if (theme.appearance.fieldFocusStyle === 'border') {
+    root.setAttribute(THEME_FIELD_FOCUS_ATTRIBUTE, 'border');
+  } else {
+    root.removeAttribute(THEME_FIELD_FOCUS_ATTRIBUTE);
   }
 }
 

@@ -118,10 +118,23 @@ export function primaryButtonFallbacks(colors: IThemeRGB): IThemeRGB {
   };
 }
 
-/** Dialog titles were set in the primary ink, so a theme that repaints it keeps its titles on it. */
-export function dialogTitleFallback(colors: IThemeRGB): IThemeRGB {
-  const title = colors['rgb-dialog-title'] ?? colors['rgb-text-primary'];
-  return title !== undefined ? { 'rgb-dialog-title': title } : {};
+/** Inks split out of the primary one: dialog titles, badge labels and the default avatar's glyph
+ *  were all set in it. */
+export const primaryInkRoles: ReadonlyArray<keyof IThemeRGB> = [
+  'rgb-dialog-title',
+  'rgb-badge-label',
+  'rgb-avatar-text',
+];
+
+/** A theme that repaints the primary ink keeps the inks split out of it on it, unless it names them. */
+export function primaryInkFallbacks(colors: IThemeRGB): IThemeRGB {
+  const primary = colors['rgb-text-primary'];
+  return Object.fromEntries(
+    primaryInkRoles.flatMap((role) => {
+      const ink = colors[role] ?? primary;
+      return ink === undefined ? [] : [[role, ink]];
+    }),
+  );
 }
 
 /**
@@ -134,9 +147,11 @@ export function dialogTitleFallback(colors: IThemeRGB): IThemeRGB {
 export function focusFallbacks(colors: IThemeRGB): IThemeRGB {
   const outline = colors['rgb-focus-outline'] ?? colors['rgb-ring-primary'];
   const control = colors['rgb-focus-control'] ?? colors['rgb-text-primary'];
+  const field = colors['rgb-border-field-focus'] ?? control;
   return {
     ...(outline !== undefined ? { 'rgb-focus-outline': outline } : {}),
     ...(control !== undefined ? { 'rgb-focus-control': control } : {}),
+    ...(field !== undefined ? { 'rgb-border-field-focus': field } : {}),
   };
 }
 
@@ -159,6 +174,12 @@ export const themeAppearanceProperties: Readonly<
   controlFontWeight: '--theme-control-font-weight',
   buttonHeight: '--theme-button-height',
   buttonHeightSm: '--theme-button-height-sm',
+  fieldHeight: '--theme-field-height',
+  fieldPaddingY: '--theme-field-padding-y',
+  fieldFocusStyle: '--theme-field-focus-style',
+  labelSize: '--theme-label-size',
+  labelLeading: '--theme-label-leading',
+  labelFontWeight: '--theme-label-font-weight',
   switchWidth: '--theme-switch-width',
   switchHeight: '--theme-switch-height',
   tableCellSpaceY: '--theme-table-cell-space-y',
@@ -220,6 +241,12 @@ export const defaultAppearance: IThemeAppearance = Object.freeze({
   controlFontWeight: '500',
   buttonHeight: '2.5rem',
   buttonHeightSm: '2.25rem',
+  fieldHeight: '2.5rem',
+  fieldPaddingY: '0.5rem',
+  fieldFocusStyle: 'ring',
+  labelSize: '0.875rem',
+  labelLeading: '1',
+  labelFontWeight: 'inherit',
   ...defaultSwitchSize,
   tableCellSpaceY: '1rem',
   tableRowStroke: '0px',
@@ -404,6 +431,7 @@ const inheritedAppearance: ReadonlyArray<[keyof IThemeAppearance, keyof IThemeAp
   ['displayFontFamily', 'fontFamily'],
   ['controlPaddingX', 'spaceNormal'],
   ['controlGap', 'spaceCompact'],
+  ['labelSize', 'textSm'],
   ['dialogTitleSize', 'textLg'],
   ['dialogTitleFontFamily', 'displayFontFamily'],
 ];
@@ -503,12 +531,6 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
     customColors?.['rgb-avatar-placeholder'] === undefined && avatarPlaceholderSource !== undefined
       ? { 'rgb-avatar-placeholder': avatarPlaceholderSource }
       : {};
-  /** The default avatar's glyph inked in `text-primary` before it had a role. */
-  const avatarTextFallback =
-    customColors?.['rgb-avatar-text'] === undefined &&
-    customColors?.['rgb-text-primary'] !== undefined
-      ? { 'rgb-avatar-text': customColors['rgb-text-primary'] }
-      : {};
   const chartWidgetSurfaceFallback =
     customColors?.['rgb-chart-widget-surface'] === undefined &&
     customColors?.['rgb-surface-primary'] !== undefined
@@ -547,7 +569,7 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
   const focusFallback = customColors != null ? focusFallbacks(customColors) : {};
   const pressedFallback = customColors != null ? pressedFallbacks(customColors) : {};
   const primaryButtonFallback = customColors != null ? primaryButtonFallbacks(customColors) : {};
-  const dialogTitleColor = customColors != null ? dialogTitleFallback(customColors) : {};
+  const primaryInks = customColors != null ? primaryInkFallbacks(customColors) : {};
   /**
    * Slot 8 arrived after the seven-slot scale shipped, so a stored or
    * environment theme that paints its own scale cannot name it. Filling the
@@ -607,7 +629,6 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...textMutedFallback,
       ...proseLinkFallback,
       ...avatarPlaceholderFallback,
-      ...avatarTextFallback,
       ...chartWidgetSurfaceFallback,
       ...chartWidgetStrokeFallback,
       ...switchThumbFallback,
@@ -617,7 +638,7 @@ export function resolveTheme(theme: ThemeDefinition, mode: ThemeMode): ResolvedT
       ...focusFallback,
       ...pressedFallback,
       ...primaryButtonFallback,
-      ...dialogTitleColor,
+      ...primaryInks,
       ...seriesEightFallback,
       ...verifiedFallback,
     } as Required<IThemeRGB>,

@@ -37,6 +37,7 @@ export const highContrastLightTheme: IThemeRGB = {
   'rgb-text-secondary-alt': '0 0 0', // #000000
   'rgb-text-tertiary': '0 0 0', // #000000
   'rgb-text-muted': '0 0 0', // #000000
+  'rgb-badge-label': '0 0 0', // #000000 (matching text-primary)
   'rgb-text-warning': '122 61 0', // #7a3d00
   'rgb-text-destructive': '161 0 0', // #a10000
   'rgb-shimmer-base': '0 0 0', // #000000, 21:1 on white
@@ -115,6 +116,7 @@ export const highContrastLightTheme: IThemeRGB = {
   'rgb-border-xheavy': '0 0 0', // #000000
   'rgb-border-destructive': '161 0 0', // #a10000
   'rgb-border-control': '0 0 0', // #000000
+  'rgb-border-field-focus': '0 0 0', // #000000 (matching focus-control)
   'rgb-surface-disabled': '255 255 255', // #ffffff
   'rgb-text-disabled': '87 87 87', // #575757
   'rgb-border-disabled': '87 87 87', // #575757
@@ -201,6 +203,7 @@ export const highContrastDarkTheme: IThemeRGB = {
   'rgb-text-secondary-alt': '255 255 255', // #ffffff
   'rgb-text-tertiary': '255 255 255', // #ffffff
   'rgb-text-muted': '255 255 255', // #ffffff
+  'rgb-badge-label': '255 255 255', // #ffffff (matching text-primary)
   'rgb-text-warning': '255 201 77', // #ffc94d
   'rgb-text-destructive': '255 143 143', // #ff8f8f
   'rgb-shimmer-base': '255 255 255', // #ffffff, 21:1 on black
@@ -275,6 +278,7 @@ export const highContrastDarkTheme: IThemeRGB = {
   'rgb-border-xheavy': '255 255 255', // #ffffff
   'rgb-border-destructive': '255 143 143', // #ff8f8f
   'rgb-border-control': '255 255 255', // #ffffff
+  'rgb-border-field-focus': '255 255 255', // #ffffff (matching focus-control)
   'rgb-surface-disabled': '0 0 0', // #000000
   'rgb-text-disabled': '184 184 184', // #b8b8b8
   'rgb-border-disabled': '184 184 184', // #b8b8b8
