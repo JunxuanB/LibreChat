@@ -192,7 +192,10 @@ source files, and Static Checks rejects eligible imports in changed source files
 Short imports, default/mixed imports, commented clauses, re-exported bindings, and
 unsupported references stay unchanged. Runtime candidates with writes or direct `eval`
 are skipped too. Namespace property reads preserve live bindings, and `__proto__` shorthand
-uses a computed key to preserve an own data property. Existing
+uses a computed key to preserve an own data property. JSX factory/fragment imports stay
+named, including classic React factories. Runtime compaction is skipped for a file when
+shortened clauses would change the value-import order produced by normal sorting; type
+compaction still applies. Existing
 `sort-imports-ignore` markers still apply. Add `--check` to verify cleanup without writing.
 Untouched source files are not migrated or rejected by the changed-file CI gate.
 

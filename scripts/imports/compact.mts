@@ -26,7 +26,12 @@ interface Binding {
 }
 
 /** Shortens long named imports without resolving modules or loading a project. */
-export function compactImports(content: string, fileName: string, printWidth: number): string {
+export function compactImports(
+  content: string,
+  fileName: string,
+  printWidth: number,
+  includeRuntime = true,
+): string {
   if (!/\bimport\s*(?:type\s*)?\{/.test(content)) return content;
 
   const ts: typeof TS = require('typescript');
@@ -34,6 +39,13 @@ export function compactImports(content: string, fileName: string, printWidth: nu
   const normalizedFileName = normalizePath(fileName);
   const source = ts.createSourceFile(normalizedFileName, content, ts.ScriptTarget.Latest, true);
   const candidates: Candidate[] = [];
+  const jsxBindings = new Set<string>();
+  for (const comment of ts.getLeadingCommentRanges(content, 0) ?? []) {
+    const text = content.slice(comment.pos, comment.end);
+    for (const pragma of text.matchAll(/@jsx(?:Frag)?\s+([^\s*]+)/gi)) {
+      jsxBindings.add(pragma[1].split('.')[0]);
+    }
+  }
   const importedNames = new Map<string, number>();
   const countName = (name: string): void => {
     importedNames.set(name, (importedNames.get(name) ?? 0) + 1);
@@ -49,6 +61,13 @@ export function compactImports(content: string, fileName: string, printWidth: nu
       for (const binding of bindings.elements) countName(binding.name.text);
     }
     if (!clause || clause.name || !bindings || !ts.isNamedImports(bindings)) continue;
+    if (!includeRuntime && !clause.isTypeOnly) continue;
+    if (
+      !clause.isTypeOnly &&
+      bindings.elements.some((binding) => jsxBindings.has(binding.name.text))
+    ) {
+      continue;
+    }
     if (bindings.elements.some((binding) => binding.isTypeOnly)) continue;
     if (bindings.elements.length < 2) continue;
     if (
@@ -126,6 +145,7 @@ export function compactImports(content: string, fileName: string, printWidth: nu
   }
 
   const identifiers = new Set<string>();
+  let hasJsx = false;
   const unwrap = (node: TS.Node): TS.Node => {
     while (
       ts.isParenthesizedExpression(node) ||
@@ -168,6 +188,13 @@ export function compactImports(content: string, fileName: string, printWidth: nu
     );
   };
   const visit = (node: TS.Node): void => {
+    if (
+      ts.isJsxOpeningElement(node) ||
+      ts.isJsxSelfClosingElement(node) ||
+      ts.isJsxFragment(node)
+    ) {
+      hasJsx = true;
+    }
     if (ts.isCallExpression(node)) {
       const callee = unwrap(node.expression);
       if (ts.isIdentifier(callee) && callee.text === 'eval') {
@@ -233,6 +260,13 @@ export function compactImports(content: string, fileName: string, printWidth: nu
   const edits: Edit[] = [];
   for (const candidate of candidates) {
     if (!candidate.safe) continue;
+    if (
+      hasJsx &&
+      !candidate.clause.isTypeOnly &&
+      candidate.bindings.elements.some((binding) => binding.name.text === 'React')
+    ) {
+      continue;
+    }
     const prefix = candidate.clause.isTypeOnly ? 't' : 'm';
     let suffix = 1;
     let namespace = prefix;

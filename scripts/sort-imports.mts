@@ -86,7 +86,7 @@ function extractSpec(raw: string): string | null {
 }
 
 /** Applies the AGENTS.md grouping/length ordering to a run of pure imports. */
-function sortSegment(stmts: Stmt[]): string[] {
+function sortSegment(stmts: Stmt[]): Stmt[] {
   const g1 = stmts
     .filter((s) => !s.isType && !s.isLocal)
     .sort((a, b) => {
@@ -98,14 +98,19 @@ function sortSegment(stmts: Stmt[]): string[] {
   const g2 = stmts.filter((s) => s.isType && !s.isLocal).sort((a, b) => b.len - a.len);
   const g3 = stmts.filter((s) => s.isType && s.isLocal).sort((a, b) => b.len - a.len);
   const g4 = stmts.filter((s) => !s.isType && s.isLocal).sort((a, b) => b.len - a.len);
-  return [...g1, ...g2, ...g3, ...g4].map((s) => s.raw);
+  return [...g1, ...g2, ...g3, ...g4];
 }
 
-function sortFileImports(content: string): string | null {
+interface SortedImports {
+  content: string;
+  valueOrderChanged: boolean;
+}
+
+function sortFileImports(content: string): SortedImports {
   const lines = content.split('\n');
 
   if (lines.some((line) => IGNORE_MARKER.test(line))) {
-    return null;
+    return { content, valueOrderChanged: false };
   }
 
   let i = 0;
@@ -135,10 +140,17 @@ function sortFileImports(content: string): string | null {
   const originalRaws: string[] = [];
   let segment: Stmt[] = [];
   let importEnd = i;
+  let valueOrderChanged = false;
 
   const flushSegment = (): void => {
     if (segment.length === 0) return;
-    emitted.push(...sortSegment(segment));
+    const sorted = sortSegment(segment);
+    const originalValues = segment.filter((statement) => !statement.isType);
+    const sortedValues = sorted.filter((statement) => !statement.isType);
+    valueOrderChanged ||= sortedValues.some(
+      (statement, index) => statement !== originalValues[index],
+    );
+    emitted.push(...sorted.map((statement) => statement.raw));
     segment = [];
   };
 
@@ -179,10 +191,14 @@ function sortFileImports(content: string): string | null {
   }
   flushSegment();
 
-  if (originalRaws.length < 2) return null;
-  if (originalRaws.join('\n') === emitted.join('\n')) return null;
+  if (originalRaws.length < 2 || originalRaws.join('\n') === emitted.join('\n')) {
+    return { content, valueOrderChanged: false };
+  }
 
-  return [...lines.slice(0, importStart), ...emitted, ...lines.slice(importEnd)].join('\n');
+  return {
+    content: [...lines.slice(0, importStart), ...emitted, ...lines.slice(importEnd)].join('\n'),
+    valueOrderChanged,
+  };
 }
 
 /** Recursively yields absolute paths of every source file under `dir`. */
@@ -233,10 +249,17 @@ let total = 0;
 for (const filePath of await collectFiles()) {
   const rel = relative(ROOT, filePath);
   const content = await readFile(filePath, 'utf8');
-  const compacted = content.split('\n').some((line) => IGNORE_MARKER.test(line))
-    ? content
-    : compactImports(content, filePath, printWidth);
-  const result = sortFileImports(compacted) ?? compacted;
+  const sorted = sortFileImports(content).content;
+  let result = sorted;
+  if (!content.split('\n').some((line) => IGNORE_MARKER.test(line))) {
+    const compacted = compactImports(sorted, filePath, printWidth);
+    if (compacted !== sorted) {
+      const cleaned = sortFileImports(compacted);
+      result = cleaned.valueOrderChanged
+        ? sortFileImports(compactImports(sorted, filePath, printWidth, false)).content
+        : cleaned.content;
+    }
+  }
   total++;
   if (result === content) continue;
   changed++;

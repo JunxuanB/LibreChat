@@ -586,3 +586,139 @@ test('retains unbound callback values and function-object member receivers', asy
   assert.match(output, /m.receiver.call\(undefined\)/);
   assert.equal(await executeModule(output, model), await executeModule(source, model));
 });
+
+test('preserves explicit JSX factories and fragment aliases used only through pragmas', async () => {
+  const source =
+    '/** @jsxRuntime classic */\n/** @jsx renderElement */\n/** @jsxFrag renderFragment */\n' +
+    "import { createElement as renderElement, Fragment as renderFragment, Configuration } from './models';\n" +
+    'const element = <><div /></>;\nconsole.log(JSON.stringify(element));\n';
+  const model =
+    'export function createElement(name, props, ...children) { return { name, children }; } export const Fragment = "fragment"; export const Configuration = 1;';
+  const output = compact(source, 40);
+  assert.equal(output, source);
+  assert.equal(await executeModule(output, model), await executeModule(source, model));
+  const fragmentOnly =
+    '/** @jsxFrag renderFragment */\n' +
+    "import { Fragment as renderFragment, Configuration, Metadata } from './models';\nconst element = <></>;\n";
+  assert.equal(compact(fragmentOnly, 40), fragmentOnly);
+});
+
+test('excludes qualified JSX factory roots while compacting unrelated imports', () => {
+  const factory = "import { renderer, Configuration, Metadata } from './models';\n";
+  const source =
+    '/** @jsxRuntime classic */\n/** @jsx renderer.element */\n/** @jsxFrag renderer.fragment */\n' +
+    factory +
+    "import { Widget, WidgetConfiguration } from './widgets';\nconst element = <div />;\nconst props = { Widget };\n";
+  const output = compact(source, 40);
+  assert.ok(output.includes(factory));
+  assert.match(output, /import \* as m from '\.\/widgets'/);
+  assert.match(output, /Widget: m.Widget/);
+});
+
+test('preserves an implicit classic React factory binding when JSX is present', () => {
+  const source =
+    "import { React, Configuration, Metadata } from './models';\nconst element = <><div /></>;\n";
+  assert.equal(compact(source, 40), source);
+  const withoutJSX =
+    "import { React, Configuration, Metadata } from './models';\nconst value = React;\n";
+  assert.match(compact(withoutJSX, 40), /import \* as m/);
+  const stringOnly =
+    "import { renderer, Configuration, Metadata } from './models';\nconst label = '@jsx renderer';\nconst props = { renderer };\n";
+  assert.match(compact(stringOnly, 40), /import \* as m/);
+});
+
+test('skips runtime compaction that would reverse initialization order and still compacts types', async () => {
+  const directory = await mkdtemp(join(ROOT, 'client/src/.runtime-order-'));
+  const file = join(directory, 'consumer.ts');
+  const runtime =
+    "import { InitializesStateWithLongName, SecondaryConfiguration, OptionalMetadata, AnotherConfiguration } from './a.mjs';\n";
+  const snapshot = "import { snapshot } from './snapshot.mjs';\n";
+  const source =
+    header +
+    runtime +
+    snapshot +
+    '\nconst props = { InitializesStateWithLongName };\ntype Row = Message;\nconsole.log(snapshot);\n';
+  const expected = source;
+  const run = (...flags: string[]) =>
+    spawnSync(process.execPath, ['scripts/sort-imports.mts', ...flags, file], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+  const execute = async (content: string): Promise<string> => {
+    await writeFile(
+      join(directory, 'consumer.mjs'),
+      ts.transpileModule(content, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+      }).outputText,
+    );
+    const result = spawnSync(process.execPath, [join(directory, 'consumer.mjs')], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  try {
+    await writeFile(
+      join(directory, 'a.mjs'),
+      'globalThis.ready = true; export const InitializesStateWithLongName = true; export const SecondaryConfiguration = 1; export const OptionalMetadata = 2; export const AnotherConfiguration = 3;',
+    );
+    await writeFile(
+      join(directory, 'snapshot.mjs'),
+      'export const snapshot = globalThis.ready === true;',
+    );
+    await writeFile(file, expected);
+    assert.equal(run('--check').status, 0);
+    assert.equal(run().status, 0);
+    assert.equal(await readFile(file, 'utf8'), expected);
+    assert.equal(await execute(expected), 'true\n');
+
+    const withLongType = expected.replace(
+      header,
+      "import type { Message, Conversation, AgentConfiguration, AgentPermission, AgentCapability } from './models';\n",
+    );
+    await writeFile(file, withLongType);
+    assert.equal(run('--check').status, 1);
+    assert.equal(await readFile(file, 'utf8'), withLongType);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    const output = await readFile(file, 'utf8');
+    assert.ok(output.indexOf(runtime.trimEnd()) < output.indexOf(snapshot.trimEnd()));
+    assert.match(output, /import type \* as t/);
+    assert.match(output, /type Row = t.Message/);
+    assert.equal(await execute(output), 'true\n');
+    assert.equal(run('--check').status, 0);
+    assert.equal(run().status, 0);
+    assert.equal(await readFile(file, 'utf8'), output);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('compacts runtime imports when their normal sorted order remains unchanged', async () => {
+  const directory = await mkdtemp(join(ROOT, 'client/src/.safe-order-'));
+  const file = join(directory, 'fixture.ts');
+  const source =
+    "import { SecondaryConfiguration, OptionalMetadata, AnotherConfiguration, PrimaryConfiguration } from './long-module-name';\n" +
+    "import { marker } from './a';\n\nconst props = { SecondaryConfiguration };\n";
+  const run = (...flags: string[]) =>
+    spawnSync(process.execPath, ['scripts/sort-imports.mts', ...flags, file], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+  try {
+    await writeFile(file, source);
+    assert.equal(run('--check').status, 1);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    const output = await readFile(file, 'utf8');
+    assert.ok(
+      output.startsWith("import * as m from './long-module-name';\nimport { marker } from './a';"),
+    );
+    assert.match(output, /SecondaryConfiguration: m.SecondaryConfiguration/);
+    assert.equal(run('--check').status, 0);
+    assert.equal(run().status, 0);
+    assert.equal(await readFile(file, 'utf8'), output);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
