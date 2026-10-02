@@ -101,6 +101,20 @@ describe('buildPromptCacheKey', () => {
       );
     });
 
+    it('retires the key for a changed lazy schema target', () => {
+      const lazy = (target: z.ZodTypeAny) =>
+        z.object({ orderId: z.string(), detail: z.lazy(() => target) });
+      expect(key({ tools: [action(lazy(z.string()))] })).not.toBe(
+        key({ tools: [action(lazy(z.object({ id: z.string() })))] }),
+      );
+    });
+
+    it('builds a key for a lazy schema that refers to itself', () => {
+      type Node = { children: Node[] };
+      const node: z.ZodType<Node> = z.lazy(() => z.object({ children: z.array(node) }));
+      expect(key({ tools: [action(z.object({ tree: node }))] })).toMatch(/^librechat:/);
+    });
+
     it('retires the key for a changed regex pattern', () => {
       /**
        * A regular expression keeps its meaning on non-enumerable properties,

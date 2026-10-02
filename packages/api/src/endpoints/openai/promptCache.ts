@@ -451,16 +451,23 @@ const RUNTIME_SHAPE_MAX_DEPTH = 64;
  * and does not reach the wire.
  */
 /**
- * A Zod default is stored as a thunk, and the JSON schema the model is shown
- * carries its result, so the result is what the identity hashes. A thunk that
- * throws is recorded as its presence, like any other function.
+ * Two Zod thunks hold what the JSON schema the model is shown carries: a
+ * default's value and a lazy schema's target. Their results are what the
+ * identity hashes; the walk's cycle and work guards still apply to a lazy
+ * schema that refers back to itself. A thunk that throws is recorded as its
+ * presence, like any other function.
  */
+const SERIALIZED_THUNKS: Record<string, string> = { defaultValue: 'default', getter: 'lazy' };
+
 function serializedThunk(key: string, entry: unknown): unknown {
-  if (key !== 'defaultValue' || typeof entry !== 'function') {
+  const label = Object.prototype.hasOwnProperty.call(SERIALIZED_THUNKS, key)
+    ? SERIALIZED_THUNKS[key]
+    : undefined;
+  if (label == null || typeof entry !== 'function') {
     return entry;
   }
   try {
-    return { default: (entry as () => unknown)() };
+    return { [label]: (entry as () => unknown)() };
   } catch {
     return entry;
   }
