@@ -63,6 +63,21 @@ explicit re-enrollment before use. Unmarked rows whose client provenance was
 already lost cannot safely be classified by name; operators must resolve that
 pre-release data before rollout.
 
+Before upgrading an installation with pre-release grants, quiesce legacy writers
+and run the inventory before client TTL expiry, including dormant owners:
+
+```sh
+npm run migrate:scheduled-obo
+npm run migrate:scheduled-obo -- --apply
+```
+
+The first command is read-only. Apply refuses an inventory containing ambiguous
+rows, marks only generation-matched owner/tenant provenance, and verifies the
+result. Exit zero (`ready: true`) is required before rollout. No ciphertext,
+provider lifetime or ordinary prefix-server credential is changed. Keep legacy
+writers quiesced until every replica uses the purpose-isolated implementation.
+
+
 A host may supply `authorizeInvocation(user, context, target)` only when it
 implements current enrolled-agent/resource consent, absolute consent expiry and
 revocation, and the delegated read-only execution policy. It must return exactly

@@ -1,5 +1,6 @@
 import type { QueryOptions } from 'mongoose';
 import { IToken, TokenCreateData, TokenQuery, TokenUpdateData, TokenDeleteResult } from '~/types';
+import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
 
@@ -262,7 +263,8 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
         legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id,
     );
     if (migrations.length) {
-      await Token.bulkWrite(
+      await tenantSafeBulkWrite(
+        Token,
         migrations.map((grant) => ({
           updateOne: {
             filter: {
