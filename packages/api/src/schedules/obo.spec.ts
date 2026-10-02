@@ -330,6 +330,32 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(tokenStore.getAll()).toEqual([]);
   });
 
+  it.each([
+    { outage: false, status: 400 },
+    { outage: true, status: 503 },
+  ])('keeps preview authority denial distinct from an outage: %p', async ({ outage, status }) => {
+    const { service, row, authorizeInvocation, requestGrant, tokenStore } = harness();
+    if (outage) {
+      authorizeInvocation.mockRejectedValueOnce(new Error('private authority-store detail'));
+    } else {
+      authorizeInvocation.mockResolvedValueOnce(false);
+    }
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn(),
+    };
+    await service.describeFromRequest(
+      { user, params: { id: row.id, server: 'Files' } } as unknown as ServerRequest,
+      response as unknown as Response,
+    );
+    expect(response.status).toHaveBeenCalledWith(status);
+    expect(JSON.stringify(response.json.mock.calls)).not.toContain(
+      'private authority-store detail',
+    );
+    expect(requestGrant).not.toHaveBeenCalled();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
   it('does not construct credential storage merely because routes load', async () => {
     const factory = jest.fn(() => harness().service);
     const deferred = createLazyScheduledOboGrantService(factory);

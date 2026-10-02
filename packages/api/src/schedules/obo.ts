@@ -1024,7 +1024,10 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         res.json({ server: serverName, scopes: target.scopes, url: config.url });
       });
     } catch (error) {
-      if (error instanceof OboTokenResolutionError || error instanceof ScheduleMCPError) {
+      if (
+        (error instanceof OboTokenResolutionError && !error.retryable) ||
+        (error instanceof ScheduleMCPError && error.code !== 'mcp_unavailable')
+      ) {
         res.status(400).json({ error: 'This agent cannot authorize the requested OBO server' });
       } else {
         res.status(503).json({ error: 'Could not inspect scheduled OBO authorization' });
