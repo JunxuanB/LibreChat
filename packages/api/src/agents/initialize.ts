@@ -76,6 +76,7 @@ import {
 import {
   normalizeStatefulCodeEnvironment,
   resolveCodeExecutionContext,
+  resolveCodeExecutionWorkspaceSelections,
   type CodeEnvironmentConfig,
   type CodeExecutionContext,
 } from './execution';
@@ -131,6 +132,7 @@ import { isImplicitStatefulCodeRouteAvailable } from '../code/config';
 import { PARTIAL_RESOLVED_CONVERSATION } from './conversationSymbols';
 import { registerMemoryTools, memoryToolUsageGuard } from './memory';
 import { applyIntentLabels, sanitizeIntentLabels } from './intent';
+import { prepareQueuedCodeFileContext } from '~/files/code/queued';
 import { ContentFilterError } from '../middleware/contentFilter';
 import { resolveToolRoleGrants } from '~/tools/rolePermissions';
 import { createRequestAgentExecutionContext } from './runtime';
@@ -1584,6 +1586,13 @@ export async function initializeAgent(
     statefulSessions: effectiveStatefulSessions,
     environment: statefulCodeEnvironment,
     environmentId: agent.code_environment_id,
+    environmentIds: agent.code_environment_ids,
+    allowEnvironmentSelection:
+      appConfig?.endpoints?.agents?.statefulCodeSessions?.allowEnvironmentSelection,
+    workspaceSelections: resolveCodeExecutionWorkspaceSelections({
+      conversation: runtime.resolvedConversation,
+      request: requestBody,
+    }),
     environments: configuredCodeEnvironments,
     userId: requestFileOwnerId,
     agentId: agent.id,
@@ -2740,5 +2749,13 @@ export async function initializeAgent(
     endpointTokenConfig: options.endpointTokenConfig,
   };
 
+  prepareQueuedCodeFileContext(initializedAgent, [initializedAgent], user?.id);
+  const queuedFileContext = initializedAgent.dynamicToolContextMap?.queued_code_files;
+  if (typeof queuedFileContext === 'string') {
+    assertModelBoundContent({
+      filters: appConfig?.filters,
+      files: [{ content: queuedFileContext }],
+    });
+  }
   return initializedAgent;
 }

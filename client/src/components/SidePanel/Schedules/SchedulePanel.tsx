@@ -67,6 +67,7 @@ export default function SchedulePanel() {
               schedule={schedule}
               oboServers={data?.limits.oboServers}
               oboGrants={data?.oboGrants?.[schedule.id]}
+              consentEnabled={data?.limits.mcpConsent === true}
               // The raw id is a poor label but an honest one: it only shows for a
               // project outside the loaded pages, and beats claiming no scope.
               projectName={

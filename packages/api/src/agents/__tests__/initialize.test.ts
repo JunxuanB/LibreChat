@@ -3615,6 +3615,67 @@ describe('initializeAgent — execute_code capability expansion', () => {
     }
   });
 
+  it('routes a restored machine selection before file priming and tool discovery', async () => {
+    const { agent, req, res, loadTools, db } = createMocks();
+    agent.tools = ['execute_code'];
+    agent.stateful_code_sessions = true;
+    agent.code_environment_id = 'application-vm';
+    agent.code_environment_ids = ['runtime-vm'];
+    req.config = {
+      endpoints: {
+        agents: {
+          statefulCodeSessions: {
+            allowEnvironmentSelection: true,
+            environments: ['application-vm', 'runtime-vm'].map((id) => ({
+              id,
+              name: id,
+              type: 'attached',
+              owner: 'deployment',
+              baseURL: `https://${id}.example.com/v1`,
+              workerId: `worker-${id}`,
+            })),
+          },
+        },
+      },
+    } as NonNullable<typeof req.config>;
+    req.resolvedConversation = {
+      conversationId: 'chat-runtime',
+      codeWorkspaces: [
+        { environmentId: 'application-vm', workspaceId: 'primary' },
+        { environmentId: 'runtime-vm', workspaceId: 'primary', agentIds: [agent.id] },
+      ],
+    };
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        conversationId: 'chat-runtime',
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+        codeEnvAvailable: true,
+        statefulSessionsAvailable: true,
+        requestBody: {
+          codeWorkspaces: [{ environmentId: 'application-vm', workspaceId: 'primary' }],
+        },
+      },
+      db,
+    );
+    expect(loadTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codeExecutionContext: expect.objectContaining({
+          environmentId: 'runtime-vm',
+          baseUrl: 'https://runtime-vm.example.com/v1',
+          bridgeWorkerId: 'worker-runtime-vm',
+        }),
+      }),
+    );
+    expect(result.codeExecutionContext?.environmentId).toBe('runtime-vm');
+    expect(agent.code_environment_id).toBe('application-vm');
+  });
+
   it.each([false, true])(
     'uses the validated attached workspace operation ceiling: protectedEdit=%s',
     async (protectedEdit) => {
@@ -4860,6 +4921,107 @@ describe('initializeAgent — authorized run file snapshots', () => {
     result.agent.endpoint = EModelEndpoint.openAI;
     return result;
   }
+
+  it.each([undefined, 'Extracted document contents'])(
+    'advertises a queued file before tool execution with extracted text %p',
+    async (text) => {
+      const { agent, req, loadTools, db } = setup();
+      if (req.config == null) throw new Error('Missing test configuration');
+      req.config.fileConfig = {
+        endpoints: {
+          [EModelEndpoint.openAI]: {
+            defaultLLMDeliveryPath: { overrides: { 'application/pdf': 'text' } },
+          },
+        },
+      };
+      loadTools.mockResolvedValue({ toolDefinitions: [{ name: Tools.execute_code }] });
+      const file = inputFile({ filename: 'report.pdf', text });
+      const result = await initializeAgent(
+        {
+          req,
+          agent,
+          loadTools,
+          authorizedRunFiles: [file],
+          allowedProviders: new Set([Providers.OPENAI]),
+          codeEnvAvailable: true,
+        },
+        db,
+      );
+
+      expect(result.dynamicToolContextMap?.queued_code_files).toContain('/mnt/data/report.pdf');
+      expect(result.dynamicToolContextMap?.queued_code_files).toContain('read or edit');
+      expect(result.dynamicToolContextMap?.queued_code_files).not.toContain(file.filepath);
+      expect(result.provisionState?.codeEnvDestinations?.get(file.file_id)).toBe('report.pdf');
+      expect(result.provisionState?.codeEnvFiles).toHaveLength(1);
+      expect(result.requestAttachments[0].llmDeliveryPath).toBe('text');
+      expect(result.requestAttachments[0].text).toBe(text);
+      expect(db.getConvoFiles).not.toHaveBeenCalled();
+      expect(db.getToolFilesByIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not advertise code paths when code execution is disabled', async () => {
+    const { agent, req, loadTools, db } = setup();
+    const result = await initializeAgent(
+      {
+        req,
+        agent,
+        loadTools,
+        authorizedRunFiles: [inputFile()],
+        allowedProviders: new Set([Providers.OPENAI]),
+        codeEnvAvailable: false,
+      },
+      db,
+    );
+    expect(result.fileConsumers?.executeCode).toBe(false);
+    expect(result.dynamicToolContextMap?.queued_code_files).toBeUndefined();
+  });
+
+  it.each([undefined, 'Extracted document contents'])(
+    'advertises an earlier upload after code is toggled back on with extracted text %p',
+    async (text) => {
+      const { agent, req, loadTools, db } = setup();
+      agent.tools = [Tools.execute_code];
+      const params = {
+        req,
+        agent,
+        loadTools,
+        allowedProviders: new Set([Providers.OPENAI]),
+        codeEnvAvailable: true,
+      };
+      await initializeAgent({ ...params, authorizedRunFiles: [] }, db);
+
+      const file = inputFile({ filename: 'report.pdf', text });
+      agent.tools = [];
+      const disabled = await initializeAgent({ ...params, authorizedRunFiles: [file] }, db);
+      expect(disabled.fileConsumers?.executeCode).toBe(false);
+      expect(disabled.dynamicToolContextMap?.queued_code_files).toBeUndefined();
+      expect(disabled.provisionState?.codeEnvFiles ?? []).toEqual([]);
+
+      agent.tools = [Tools.execute_code];
+      (db.getConvoFiles as jest.Mock).mockResolvedValue([file.file_id]);
+      (db.getFiles as jest.Mock).mockResolvedValue([file]);
+      const getDeferredProvisionFiles = jest.fn().mockResolvedValue([file]);
+      const getMessages = jest.fn().mockResolvedValue([{ messageId: 'upload-turn' }]);
+      mockGetThreadData.mockReturnValueOnce({ fileIds: [file.file_id] });
+      const enabled = await initializeAgent(
+        { ...params, conversationId: 'conv-1', parentMessageId: 'upload-turn' },
+        { ...db, getMessages, getDeferredProvisionFiles },
+      );
+
+      expect(enabled.fileConsumers?.executeCode).toBe(true);
+      expect(enabled.requestAttachments).toEqual([]);
+      expect(enabled.dynamicToolContextMap?.queued_code_files).toContain('/mnt/data/report.pdf');
+      expect(enabled.provisionState?.codeEnvFiles.map((entry) => entry.file_id)).toEqual([
+        file.file_id,
+      ]);
+      expect(getDeferredProvisionFiles).toHaveBeenCalledWith(
+        [file.file_id],
+        expect.anything(),
+        expect.objectContaining({ code: true, hydrateProvisioned: true }),
+      );
+    },
+  );
 
   it('reuses current inputs without reading parent history or counting their usage again', async () => {
     const { agent, req, loadTools, db } = setup();

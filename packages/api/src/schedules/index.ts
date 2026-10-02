@@ -11,3 +11,10 @@ export * from './types';
 export * from './mcp';
 export * from './obo';
 export { createSignalBoundGrantRequest } from './provider';
+
+export * from './authorization/service';
+export * from './authorization/host';
+export * from './authorization/handlers';
+export type * from './authorization/contract';
+
+export * from './authorization/enrollment';
