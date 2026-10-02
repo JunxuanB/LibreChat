@@ -10,6 +10,7 @@ import {
   ScheduleMCPError,
 } from './mcp';
 import { OboTokenResolutionError, createLazyOboUpstreamTokenProvider } from '../mcp/oauth/obo';
+import { MCPServersRegistry } from '../mcp/registry/MCPServersRegistry';
 
 const principal = { id: 'owner', role: 'USER' };
 const server: ParsedServerConfig = { type: 'streamable-http', url: 'https://mcp.example.test/mcp' };
@@ -252,6 +253,69 @@ it('resume preflight checks OBO targets without probing unrelated direct OAuth s
   expect(deps.connect).toHaveBeenCalledTimes(1);
   expect(deps.connect).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'obo' }));
 });
+
+it('resume cannot prune OBO introduced by an effective admin override', async () => {
+  const { check, deps } = setup();
+  const base: ParsedServerConfig = { ...server, source: 'yaml' };
+  const override: ParsedServerConfig = {
+    ...base,
+    source: 'config',
+    obo: { scopes: 'api://resource/Read' },
+  };
+  const registry = {
+    getBaseServerConfigs: async () => ({ docs: base }),
+  } as unknown as MCPServersRegistry;
+  const appConfig = (await deps.getAppConfig({}))!;
+  deps.getAppConfig = jest.fn(async () => ({ ...appConfig, mcpConfig: { docs: override } }));
+  deps.ensureConfigServers = jest.fn(async () => ({ docs: override }));
+  deps.getServerConfigs = jest.fn(async (userId, overrides, role) =>
+    MCPServersRegistry.prototype.getAllServerConfigs.call(registry, userId, overrides, role),
+  );
+  deps.connect = jest.fn(async () => {
+    throw new OboTokenResolutionError('missing_upstream_provider', 'No authorized offline grant');
+  });
+
+  await expect(check('agent', principal, { oboOnly: true })).rejects.toMatchObject({
+    code: 'mcp_configuration_missing',
+    outcomes: [{ server: 'docs', detail: 'unattended_auth_required' }],
+  });
+  expect(deps.connect).toHaveBeenCalledWith(
+    expect.objectContaining({ serverConfig: expect.objectContaining({ obo: override.obo }) }),
+  );
+});
+
+it.each(['user', 'process'] as const)(
+  'does not apply a shadowed OBO override to a %s direct-only resume target',
+  async (kind) => {
+    const { check, deps } = setup();
+    const base: ParsedServerConfig =
+      kind === 'process'
+        ? { type: 'stdio', command: 'test-command', args: [], source: 'yaml' }
+        : { ...server, source: 'user' };
+    const override: ParsedServerConfig = {
+      ...server,
+      source: 'config',
+      obo: { scopes: 'api://resource/Read' },
+    };
+    const registry = {
+      getBaseServerConfigs: async () => ({ docs: base }),
+    } as unknown as MCPServersRegistry;
+    const appConfig = (await deps.getAppConfig({}))!;
+    deps.getAppConfig = jest.fn(async () => ({
+      ...appConfig,
+      endpoints: { ...appConfig.endpoints, agents: { capabilities: [] } },
+      mcpConfig: { docs: override },
+    }));
+    deps.ensureConfigServers = jest.fn(async () => ({ docs: override }));
+    deps.getServerConfigs = jest.fn(async (userId, overrides, role) =>
+      MCPServersRegistry.prototype.getAllServerConfigs.call(registry, userId, overrides, role),
+    );
+
+    await expect(check('agent', principal, { oboOnly: true })).resolves.toEqual([]);
+    expect(deps.ensureConfigServers).not.toHaveBeenCalled();
+    expect(deps.connect).not.toHaveBeenCalled();
+  },
+);
 
 it('does not add OBO resume checks to a direct-only schedule when MCP permission was revoked', async () => {
   const { check, deps } = setup();

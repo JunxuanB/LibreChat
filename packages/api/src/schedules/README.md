@@ -93,7 +93,10 @@ Preflight, execution and tool-call recovery use the scoped downstream credential
 An expired access token is renewed via the provider's refresh-token grant and
 rotated under the existing cross-replica MCP OAuth credential lease. Each use
 checks the current schedule owner, root agent, tenant, server, scopes and
-operator allowlist. Credential reads are fenced against rotation, and the
+operator allowlist. Resume classification keeps possible admin OBO overrides
+until the effective registry applies its precedence; direct user/process-backed
+entries remain protected, and unrelated direct servers are not probed.
+Credential reads are fenced against rotation, and the
 returned generation must still match the grant bound to the connection's exact
 MCP URL. Concurrent generation changes are retryable, not missing authorization.
 Account deletion drains enrollment/refresh persistence and rollback before its

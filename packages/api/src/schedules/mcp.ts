@@ -9,6 +9,7 @@ import {
   Permissions,
   PermissionTypes,
   isActionTool,
+  isProcessMCPServerConfig,
   buildServerNameAliases,
   normalizeMCPToolKey,
   normalizeServerName,
@@ -577,7 +578,12 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
         if (!name) continue;
         const server = exactNames.has(name) ? name : (nameAliases.get(name) ?? name);
         const resumeServer = resumeServers?.[server] ?? rawConfig[server];
-        if (options.oboOnly && resumeServer && !resumeServer.obo) continue;
+        // An admin override may add OBO; defer its final classification to the registry.
+        const overrideMayAddObo =
+          rawConfig[server]?.obo != null &&
+          resumeServers?.[server]?.source !== 'user' &&
+          !isProcessMCPServerConfig(resumeServer);
+        if (options.oboOnly && resumeServer && !resumeServer.obo && !overrideMayAddObo) continue;
         const owners = serverAgentIds.get(server) ?? new Set<string>();
         owners.add(toolAgentId);
         serverAgentIds.set(server, owners);
