@@ -48,6 +48,10 @@ const {
   marketplaceMineFilter,
   resolveMarketplaceListQuery,
   mapMarketplaceListError,
+  checkInstructionsPromptWrite,
+  applyInstructionsPromptUnset,
+  effectiveInstructionsPromptLink,
+  excludeInstructionsWhenLinked,
 } = require('@librechat/api');
 const {
   Time,
@@ -91,6 +95,7 @@ const {
 } = require('~/server/services/MCP');
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { attachOwnerContacts } = require('~/server/services/Agents/ownerContact');
+const { instructionsPromptAccess } = require('~/server/services/Agents/instructionsPrompt');
 const { getMCPServersRegistry } = require('~/config');
 const { getLogStores } = require('~/cache');
 const db = require('~/models');
@@ -834,7 +839,18 @@ const createAgentHandler = async (req, res) => {
       });
     }
 
-    if (await blockFilteredAgentContent(req, res, agentData)) {
+    // Dead once linked (see `initializeAgent`), so it can't block a switch to a safe link.
+    // A create has no stored link, so there is never a removal to fall back for.
+    if (
+      await blockFilteredAgentContent(
+        req,
+        res,
+        excludeInstructionsWhenLinked(agentData, {
+          previous: undefined,
+          effective: agentData.instructionsPrompt,
+        }),
+      )
+    ) {
       return;
     }
 
@@ -880,6 +896,20 @@ const createAgentHandler = async (req, res) => {
     );
     if (subagentReferenceError) {
       return res.status(subagentReferenceError.status).json(subagentReferenceError.body);
+    }
+
+    const instructionsPromptError = await checkInstructionsPromptWrite({
+      access: instructionsPromptAccess,
+      operation: 'create',
+      user: { id: req.user.id, role: req.user.role },
+      previous: undefined,
+      next: agentData.instructionsPrompt,
+      filters: req.config?.filters,
+      logger,
+      req,
+    });
+    if (instructionsPromptError) {
+      return res.status(instructionsPromptError.status).json(instructionsPromptError.body);
     }
 
     agentData.author = userId;
@@ -1036,7 +1066,11 @@ const getAgentHandler = async (req, res, expandProperties = false) => {
     }
 
     // EDIT permission: Full agent details including sensitive configuration
-    return res.status(200).json(agent);
+    const presentedAgent = await instructionsPromptAccess.presentForEditor({
+      user: { id: req.user.id, role: req.user.role },
+      agent,
+    });
+    return res.status(200).json(presentedAgent);
   } catch (error) {
     logger.error('[/Agents/:id] Error retrieving agent', error);
     res.status(500).json({ error: error.message });
@@ -1056,13 +1090,25 @@ const getAgentHandler = async (req, res, expandProperties = false) => {
 const getAgentVersionsHandler = async (req, res) => {
   try {
     const id = req.params.id;
-    const versions = await db.getAgentVersions({ id });
+    // Independent reads: the version history and the agent's own current link (used
+    // only to flag a redacted version as `matchesCurrent`, never to render it).
+    const [versions, currentAgent] = await Promise.all([
+      db.getAgentVersions({ id }),
+      db.getAgent({ id }, { instructionsPrompt: 1, _id: 0 }),
+    ]);
 
     if (versions == null) {
       return res.status(404).json({ error: 'Agent not found' });
     }
 
-    return res.status(200).json(versions);
+    // Each snapshot carries its own independently-authorized instructionsPrompt link.
+    const presentedVersions = await instructionsPromptAccess.presentVersionsForEditor({
+      user: { id: req.user.id, role: req.user.role },
+      versions,
+      currentLink: currentAgent?.instructionsPrompt ?? null,
+    });
+
+    return res.status(200).json(presentedVersions);
   } catch (error) {
     logger.error('[/Agents/:id/versions] Error retrieving agent versions', error);
     res.status(500).json({ error: error.message });
@@ -1089,6 +1135,8 @@ const updateAgentHandler = async (req, res) => {
       avatar: avatarField,
       code_environment_id: codeEnvironmentIdField,
       git_identity: gitIdentityField,
+      // Preserve explicit `null` (link removal); `removeNullishValues` would drop it.
+      instructionsPrompt: instructionsPromptField,
       _id,
       ...rest
     } = validatedData;
@@ -1098,6 +1146,9 @@ const updateAgentHandler = async (req, res) => {
     }
     if (gitIdentityField !== undefined) {
       updateData.git_identity = gitIdentityField;
+    }
+    if (instructionsPromptField !== undefined) {
+      updateData.instructionsPrompt = instructionsPromptField;
     }
     let existingAgent;
 
@@ -1249,6 +1300,20 @@ const updateAgentHandler = async (req, res) => {
       return res.status(404).json({ error: 'Agent not found' });
     }
 
+    const instructionsPromptError = await checkInstructionsPromptWrite({
+      access: instructionsPromptAccess,
+      operation: 'update',
+      user: { id: req.user.id, role: req.user.role },
+      previous: existingAgent.instructionsPrompt,
+      next: instructionsPromptField,
+      filters: req.config?.filters,
+      logger,
+      req,
+    });
+    if (instructionsPromptError) {
+      return res.status(instructionsPromptError.status).json(instructionsPromptError.body);
+    }
+
     // Convert legacy OCR tool resource to context format in existing agent
     const ocrConversion = mergeAgentOcrConversion(existingAgent, updateData);
     if (ocrConversion.tool_resources) {
@@ -1267,7 +1332,27 @@ const updateAgentHandler = async (req, res) => {
       });
     }
 
-    if (await blockFilteredAgentContent(req, res, updateData)) {
+    // Dead once linked (see `initializeAgent`), so it can't block a switch to a safe link.
+    // Live again once a *previously valid* link is removed — fall back to the stored
+    // `instructions` (never scanned while that link stayed valid) when the payload
+    // doesn't send its own. An ordinary unlinked agent has no such link to remove, so
+    // an unrelated partial edit never falls back to (and never gets rejected over)
+    // stored text this write doesn't touch.
+    const effectiveInstructionsLink = effectiveInstructionsPromptLink(
+      instructionsPromptField,
+      existingAgent.instructionsPrompt,
+    );
+    if (
+      await blockFilteredAgentContent(
+        req,
+        res,
+        excludeInstructionsWhenLinked(updateData, {
+          previous: existingAgent.instructionsPrompt,
+          effective: effectiveInstructionsLink,
+          fallbackInstructions: existingAgent.instructions,
+        }),
+      )
+    ) {
       return;
     }
 
@@ -1369,6 +1454,7 @@ const updateAgentHandler = async (req, res) => {
       delete updateData.git_identity;
       updateData.$unset = { ...updateData.$unset, git_identity: 1 };
     }
+    updateData = applyInstructionsPromptUnset(updateData);
 
     let updatedAgent =
       Object.keys(updateData).length > 0
@@ -1390,7 +1476,13 @@ const updateAgentHandler = async (req, res) => {
       delete updatedAgent.author;
     }
 
-    return res.json(updatedAgent);
+    // Same EDIT-scoped restricted-stub treatment as the GET handler.
+    const presentedAgent = await instructionsPromptAccess.presentForEditor({
+      user: { id: req.user.id, role: req.user.role },
+      agent: updatedAgent,
+    });
+
+    return res.json(presentedAgent);
   } catch (error) {
     if (error instanceof z.ZodError) {
       logger.error('[/Agents/:id] Validation error', error.errors);
@@ -1432,6 +1524,8 @@ const duplicateAgentHandler = async (req, res) => {
       });
     }
 
+    // The duplicate carries the source agent's link verbatim: no ACL VIEW, PROMPTS
+    // USE, or resolvability check.
     const {
       id: _id,
       _id: __id,
@@ -1592,8 +1686,18 @@ const duplicateAgentHandler = async (req, res) => {
       newAgentData.tool_options = removeCodeExecutionCaller(newAgentData.tool_options);
     }
 
+    // Dead once linked (see `initializeAgent`), so it can't block a duplicate that copies
+    // the source's link verbatim — no removal happens here (no stored `previous`), so
+    // no fallback is needed.
     if (
-      (await blockFilteredAgentContent(req, res, newAgentData)) ||
+      (await blockFilteredAgentContent(
+        req,
+        res,
+        excludeInstructionsWhenLinked(newAgentData, {
+          previous: undefined,
+          effective: newAgentData.instructionsPrompt,
+        }),
+      )) ||
       blockFilteredActionContent(req, res, sanitizedActions)
     ) {
       return;
@@ -1675,8 +1779,14 @@ const duplicateAgentHandler = async (req, res) => {
       );
     }
 
-    return res.status(201).json({
+    // The link copies verbatim; same EDIT-scoped restricted-stub treatment as GET and update.
+    const presentedAgent = await instructionsPromptAccess.presentForEditor({
+      user: { id: userId, role: userRole },
       agent: newAgent,
+    });
+
+    return res.status(201).json({
+      agent: presentedAgent,
       actions: newActionsList,
     });
   } catch (error) {
@@ -1972,7 +2082,13 @@ const uploadAgentAvatarHandler = async (req, res) => {
       logger.error('[/:agent_id/avatar] Error invalidating avatar refresh cache', cacheErr);
     }
 
-    res.status(201).json(updatedAgent);
+    // Same EDIT-scoped restricted-stub treatment as the other write handlers.
+    const presentedAgent = await instructionsPromptAccess.presentForEditor({
+      user: { id: req.user.id, role: req.user.role },
+      agent: updatedAgent,
+    });
+
+    res.status(201).json(presentedAgent);
   } catch (error) {
     const message = 'An error occurred while updating the Agent Avatar';
     logger.error(
@@ -2006,6 +2122,7 @@ const uploadAgentAvatarHandler = async (req, res) => {
  * @throws {Error} 400 - If version_index is missing
  * @throws {Error} 403 - If user doesn't have permission to modify the agent
  * @throws {Error} 404 - If agent not found
+ * @throws {Error} 404 - If version not found
  * @throws {Error} 500 - If there's an internal server error during the reversion process
  */
 const revertAgentVersionHandler = async (req, res) => {
@@ -2024,12 +2141,14 @@ const revertAgentVersionHandler = async (req, res) => {
     }
 
     const revertVersion = existingAgent.versions?.[version_index];
-    const restoredWorkspaceConfiguration = revertVersion
-      ? resolveAgentWorkspaceRestoreConfiguration({
-          version: revertVersion,
-          current: existingAgent,
-        })
-      : undefined;
+    if (!revertVersion) {
+      return res.status(404).json({ error: `Version ${version_index} not found` });
+    }
+
+    const restoredWorkspaceConfiguration = resolveAgentWorkspaceRestoreConfiguration({
+      version: revertVersion,
+      current: existingAgent,
+    });
     if (
       isActiveAgentWorkspaceConfiguration(restoredWorkspaceConfiguration) &&
       !validateStatefulCodeEnvironment(
@@ -2044,7 +2163,7 @@ const revertAgentVersionHandler = async (req, res) => {
     ) {
       return;
     }
-    const storedRevertEdges = Array.isArray(revertVersion?.edges) ? revertVersion.edges : [];
+    const storedRevertEdges = Array.isArray(revertVersion.edges) ? revertVersion.edges : [];
     const revertEdges = replaceEdgeSourceId(storedRevertEdges, '', id);
     const hasLegacyEdgeSource = storedRevertEdges.some((edge) =>
       Array.isArray(edge.from) ? edge.from.includes('') : edge.from === '',
@@ -2069,14 +2188,18 @@ const revertAgentVersionHandler = async (req, res) => {
       }
     }
 
-    const subagentReferenceError = await getSubagentReferenceError(revertVersion?.subagents, req);
+    const subagentReferenceError = await getSubagentReferenceError(revertVersion.subagents, req);
     if (subagentReferenceError) {
       return res.status(subagentReferenceError.status).json(subagentReferenceError.body);
     }
 
+    // A revert restores the snapshot's instructionsPrompt link as-is: no ACL VIEW,
+    // PROMPTS USE, or resolvability check.
+    const revertInstructionsPromptLink = revertVersion.instructionsPrompt ?? null;
+
     // Permissions are enforced via route middleware (ACL EDIT)
 
-    const actionIds = (revertVersion?.actions ?? [])
+    const actionIds = (revertVersion.actions ?? [])
       .map((action) => (typeof action === 'string' ? action.split(actionDelimiter)[1] : undefined))
       .filter(Boolean);
     const actions =
@@ -2084,8 +2207,21 @@ const revertAgentVersionHandler = async (req, res) => {
         ? ((await db.getActions({ agentId: id, actionId: actionIds }, true)) ?? [])
         : [];
 
+    // Dead once linked (see `initializeAgent`), so it can't block a switch to a safe link.
+    // `fallbackInstructions` covers the snapshot omitting `instructions` entirely: unlike
+    // `instructionsPrompt`, `revertAgentVersion` never unsets `instructions` for a missing
+    // field, so the agent's current stored text stays active and must be scanned when a
+    // valid link is being removed.
     if (
-      (await blockFilteredAgentContent(req, res, revertVersion)) ||
+      (await blockFilteredAgentContent(
+        req,
+        res,
+        excludeInstructionsWhenLinked(revertVersion, {
+          previous: existingAgent.instructionsPrompt ?? null,
+          effective: revertInstructionsPromptLink,
+          fallbackInstructions: existingAgent.instructions,
+        }),
+      )) ||
       blockFilteredActionContent(req, res, actions)
     ) {
       return;
@@ -2094,8 +2230,8 @@ const revertAgentVersionHandler = async (req, res) => {
     let updatedAgent = await db.revertAgentVersion({ id }, version_index);
     const revertUpdates = {};
     if (
-      revertVersion &&
-      (hasLegacyEdgeSource || (!Array.isArray(revertVersion.edges) && updatedAgent.edges?.length))
+      hasLegacyEdgeSource ||
+      (!Array.isArray(revertVersion.edges) && updatedAgent.edges?.length)
     ) {
       revertUpdates.edges = revertEdges;
     }
@@ -2163,7 +2299,13 @@ const revertAgentVersionHandler = async (req, res) => {
       delete updatedAgent.author;
     }
 
-    return res.json(updatedAgent);
+    // Same EDIT-scoped restricted-stub treatment as GET and update.
+    const presentedAgent = await instructionsPromptAccess.presentForEditor({
+      user: { id: req.user.id, role: req.user.role },
+      agent: updatedAgent,
+    });
+
+    return res.json(presentedAgent);
   } catch (error) {
     logger.error('[/agents/:id/revert] Error reverting Agent version', error);
     if (error?.statusCode === 409) {
