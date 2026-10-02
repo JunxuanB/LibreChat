@@ -32,6 +32,13 @@ export class ReauthenticationRequiredError extends Error {
   }
 }
 
+/** Protect legacy internal keys as well as grants created by the current host. */
+function assertCredentialNamespace(serverName: string, scheduledGrant?: true): void {
+  if (serverName.startsWith('schedule-obo:') && scheduledGrant !== true) {
+    throw new ReauthenticationRequiredError(serverName, 'binding');
+  }
+}
+
 /** Durable credentials could not be read or decrypted. This is retryable infrastructure state,
  * never evidence that the user must authorize the server again. */
 export class MCPTokenStorageUnavailableError extends Error {
@@ -53,6 +60,8 @@ export class MCPTokenRefreshUnavailableError extends Error {
 type TokenPersistenceGuard = (persist: () => Promise<MCPOAuthTokens>) => Promise<MCPOAuthTokens>;
 
 interface StoreTokensParams {
+  /** Internal scheduled grants are not ordinary named MCP server credentials. */
+  scheduledGrant?: true;
   withPersistence?: TokenPersistenceGuard;
   /** Interactive writers share the persistence fence with refresh, adoption, and teardown. */
   flowManager?: Pick<FlowStateManager, 'acquireLease'>;
@@ -83,6 +92,8 @@ interface StoreTokensParams {
 }
 
 interface GetTokensParams {
+  /** Internal scheduled grants are not ordinary named MCP server credentials. */
+  scheduledGrant?: true;
   withPersistence?: TokenPersistenceGuard;
   userId: string;
   serverName: string;
@@ -425,17 +436,20 @@ export class MCPTokenStorage {
   static async hasStoredAuthorization({
     userId,
     serverName,
+    scheduledGrant,
     findToken,
     validateClientBinding,
   }: {
     userId: string;
     serverName: string;
+    scheduledGrant?: true;
     findToken: TokenMethods['findToken'];
     validateClientBinding: (
       clientInfo: OAuthClientInformation,
       storedMetadata: Partial<OAuthStoredClientMetadata>,
     ) => void;
   }): Promise<boolean> {
+    if (serverName.startsWith('schedule-obo:') && scheduledGrant !== true) return false;
     const identifier = `mcp:${serverName}`;
     try {
       const [accessTokenData, clientInfoData] = await Promise.all([
@@ -509,16 +523,19 @@ export class MCPTokenStorage {
   static async isCurrentAccessToken({
     userId,
     serverName,
+    scheduledGrant,
     accessToken,
     credentialSetId,
     findToken,
   }: {
     userId: string;
     serverName: string;
+    scheduledGrant?: true;
     accessToken: string;
     credentialSetId: string | undefined;
     findToken: TokenMethods['findToken'];
   }): Promise<boolean> {
+    if (serverName.startsWith('schedule-obo:') && scheduledGrant !== true) return false;
     try {
       const tokenData = await findToken({
         userId,
@@ -565,6 +582,7 @@ export class MCPTokenStorage {
    * This is useful when refreshing tokens, as getTokens() already has the token state.
    */
   static async storeTokens(params: StoreTokensParams): Promise<MCPOAuthTokens> {
+    assertCredentialNamespace(params.serverName, params.scheduledGrant);
     const lease = params.flowManager
       ? await params.flowManager.acquireLease(
           getMCPOAuthLeaseId(params.userId, params.serverName),
@@ -1055,6 +1073,7 @@ export class MCPTokenStorage {
       existingAccessToken?: IToken | null;
     },
   ): Promise<MCPOAuthTokens | null> {
+    assertCredentialNamespace(params.serverName, params.scheduledGrant);
     const {
       userId,
       serverName,
@@ -1184,6 +1203,7 @@ export class MCPTokenStorage {
                 findToken: params.findToken,
                 accessToken: flight.adoptedTokens.access_token,
                 credentialSetId: flight.adoptedTokens.credential_set_id,
+                scheduledGrant: params.scheduledGrant,
               }))
             ) {
               throw new MCPTokenStorageUnavailableError(
@@ -1923,6 +1943,7 @@ export class MCPTokenStorage {
   static async getTokens({
     userId,
     serverName,
+    scheduledGrant,
     findToken,
     createToken,
     updateToken,
@@ -1938,6 +1959,7 @@ export class MCPTokenStorage {
     onTokensAdopted,
     withPersistence,
   }: GetTokensParams): Promise<MCPOAuthTokens | null> {
+    assertCredentialNamespace(serverName, scheduledGrant);
     const logPrefix = this.getLogPrefix(userId, serverName);
 
     try {
@@ -1979,6 +2001,7 @@ export class MCPTokenStorage {
         return await this.forceRefreshTokens({
           userId,
           serverName,
+          scheduledGrant,
           findToken,
           createToken,
           updateToken,
@@ -2087,15 +2110,18 @@ export class MCPTokenStorage {
   static async getClientInfoAndMetadata({
     userId,
     serverName,
+    scheduledGrant,
     findToken,
   }: {
     userId: string;
     serverName: string;
+    scheduledGrant?: true;
     findToken: TokenMethods['findToken'];
   }): Promise<{
     clientInfo: OAuthClientInformation;
     clientMetadata: Record<string, unknown>;
   } | null> {
+    assertCredentialNamespace(serverName, scheduledGrant);
     const identifier = `mcp:${serverName}`;
 
     const clientInfoData: IToken | null = await findToken({
@@ -2147,12 +2173,15 @@ export class MCPTokenStorage {
   static async deleteUserTokens({
     userId,
     serverName,
+    scheduledGrant,
     deleteToken,
   }: {
     userId: string;
     serverName: string;
+    scheduledGrant?: true;
     deleteToken: (filter: { userId: string; type: string; identifier: string }) => Promise<void>;
   }): Promise<void> {
+    assertCredentialNamespace(serverName, scheduledGrant);
     const identifier = `mcp:${serverName}`;
 
     // delete client info token

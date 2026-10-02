@@ -52,6 +52,13 @@ closed even if `interface.schedules.oboServers` names a server. The schedule lis
 omits enrollment controls; previously stored grants remain listable, revocable
 and deletable. Configuration alone cannot satisfy the authority release gate.
 
+The `schedule-obo:` credential-key prefix is reserved for this internal grant
+lifecycle, not a YAML/user MCP server name. Shared storage requires the trusted
+scheduled-grant purpose for reads, refreshes, client metadata and writes;
+ordinary OAuth cannot consume retained grants, including older records with the
+same persistence format. Scheduled revoke/purge use the explicit purpose and
+remain available while invocation authority is absent.
+
 A host may supply `authorizeInvocation(user, context, target)` only when it
 implements current enrolled-agent/resource consent, absolute consent expiry and
 revocation, and the delegated read-only execution policy. It must return exactly

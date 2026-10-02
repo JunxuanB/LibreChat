@@ -466,6 +466,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           deps.tokenStorage.getClientInfoAndMetadata({
             userId,
             serverName: key,
+            scheduledGrant: true as const,
             findToken: boundFindToken,
           }),
         ]);
@@ -621,6 +622,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       const params = {
         userId,
         serverName: key,
+        scheduledGrant: true as const,
         findToken: boundFindToken,
         createToken: tokens.createToken,
         updateToken: tokens.updateToken,
@@ -833,6 +835,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             withPersistence: withOwnerPersistence(userId, ownerGeneration),
             userId,
             serverName: key,
+            scheduledGrant: true as const,
             tokens: {
               access_token: response.access_token,
               refresh_token: response.refresh_token,
@@ -892,6 +895,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         await deps.tokenStorage.deleteUserTokens({
           userId,
           serverName: key,
+          scheduledGrant: true as const,
           deleteToken: async (filter) => {
             await tokens.deleteTokens(filter);
           },

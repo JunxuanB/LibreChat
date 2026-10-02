@@ -277,6 +277,59 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(requestGrant).toHaveBeenCalledTimes(1);
   });
 
+  it('does not expose a retained scheduled grant through an ordinary OAuth lookup', async () => {
+    const { service, row, tokenStore, flow, deps } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    const locked = createScheduledOboGrantService({ ...deps, authorizeInvocation: undefined });
+    await expect(locked.resolve(user, { context, target })).resolves.toBeUndefined();
+    await expect(
+      MCPTokenStorage.getTokens({
+        userId: user.id,
+        serverName: 'schedule-obo:sched-1:Files',
+        findToken: tokenStore.findToken,
+        flowManager: flow,
+      }),
+    ).rejects.toMatchObject({ name: 'ReauthenticationRequiredError', reason: 'binding' });
+    const ordinary = {
+      userId: user.id,
+      serverName: 'schedule-obo:sched-1:Files',
+      findToken: tokenStore.findToken,
+      flowManager: flow,
+    };
+    await expect(MCPTokenStorage.getClientInfoAndMetadata(ordinary)).rejects.toMatchObject({
+      reason: 'binding',
+    });
+    await expect(MCPTokenStorage.forceRefreshTokens(ordinary)).rejects.toMatchObject({
+      reason: 'binding',
+    });
+    const validateClientBinding = jest.fn();
+    await expect(
+      MCPTokenStorage.hasStoredAuthorization({ ...ordinary, validateClientBinding }),
+    ).resolves.toBe(false);
+    expect(validateClientBinding).not.toHaveBeenCalled();
+    await expect(
+      MCPTokenStorage.isCurrentAccessToken({
+        ...ordinary,
+        accessToken: 'first',
+        credentialSetId: 'caller-generation',
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      MCPTokenStorage.storeTokens({
+        ...ordinary,
+        tokens: { access_token: 'replacement', token_type: 'Bearer', expires_in: 3600 },
+        createToken: tokenStore.createToken,
+      }),
+    ).rejects.toMatchObject({ reason: 'binding' });
+    await expect(
+      MCPTokenStorage.deleteUserTokens({ ...ordinary, deleteToken: tokenStore.deleteToken }),
+    ).rejects.toMatchObject({ reason: 'binding' });
+    expect(tokenStore.getAll()).toHaveLength(3);
+    await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+    await locked.revoke(user.id, row.id, 'Files');
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
   it('does not construct credential storage merely because routes load', async () => {
     const factory = jest.fn(() => harness().service);
     const deferred = createLazyScheduledOboGrantService(factory);
@@ -1284,11 +1337,13 @@ describe('separately authorized scheduled OBO grants', () => {
       const client = (await MCPTokenStorage.getClientInfoAndMetadata({
         userId: user.id,
         serverName: key,
+        scheduledGrant: true as const,
         findToken: tokenStore.findToken,
       }))!;
       await MCPTokenStorage.storeTokens({
         userId: user.id,
         serverName: key,
+        scheduledGrant: true as const,
         tokens: {
           access_token: 'peer-access',
           refresh_token: 'peer-grant',
