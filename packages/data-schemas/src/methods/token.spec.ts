@@ -150,10 +150,26 @@ describe('scheduled OBO grant identifier projection', () => {
         expiresAt: new Date(Date.now() + 3600_000),
       })),
     );
+    const before = await Token.find().lean();
+    await expect(methods.listScheduledOboGrantIdentifiers(owner.toString())).resolves.toEqual([]);
+    expect(await Token.find().lean()).toEqual(before);
     const result = await runAsSystem(() =>
       migrateScheduledOboGrantProvenance(Token, { apply: true }),
     );
     expect(result).toMatchObject({ ambiguous: 1, modified: 0, ready: false });
+    await Token.updateOne(
+      {
+        userId: owner,
+        type: 'mcp_oauth_refresh',
+        identifier: 'mcp:schedule-obo:duplicate:Files:refresh',
+      },
+      { $set: { 'metadata.credential_purpose': 'scheduled_obo' } },
+    );
+    await expect(methods.listScheduledOboGrantIdentifiers(owner.toString())).resolves.toEqual([]);
+    const tagged = await runAsSystem(() =>
+      migrateScheduledOboGrantProvenance(Token, { apply: true }),
+    );
+    expect(tagged).toMatchObject({ ambiguous: 1, modified: 0, ready: false });
   });
 
   it('refuses apply when any surviving shared-namespace row has ambiguous provenance', async () => {

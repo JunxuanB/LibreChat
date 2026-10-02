@@ -1,5 +1,6 @@
 import type { QueryOptions } from 'mongoose';
 import { IToken, TokenCreateData, TokenQuery, TokenUpdateData, TokenDeleteResult } from '~/types';
+import { indexGrantClients, classifyScheduledGrant } from '~/utils/grants';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 import { createIndexesWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
@@ -238,30 +239,27 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
         'metadata.credential_purpose': 1,
       },
     ).lean<Array<{ identifier: string; type: string; metadata?: Record<string, string> }>>();
-    const legacyClients = new Map<string, string>();
-    for (const grant of grants) {
-      if (
-        grant.type === 'mcp_oauth_client' &&
-        grant.identifier.startsWith('mcp:') &&
-        typeof grant.metadata?.openid_subject === 'string' &&
-        typeof grant.metadata?.openid_issuer === 'string' &&
-        typeof grant.metadata.credential_set_id === 'string'
-      )
-        legacyClients.set(
-          grant.identifier.replace(/:client$/, ':refresh'),
-          grant.metadata.credential_set_id,
-        );
-    }
-    // Backfill only legacy rows proven by a matching client generation. The purpose
-    // then survives client TTL expiry; the ciphertext and lifetime remain unchanged.
-    const migrations = grants.filter(
-      (grant) =>
-        grant.type === 'mcp_oauth_refresh' &&
-        grant.identifier.startsWith('mcp:') &&
-        grant.metadata?.credential_purpose !== 'scheduled_obo' &&
-        legacyClients.has(grant.identifier) &&
-        legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id,
+    const legacyClients = indexGrantClients(
+      grants.filter(
+        (grant) => grant.type === 'mcp_oauth_client' && grant.identifier.startsWith('mcp:'),
+      ),
+      (grant) => grant.identifier.replace(/:client$/, ':refresh'),
     );
+    const selected = grants.flatMap((grant) => {
+      if (grant.type !== 'mcp_oauth_refresh') return [];
+      if (grant.identifier.startsWith('scheduled-mcp:'))
+        return [{ grant, state: 'tagged' as const }];
+      const client = legacyClients.get(grant.identifier);
+      const state = classifyScheduledGrant(
+        grant.metadata,
+        client === null ? null : client?.metadata,
+      );
+      return state === 'tagged' || state === 'provable' ? [{ grant, state }] : [];
+    });
+    // A list may preserve proven provenance, but may never bless conflicting clients.
+    const migrations = selected
+      .filter(({ state }) => state === 'provable')
+      .map(({ grant }) => grant);
     if (migrations.length) {
       await tenantSafeBulkWrite(
         Token,
@@ -278,16 +276,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
         })),
       );
     }
-    return grants
-      .filter(
-        (grant) =>
-          grant.type === 'mcp_oauth_refresh' &&
-          (grant.identifier.startsWith('scheduled-mcp:') ||
-            grant.metadata?.credential_purpose === 'scheduled_obo' ||
-            (legacyClients.has(grant.identifier) &&
-              legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id)),
-      )
-      .map((grant) => grant.identifier);
+    return selected.map(({ grant }) => grant.identifier);
   }
 
   // Return all methods

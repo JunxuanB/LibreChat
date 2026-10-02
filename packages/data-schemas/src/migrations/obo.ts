@@ -1,5 +1,6 @@
 import type { Model } from 'mongoose';
 import type { IToken } from '~/types';
+import { indexGrantClients, classifyScheduledGrant } from '~/utils/grants';
 import { tenantSafeBulkWrite } from '~/utils/tenantBulkWrite';
 
 type GrantRecord = Pick<IToken, 'userId' | 'tenantId'> & {
@@ -61,50 +62,19 @@ export async function migrateScheduledOboGrantProvenance(
         },
         projection,
       ).lean<GrantRecord[]>();
-      const byKey = new Map<string, GrantRecord | null>();
-      for (const client of clients) {
-        const key = recordKey(client);
-        byKey.set(key, byKey.has(key) ? null : client);
-      }
+      const byKey = indexGrantClients(clients, recordKey);
       const provable: GrantRecord[] = [];
       for (const record of records) {
         result.scanned++;
-        if (record.metadata?.credential_purpose === 'scheduled_obo') {
-          if (
-            typeof record.metadata.credential_set_id === 'string' &&
-            record.metadata.credential_set_id.length > 0
-          )
-            result.tagged++;
-          else result.ambiguous++;
-          continue;
-        }
         const client = byKey.get(
           recordKey({ ...record, identifier: record.identifier.replace(/:refresh$/, ':client') }),
         );
-        const generation = record.metadata?.credential_set_id;
-        if (
-          !client ||
-          typeof generation !== 'string' ||
-          !generation ||
-          client.metadata?.credential_set_id !== generation
-        ) {
-          result.ambiguous++;
-          continue;
-        }
-        if (
-          typeof client.metadata.openid_subject === 'string' &&
-          typeof client.metadata.openid_issuer === 'string'
-        ) {
-          result.provable++;
-          provable.push(record);
-        } else if (
-          client.metadata.openid_subject !== undefined ||
-          client.metadata.openid_issuer !== undefined
-        ) {
-          result.ambiguous++;
-        } else {
-          result.ordinary++;
-        }
+        const state = classifyScheduledGrant(
+          record.metadata,
+          client === null ? null : client?.metadata,
+        );
+        result[state]++;
+        if (state === 'provable') provable.push(record);
       }
       if (!apply || !provable.length) return;
       const written = await tenantSafeBulkWrite(
