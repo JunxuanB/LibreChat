@@ -4,10 +4,11 @@ import { getPrimaryE2EUser } from '../../../setup/users.mock';
 import { withMongo } from '../db';
 
 /**
- * `langfuse.privacy` is part of `configSchema`, so a principal config override
- * accepts the supported modes and rejects an unknown mode or a blank redaction
- * marker before anything is stored. The primary user (first registered, ADMIN)
- * writes overrides for a user this file registers.
+ * `langfuse` is a tenant-wide section that the generic principal config API
+ * strips, so `langfuse.privacy` is set only in `librechat.yaml`: a per-user
+ * override can neither weaken nor replace the deployment's privacy mode. The
+ * primary user (first registered, ADMIN) writes overrides for a user this file
+ * registers.
  */
 
 type Session = { headers: Record<string, string>; userId: string };
@@ -95,49 +96,29 @@ test.describe('Langfuse privacy config override', () => {
     });
   });
 
-  test('an admin can store a metricsOnly privacy override with a custom marker @scenario:langfuse-privacy-override-accepted', async ({
+  test('a per-user override cannot change the deployment Langfuse privacy policy @scenario:langfuse-privacy-override-not-stored', async ({
     request,
   }) => {
     const { admin, target } = await sessions(request);
     await clearOverrides(request, admin, target.userId);
     try {
-      const privacy = { mode: 'metricsOnly', redactionText: '[private]' };
-      const res = await request.put(configPath(target.userId), {
-        headers: admin.headers,
-        data: { overrides: { langfuse: { privacy } } },
-      });
-      expect(res.ok()).toBeTruthy();
-
-      expect(await storedOverrides(request, admin, target.userId)).toEqual({
-        langfuse: { privacy },
-      });
-    } finally {
-      await clearOverrides(request, admin, target.userId);
-    }
-  });
-
-  test('an unknown privacy mode or a blank marker is rejected and nothing is stored @scenario:langfuse-privacy-invalid-override-rejected', async ({
-    request,
-  }) => {
-    const { admin, target } = await sessions(request);
-    await clearOverrides(request, admin, target.userId);
-    try {
-      const cases = [
-        { privacy: { mode: 'redacted' }, path: 'langfuse.privacy.mode' },
-        {
-          privacy: { mode: 'metricsOnly', redactionText: '   ' },
-          path: 'langfuse.privacy.redactionText',
-        },
-      ];
-      for (const { privacy, path } of cases) {
-        const res = await request.put(configPath(target.userId), {
+      for (const privacy of [
+        { mode: 'full' },
+        { mode: 'metricsOnly', redactionText: '[private]' },
+      ]) {
+        const put = await request.put(configPath(target.userId), {
           headers: admin.headers,
           data: { overrides: { langfuse: { privacy } } },
         });
-        expect(res.status()).toBe(400);
-        const body = (await res.json()) as { code: string; issues: Array<{ path: string }> };
-        expect(body.code).toBe('CONFIG_OVERRIDE_INVALID');
-        expect(body.issues.map((issue) => issue.path)).toEqual([path]);
+        expect(put.status()).toBe(200);
+        expect(await put.json()).toEqual({ message: 'No actionable override sections provided' });
+
+        const patch = await request.patch(`${configPath(target.userId)}/fields`, {
+          headers: admin.headers,
+          data: { entries: [{ fieldPath: 'langfuse.privacy.mode', value: privacy.mode }] },
+        });
+        expect(patch.status()).toBe(200);
+        expect(await patch.json()).toEqual({ message: 'No actionable field entries provided' });
       }
 
       expect(await storedOverrides(request, admin, target.userId)).toBeNull();
