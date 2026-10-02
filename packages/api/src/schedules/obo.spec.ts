@@ -429,6 +429,51 @@ describe('separately authorized scheduled OBO grants', () => {
   });
 
   it.each(['revoke', 'purge'] as const)(
+    'retains legacy cleanup after client metadata expires: %s',
+    async (operation) => {
+      const { service, row, tokenStore, requestGrant, deps } = harness();
+      requestGrant.mockResolvedValueOnce({
+        access_token: 'first',
+        refresh_token: 'two-year-grant',
+        expires_in: 3600,
+        refresh_token_expires_in: 2 * 365 * 24 * 3600,
+      });
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      const refresh = tokenStore.getAll().find((record) => record.type === 'mcp_oauth_refresh')!;
+      const client = tokenStore.getAll().find((record) => record.type === 'mcp_oauth_client')!;
+      expect(client.expiresAt.getTime()).toBeGreaterThanOrEqual(refresh.expiresAt.getTime() - 1000);
+      for (const record of tokenStore.getAll()) {
+        await tokenStore.updateToken(
+          { userId: user.id, type: record.type, identifier: record.identifier },
+          { identifier: record.identifier.replace('scheduled-mcp:', 'mcp:') },
+        );
+      }
+      for (const record of tokenStore.getAll()) {
+        const oldMetadata =
+          record.metadata instanceof Map
+            ? Object.fromEntries(record.metadata)
+            : { ...record.metadata };
+        delete oldMetadata.credential_purpose;
+        await tokenStore.updateToken(
+          { userId: user.id, type: record.type, identifier: record.identifier },
+          { metadata: oldMetadata },
+        );
+      }
+      const locked = createScheduledOboGrantService({ ...deps, authorizeInvocation: undefined });
+      await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+      await tokenStore.deleteTokens({
+        userId: user.id,
+        type: 'mcp_oauth_client',
+        identifier: `mcp:schedule-obo:${row.id}:Files:client`,
+      });
+      await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+      if (operation === 'revoke') await locked.revoke(user.id, row.id, 'Files');
+      else await locked.purge(user.id, row.id);
+      expect(tokenStore.getAll()).toEqual([]);
+    },
+  );
+
+  it.each(['revoke', 'purge'] as const)(
     'keeps legacy grants safely cleanable with %s while preserving an ordinary prefix server',
     async (operation) => {
       const { service, row, tokenStore, deps } = harness();
@@ -630,6 +675,32 @@ describe('separately authorized scheduled OBO grants', () => {
         .find((record) => record.type === 'mcp_oauth')!
         .expiresAt.getTime() - Date.now(),
     ).toBeGreaterThan(7100_000);
+  });
+
+  it('keeps client metadata alive for a non-rotating long-lived refresh grant', async () => {
+    const { service, row, requestGrant, tokenStore } = harness();
+    requestGrant.mockResolvedValueOnce({
+      access_token: 'first',
+      refresh_token: 'long-lived',
+      expires_in: 3600,
+      refresh_token_expires_in: 2 * 365 * 24 * 3600,
+    });
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const refreshExpiry = tokenStore
+      .getAll()
+      .find((record) => record.type === 'mcp_oauth_refresh')!
+      .expiresAt.getTime();
+    requestGrant.mockResolvedValueOnce({ access_token: 'renewed', expires_in: 3600 });
+    const provider = (await service.resolve(user, { context, target }))!;
+    await provider({ forceRefresh: true });
+    const records = tokenStore.getAll();
+    expect(records.find((record) => record.type === 'mcp_oauth_refresh')!.expiresAt.getTime()).toBe(
+      refreshExpiry,
+    );
+    expect(
+      records.find((record) => record.type === 'mcp_oauth_client')!.expiresAt.getTime(),
+    ).toBeGreaterThanOrEqual(refreshExpiry);
   });
 
   it('preserves provider refresh expiry on enrollment and after token rotation', async () => {

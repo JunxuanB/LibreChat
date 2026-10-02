@@ -615,6 +615,9 @@ export class InMemoryTokenStore {
         if (token.type !== 'mcp_oauth_refresh') return false;
         if (token.identifier.startsWith('scheduled-mcp:schedule-obo:')) return true;
         if (!token.identifier.startsWith('mcp:schedule-obo:')) return false;
+        const storedMetadata =
+          token.metadata instanceof Map ? Object.fromEntries(token.metadata) : token.metadata;
+        if (storedMetadata?.credential_purpose === 'scheduled_obo') return true;
         const client = owned.find(
           (record) =>
             record.type === 'mcp_oauth_client' &&
@@ -624,12 +627,13 @@ export class InMemoryTokenStore {
           client?.metadata instanceof Map ? Object.fromEntries(client.metadata) : client?.metadata;
         const tokenMetadata =
           token.metadata instanceof Map ? Object.fromEntries(token.metadata) : token.metadata;
-        return (
+        const legacy =
           typeof clientMetadata?.openid_subject === 'string' &&
           typeof clientMetadata.openid_issuer === 'string' &&
           typeof clientMetadata.credential_set_id === 'string' &&
-          clientMetadata.credential_set_id === tokenMetadata?.credential_set_id
-        );
+          clientMetadata.credential_set_id === tokenMetadata?.credential_set_id;
+        if (legacy) token.metadata = { ...tokenMetadata, credential_purpose: 'scheduled_obo' };
+        return legacy;
       })
       .map((token) => token.identifier);
   };

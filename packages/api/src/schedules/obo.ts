@@ -910,6 +910,12 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     ]);
     const binding = client && metadata(client);
     const generation = binding?.credential_set_id;
+    const refreshBinding = refresh && metadata(refresh);
+    if (
+      refreshBinding?.credential_purpose === 'scheduled_obo' &&
+      typeof refreshBinding.credential_set_id === 'string'
+    )
+      return refreshBinding.credential_set_id;
     if (
       typeof binding?.openid_subject === 'string' &&
       typeof binding.openid_issuer === 'string' &&

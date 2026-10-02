@@ -92,6 +92,14 @@ describe('scheduled OBO grant identifier projection', () => {
     await expect(methods.listScheduledOboGrantIdentifiers(owner.toString())).resolves.toEqual([
       'mcp:schedule-obo:legacy:Files:refresh',
     ]);
+    await Token.deleteOne({
+      userId: owner,
+      type: 'mcp_oauth_client',
+      identifier: 'mcp:schedule-obo:legacy:Files:client',
+    });
+    await expect(methods.listScheduledOboGrantIdentifiers(owner.toString())).resolves.toEqual([
+      'mcp:schedule-obo:legacy:Files:refresh',
+    ]);
   });
 
   it('returns only owner-scoped refresh identifiers, never access, direct OAuth or secrets', async () => {

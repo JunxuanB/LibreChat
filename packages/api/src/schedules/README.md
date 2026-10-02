@@ -56,7 +56,12 @@ Scheduled credentials use a separate `scheduled-mcp:` persisted namespace and
 purpose-specific refresh/teardown leases. Ordinary MCP server names, including
 `schedule-obo:` names, remain valid. Older pre-release OBO records are identified
 by their owner/issuer-bound metadata, denied to ordinary OAuth and retained for
-revocation/deletion. They require explicit re-enrollment before use.
+revocation/deletion. A generation-verified list backfills their purpose onto the
+refresh row, preserving cleanup after client metadata expires. Client metadata
+covers the refresh lifetime, including non-rotating renewals. They require
+explicit re-enrollment before use. Unmarked rows whose client provenance was
+already lost cannot safely be classified by name; operators must resolve that
+pre-release data before rollout.
 
 A host may supply `authorizeInvocation(user, context, target)` only when it
 implements current enrolled-agent/resource consent, absolute consent expiry and

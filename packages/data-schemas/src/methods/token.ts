@@ -218,7 +218,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
     }
   }
 
-  /** Reads identifiers only; never returns encrypted credentials to the schedule list. */
+  /** Projects identifiers and backfills proven legacy purpose without reading ciphertext. */
   async function listScheduledOboGrantIdentifiers(userId: string): Promise<string[]> {
     const Token = mongoose.models.Token;
     const grants = await Token.find(
@@ -234,6 +234,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
         'metadata.openid_subject': 1,
         'metadata.openid_issuer': 1,
         'metadata.credential_set_id': 1,
+        'metadata.credential_purpose': 1,
       },
     ).lean<Array<{ identifier: string; type: string; metadata?: Record<string, string> }>>();
     const legacyClients = new Map<string, string>();
@@ -243,18 +244,44 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
         grant.identifier.startsWith('mcp:') &&
         typeof grant.metadata?.openid_subject === 'string' &&
         typeof grant.metadata?.openid_issuer === 'string' &&
-        grant.metadata.credential_set_id
+        typeof grant.metadata.credential_set_id === 'string'
       )
         legacyClients.set(
           grant.identifier.replace(/:client$/, ':refresh'),
           grant.metadata.credential_set_id,
         );
     }
+    // Backfill only legacy rows proven by a matching client generation. The purpose
+    // then survives client TTL expiry; the ciphertext and lifetime remain unchanged.
+    const migrations = grants.filter(
+      (grant) =>
+        grant.type === 'mcp_oauth_refresh' &&
+        grant.identifier.startsWith('mcp:') &&
+        grant.metadata?.credential_purpose !== 'scheduled_obo' &&
+        legacyClients.has(grant.identifier) &&
+        legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id,
+    );
+    if (migrations.length) {
+      await Token.bulkWrite(
+        migrations.map((grant) => ({
+          updateOne: {
+            filter: {
+              userId,
+              type: 'mcp_oauth_refresh',
+              identifier: grant.identifier,
+              'metadata.credential_set_id': grant.metadata!.credential_set_id,
+            },
+            update: { $set: { 'metadata.credential_purpose': 'scheduled_obo' } },
+          },
+        })),
+      );
+    }
     return grants
       .filter(
         (grant) =>
           grant.type === 'mcp_oauth_refresh' &&
           (grant.identifier.startsWith('scheduled-mcp:') ||
+            grant.metadata?.credential_purpose === 'scheduled_obo' ||
             (legacyClients.has(grant.identifier) &&
               legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id)),
       )

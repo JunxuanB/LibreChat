@@ -44,13 +44,15 @@ async function assertCredentialNamespace(
   userId?: string,
 ): Promise<void> {
   if (scheduledGrant || !serverName.startsWith('schedule-obo:') || !findToken || !userId) return;
-  const client = await findToken({
-    userId,
-    type: 'mcp_oauth_client',
-    identifier: `mcp:${serverName}:client`,
-  });
+  const [client, refresh] = await Promise.all([
+    findToken({ userId, type: 'mcp_oauth_client', identifier: `mcp:${serverName}:client` }),
+    findToken({ userId, type: 'mcp_oauth_refresh', identifier: `mcp:${serverName}:refresh` }),
+  ]);
   const metadata = getTokenMetadata(client);
-  if (typeof metadata.openid_subject === 'string' && typeof metadata.openid_issuer === 'string')
+  if (
+    getTokenMetadata(refresh).credential_purpose === 'scheduled_obo' ||
+    (typeof metadata.openid_subject === 'string' && typeof metadata.openid_issuer === 'string')
+  )
     throw new ReauthenticationRequiredError(serverName, 'binding');
 }
 
@@ -712,7 +714,11 @@ export class MCPTokenStorage {
          */
         credentialSetId = validTokenCredentialSetId ?? randomUUID();
       }
-      const tokenMetadata = { credential_set_id: credentialSetId };
+      const tokenMetadata = {
+        credential_set_id: credentialSetId,
+        ...(scheduledGrant && { credential_purpose: 'scheduled_obo' }),
+      };
+      let clientExpiresIn = 365 * 24 * 60 * 60;
 
       /**
        * Snapshot every record before the first write. Conditional updates below use these
@@ -749,6 +755,13 @@ export class MCPTokenStorage {
           refreshLookup,
           clientLookup,
         ]);
+      }
+
+      if (!tokens.refresh_token && existingRefreshToken?.expiresAt) {
+        clientExpiresIn = Math.max(
+          clientExpiresIn,
+          Math.ceil((existingRefreshToken.expiresAt.getTime() - Date.now()) / 1000),
+        );
       }
 
       if (expectedCredentialSetId) {
@@ -960,6 +973,8 @@ export class MCPTokenStorage {
           metadata: tokenMetadata,
         };
 
+        clientExpiresIn = Math.max(clientExpiresIn, refreshTokenData.expiresIn);
+
         plannedWrites.push({
           type: 'mcp_oauth_refresh',
           identifier: `${identifier}:refresh`,
@@ -996,8 +1011,8 @@ export class MCPTokenStorage {
           type: 'mcp_oauth_client',
           identifier: `${identifier}:client`,
           token: encryptedClientInfo,
-          expiresIn: 365 * 24 * 60 * 60,
-          metadata: { ...metadata, credential_set_id: credentialSetId },
+          expiresIn: clientExpiresIn,
+          metadata: { ...metadata, ...tokenMetadata },
         };
 
         plannedWrites.push({
