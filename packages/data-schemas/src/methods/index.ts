@@ -348,6 +348,7 @@ export function createMethods(
 
   const agentQueuedTurnMethods = createAgentQueuedTurnMethods(mongoose);
   const agentTriggerDeliveryMethods = createAgentTriggerDeliveryMethods(mongoose, {
+    releaseBatchProjections: messageMethods.releaseBackgroundToolResultClaims,
     purgeQueuedTurnsForUser: (user) =>
       agentQueuedTurnMethods.deleteAllAgentQueuedTurnsForUser({
         user: typeof user === 'string' ? new mongoose.Types.ObjectId(user) : user,

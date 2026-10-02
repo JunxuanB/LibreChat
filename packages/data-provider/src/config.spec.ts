@@ -1063,6 +1063,13 @@ describe('agent background completion batch config', () => {
       endpoints: { agents: { backgroundTasks: {} } },
     });
     expect(defaults.endpoints?.agents?.backgroundTasks?.completionResultBatchSize).toBe(8);
+    expect(defaults.endpoints?.agents?.backgroundTasks?.completionReceiptBatching).toBe(false);
+    expect(
+      configSchema.parse({
+        version: '1.0',
+        endpoints: { agents: { backgroundTasks: { completionReceiptBatching: true } } },
+      }).endpoints?.agents?.backgroundTasks?.completionReceiptBatching,
+    ).toBe(true);
 
     for (const completionResultBatchSize of [0, 17, 1.5]) {
       expect(
@@ -1171,6 +1178,7 @@ describe('agent background task config', () => {
     }
     expect(result.data.endpoints?.agents?.backgroundTasks).toEqual({
       completionResultBatchSize: 8,
+      completionReceiptBatching: false,
       completionWakeups: true,
       completionResultMaxChars: 24 * 1024,
       ordinaryToolCancellation: false,
@@ -1190,6 +1198,7 @@ describe('agent background task config', () => {
     }
     expect(result.data.endpoints?.agents?.backgroundTasks).toEqual({
       completionResultBatchSize: 8,
+      completionReceiptBatching: false,
       completionWakeups: false,
       completionResultMaxChars: 24 * 1024,
       ordinaryToolCancellation: false,
@@ -1209,6 +1218,7 @@ describe('agent background task config', () => {
     }
     expect(result.data.endpoints?.agents?.backgroundTasks).toEqual({
       completionResultBatchSize: 8,
+      completionReceiptBatching: false,
       completionWakeups: true,
       completionResultMaxChars: 24 * 1024,
       ordinaryToolCancellation: true,
