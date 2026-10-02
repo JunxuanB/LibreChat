@@ -119,6 +119,8 @@ export type ScheduleResumeClaimResult =
  */
 export interface SchedulesServiceDeps {
   preflightMCP: ScheduleMCPPreflight;
+  /** Only advertise enrollment when the trusted scheduled-MCP authority is installed. */
+  isScheduledOboAvailable?: () => boolean;
   /** After the durable user-deletion barrier, drain grant persistence before the cascade. */
   drainOboWrites?: (userId: string) => Promise<void>;
   methods: ScheduleMethods & {
@@ -425,7 +427,8 @@ export function createSchedulesService(
         config.mcpPreflightTimeoutMs ?? DEFAULT_SCHEDULE_LIMITS.mcpPreflightTimeoutMs,
       requireProject: config.requireProject === true || projectId != null,
       ...(projectId != null && { projectId }),
-      ...(config.oboServers?.length && { oboServers: config.oboServers }),
+      ...(deps.isScheduledOboAvailable?.() === true &&
+        config.oboServers?.length && { oboServers: config.oboServers }),
     };
   }
 

@@ -50,6 +50,7 @@ function makeService(
   getAppConfig?: SchedulesServiceDeps['getAppConfig'],
   enqueueAgentTrigger: SchedulesServiceDeps['enqueueAgentTrigger'] = jest.fn(async () => undefined),
   drainOboWrites?: SchedulesServiceDeps['drainOboWrites'],
+  isScheduledOboAvailable?: SchedulesServiceDeps['isScheduledOboAvailable'],
 ): ReturnType<typeof createSchedulesService> {
   recordRunOutcome = jest.fn(async () => undefined);
   const methods = {
@@ -66,6 +67,7 @@ function makeService(
   const deps = {
     methods,
     drainOboWrites,
+    isScheduledOboAvailable,
     getAppConfig: getAppConfig ?? jest.fn(async () => ({})),
     findUserById: jest.fn(async () => null),
     findBalance: jest.fn(async () => null),
@@ -2258,5 +2260,26 @@ describe('provider-drained schedule aborts', () => {
       awaitProviderDrain: true,
     });
     expect(deleteJob).toHaveBeenCalledWith('c1', 7);
+  });
+});
+
+describe('scheduled OBO capability projection', () => {
+  it.each<{ available?: () => boolean; expected?: string[] }>([
+    {},
+    { available: () => false },
+    { available: () => true, expected: ['Files'] },
+  ])('advertises allowlisted servers only with invocation authority: %p', async (testCase) => {
+    const service = makeService(
+      jest.fn(async (_userId: string) => []),
+      jest.fn(async () => ({
+        interfaceConfig: { schedules: { use: true, oboServers: ['Files'] } },
+      })) as unknown as SchedulesServiceDeps['getAppConfig'],
+      undefined,
+      undefined,
+      testCase.available,
+    );
+    const limits = await service.getLimits();
+    expect(limits.oboServers).toEqual(testCase.expected);
+    expect(limits.enabled).toBe(true);
   });
 });

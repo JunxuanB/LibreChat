@@ -23,6 +23,7 @@ function getService() {
 
   service = createSchedulesService({
     preflightMCP: require('./mcp'),
+    isScheduledOboAvailable: () => require('./obo').isAvailable(),
     drainOboWrites: (userId) => require('./obo').drainOwnerWrites(userId),
     methods,
     getAppConfig,

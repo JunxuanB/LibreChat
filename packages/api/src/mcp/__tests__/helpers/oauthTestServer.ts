@@ -557,6 +557,7 @@ export async function createOAuthMCPServer(
 }
 
 export interface InMemoryToken {
+  scope?: string;
   userId: string;
   type: string;
   identifier: string;
@@ -638,6 +639,28 @@ export class InMemoryTokenStore {
     this.tokens.set(this.key(data), token);
     return token;
   }) as unknown as TokenMethods['createToken'];
+
+  replaceTokenIfCurrent: TokenMethods['replaceTokenIfCurrent'] = async (
+    scope,
+    expectedToken,
+    data,
+  ) => {
+    const existing = this.tokens.get(`scope:${scope}`);
+    if (expectedToken === null ? existing != null : existing?.token !== expectedToken) {
+      return false;
+    }
+    this.tokens.set(`scope:${scope}`, {
+      scope,
+      userId: data.userId?.toString() ?? '',
+      type: data.type ?? '',
+      identifier: data.identifier ?? '',
+      token: data.token,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + data.expiresIn * 1000),
+      metadata: data.metadata,
+    });
+    return true;
+  };
 
   updateToken = (async (
     filter: {

@@ -57,6 +57,7 @@ function harness(
   tokenStorage: Parameters<
     typeof createScheduledOboGrantService
   >[0]['tokenStorage'] = MCPTokenStorage,
+  installAuthority = true,
 ) {
   const tokenStore = new InMemoryTokenStore();
   const flow = new FlowStateManager<MCPOAuthTokens | null>(new MockKeyv() as unknown as Keyv, {
@@ -104,7 +105,10 @@ function harness(
     row.configRevision += 1;
     return row;
   });
-  const service = createScheduledOboGrantService({
+  let invocationAllowed = true;
+  const authorizeInvocation = jest.fn(async () => invocationAllowed);
+  const deps = {
+    ...(installAuthority && { authorizeInvocation }),
     tokens: tokenStore,
     tokenStorage,
     flowManager: flow,
@@ -154,9 +158,15 @@ function harness(
       return typeof expiry === 'number' && expiry > Math.floor(Date.now() / 1000) + 30;
     },
     pauseSchedule,
-  });
+  } satisfies Parameters<typeof createScheduledOboGrantService>[0];
+  const service = createScheduledOboGrantService(deps);
   return {
     service,
+    deps,
+    authorizeInvocation,
+    setInvocationAllowed: (allowed: boolean) => {
+      invocationAllowed = allowed;
+    },
     tokenStore,
     flow,
     row,
@@ -189,6 +199,84 @@ function harness(
 }
 
 describe('separately authorized scheduled OBO grants', () => {
+  it('does not let a server allowlist activate enrollment or a provider without invocation authority', async () => {
+    const { service, row, requestGrant, tokenStore, inspect } = harness(MCPTokenStorage, false);
+    expect(service.isAvailable()).toBe(false);
+    await expect(service.resolve(user, { context, target })).resolves.toBeUndefined();
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+      retryable: false,
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(requestGrant).not.toHaveBeenCalled();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('checks host authorization for the exact enrolled resource before contacting the provider', async () => {
+    const { service, row, requestGrant, tokenStore, authorizeInvocation, setInvocationAllowed } =
+      harness();
+    setInvocationAllowed(false);
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+    });
+    expect(authorizeInvocation).toHaveBeenCalledWith(user, context, target);
+    expect(requestGrant).not.toHaveBeenCalled();
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('refuses grant persistence when authority is withdrawn during the enrollment exchange', async () => {
+    const { service, row, requestGrant, tokenStore, setInvocationAllowed } = harness();
+    requestGrant.mockImplementationOnce(async () => {
+      setInvocationAllowed(false);
+      return { access_token: 'first', refresh_token: 'scoped-refresh', expires_in: 3600 };
+    });
+    await expect(service.enroll(user.id, row.id, 'Files', 'assertion')).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+    });
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('refuses even a cached bearer after authority is withdrawn, while preserving revoke and cleanup', async () => {
+    const { service, row, tokenStore, requestGrant, setInvocationAllowed } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    await expect(provider()).resolves.toMatchObject({ access_token: 'first' });
+    setInvocationAllowed(false);
+    await expect(provider()).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+    await expect(service.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+    await service.revoke(user.id, row.id, 'Files');
+    expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it('refuses a renewed bearer if authority is withdrawn during refresh', async () => {
+    const { service, row, requestGrant, setInvocationAllowed } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const provider = (await service.resolve(user, { context, target }))!;
+    requestGrant.mockImplementationOnce(async () => {
+      setInvocationAllowed(false);
+      return { access_token: 'renewed', refresh_token: 'rotated', expires_in: 3600 };
+    });
+    await expect(provider({ forceDownstreamRefresh: true })).rejects.toMatchObject({
+      reason: 'missing_upstream_provider',
+    });
+  });
+
+  it('keeps an older grant listable and revocable when the host has no authority adapter', async () => {
+    const { service, deps, row, tokenStore, requestGrant } = harness();
+    await service.enroll(user.id, row.id, 'Files', 'assertion');
+    row.enabled = true;
+    const locked = createScheduledOboGrantService({ ...deps, authorizeInvocation: undefined });
+    expect(locked.isAvailable()).toBe(false);
+    await expect(locked.resolve(user, { context, target })).resolves.toBeUndefined();
+    await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+    await locked.revoke(user.id, row.id, 'Files');
+    expect(tokenStore.getAll()).toEqual([]);
+    expect(requestGrant).toHaveBeenCalledTimes(1);
+  });
+
   it('does not construct credential storage merely because routes load', async () => {
     const factory = jest.fn(() => harness().service);
     const deferred = createLazyScheduledOboGrantService(factory);

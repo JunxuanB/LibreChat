@@ -74,7 +74,15 @@ interface ScheduledOboClientInfo extends OAuthClientInformation {
   scheduled_obo_scope_binding?: ScheduledOboScopeBinding;
 }
 interface GrantDeps {
-  tokens: TokenMethods & ScheduledOboGrantMethods;
+  /** Current agent/resource consent (including absolute expiry) and read-only
+   * invocation policy. Absent in the default host until its authority gate ships. */
+  authorizeInvocation?: (
+    user: IUser,
+    context: ScheduledTokenContext,
+    target: UpstreamTokenTarget,
+  ) => Promise<boolean>;
+  tokens: Pick<TokenMethods, 'findToken' | 'createToken' | 'updateToken' | 'deleteTokens'> &
+    ScheduledOboGrantMethods;
   tokenStorage: Pick<
     typeof MCPTokenStorage,
     | 'getClientInfoAndMetadata'
@@ -160,6 +168,8 @@ function metadata(record: { metadata?: Map<string, unknown> }): Record<string, u
 }
 
 export interface ScheduledOboGrantService {
+  /** Availability is not authorization: the installed authority is checked per use. */
+  isAvailable: () => boolean;
   resolve: HostUpstreamTokenProviderResolver;
   enroll: (
     userId: string,
@@ -186,6 +196,25 @@ export interface ScheduledOboGrantService {
 
 export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGrantService {
   const { tokens } = deps;
+  const isAvailable = (): boolean => deps.authorizeInvocation != null;
+  const assertInvocationAuthorized = async (
+    user: IUser,
+    context: ScheduledTokenContext,
+    target: UpstreamTokenTarget,
+  ): Promise<void> => {
+    let authorized: boolean | undefined;
+    try {
+      authorized = await deps.authorizeInvocation?.(user, context, target);
+    } catch (error) {
+      throw new OboTokenResolutionError(
+        'session_refresh_failed',
+        'Temporary scheduled MCP authority failure.',
+        true,
+        error,
+      );
+    }
+    if (authorized !== true) throw missingGrant();
+  };
   const withOwnerPersistence =
     (userId: string, generation: number | null) =>
     async (persist: () => Promise<MCPOAuthTokens>): Promise<MCPOAuthTokens> => {
@@ -302,7 +331,8 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     allowDisabled = false,
     writePreflight?: ScheduleWritePreflight,
   ) => {
-    if (context.ownerId !== userId || context.invocationMode !== 'delegated') throw missingGrant();
+    if (!isAvailable() || context.ownerId !== userId || context.invocationMode !== 'delegated')
+      throw missingGrant();
     const [user, schedule, ownerActive] = await Promise.all([
       deps.getUser(userId),
       deps.getSchedule(context.scheduleId, userId),
@@ -373,6 +403,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       !provider.authorizationEndpoint
     )
       throw missingGrant();
+    await assertInvocationAuthorized(user, context, { ...target, url: config.url });
     return { user, schedule, config, provider };
   };
 
@@ -585,6 +616,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         expires_at: Date.now() + expiresIn * 1000,
       };
     };
+    let result: MCPOAuthTokens | null;
     try {
       const params = {
         userId,
@@ -606,7 +638,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         withPersistence: withOwnerPersistence(userId, ownerGeneration),
         refreshTokens,
       };
-      let result = forceRefresh
+      result = forceRefresh
         ? await deps.tokenStorage.forceRefreshTokens(params)
         : await deps.tokenStorage.getTokens(params);
       if (result?.expires_at && result.expires_at - Date.now() < 45_000 && !forceRefresh) {
@@ -616,7 +648,6 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         throw missingGrant();
       if (!result.credential_set_id) throw missingGrant();
       await snapshot(result.credential_set_id);
-      return result;
     } catch (error) {
       if (
         (error instanceof ReauthenticationRequiredError && error.reason !== 'binding') ||
@@ -652,13 +683,16 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         true,
       );
     }
+    // Authority denial is not a stale credential generation, including after rotation.
+    await assertInvocationAuthorized(user, context, target);
+    return result;
   };
 
   const resolve: HostUpstreamTokenProviderResolver = async (
     user,
     { context, target, activationPreflight, writePreflight },
   ) => {
-    if (!context || !target || user.id !== context.ownerId) return undefined;
+    if (!isAvailable() || !context || !target || user.id !== context.ownerId) return undefined;
     return async ({ forceRefresh, forceDownstreamRefresh } = {}) => {
       const result = await read(
         user.id,
@@ -684,6 +718,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     expectedScopes?: string,
     expectedUrl?: string,
   ): Promise<void> => {
+    if (!isAvailable()) throw missingGrant();
     const scheduleLease = scheduleGrantLeaseId(userId, scheduleId);
     const [scheduleGeneration, ownerGeneration] = await Promise.all([
       deps.flowManager.getLeaseGeneration(scheduleLease),
@@ -788,6 +823,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             if (currentServer?.url !== expectedUrl || currentServer.obo?.scopes !== expectedScopes)
               throw missingGrant();
           }
+          await assertInvocationAuthorized(user, context, { ...target, url: config.url });
           const clientInfo: ScheduledOboClientInfo = {
             client_id: provider.clientId,
             scope: `${target.scopes} offline_access`,
@@ -1035,6 +1071,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
   };
 
   return {
+    isAvailable,
     resolve,
     enroll,
     revoke,
@@ -1063,6 +1100,7 @@ export function createLazyScheduledOboGrantService(
     return instance;
   };
   return {
+    isAvailable: () => get().isAvailable(),
     setInspector: (preflight) => {
       inspector = preflight;
       instance?.setInspector(preflight);

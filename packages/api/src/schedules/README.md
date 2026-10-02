@@ -46,13 +46,29 @@ re-enable existing schedules automatically or repair credentials on the user's b
 
 ## Separately authorized OBO refresh grants
 
-An operator may add `interface.schedules.oboServers: ["ServerName"]` to the
-config for a specific principal. The default is no OBO servers. An eligible
+The default application does not activate this path. Its host has no
+`authorizeInvocation` dependency: preview, enrollment and token delivery fail
+closed even if `interface.schedules.oboServers` names a server. The schedule list
+omits enrollment controls; previously stored grants remain listable, revocable
+and deletable. Configuration alone cannot satisfy the authority release gate.
+
+A host may supply `authorizeInvocation(user, context, target)` only when it
+implements current enrolled-agent/resource consent, absolute consent expiry and
+revocation, and the delegated read-only execution policy. It must return exactly
+`true` to authorize use; an unavailable authority must throw, not report consent.
+It is rechecked before contacting the credential provider and before enrollment
+persistence or bearer delivery. The production adapter belongs to the separate
+authority work; the provider tests inject test-owned authority, not a production
+approval. This service remains delegated-only and does not establish autonomous
+organization-role access.
+
+Once that authority and the actual provider release gates pass, an operator may
+allow exact `interface.schedules.oboServers` names for a principal. An eligible
 server must be an operator-owned MCP config with `obo.scopes`, and its provider
 must actually issue a **downstream** refresh token for an OBO exchange requesting
 those scopes plus `offline_access`. A checked permission alone does not mint one.
 
-To set one up, create the schedule paused using the dialog's OBO setup checkbox.
+For an authorized host, create the schedule paused using the dialog's OBO setup checkbox.
 While signed in with a current OpenID session, click **Authorize offline** on
 the saved card for the exact named server. Confirm the displayed scopes and MCP
 URL; the POST refuses enrollment if either changed after the preview. It uses the
@@ -82,8 +98,9 @@ or invalid grant never falls back to the browser session. Existing schedules
 and non-OBO servers keep their previous behavior. A provider that does not
 support the separate offline grant continues to report missing unattended
 authorization. Tests simulate a later access-token expiry; verification against
-an actual provider with recurring runs remains outstanding. Enable the allowlist
-only after every replica has upgraded: an older worker cannot read these grants
+an actual provider with recurring runs remains outstanding. Do not enable the
+host authority or allowlist before consent/read-only and provider verification
+pass, or before every replica has upgraded: an older worker cannot read these grants
 and may otherwise disable a newly enrolled schedule. Closing a browser or
 signing out does not automatically revoke this separately authorized grant;
 use **Revoke offline access** or delete the schedule to withdraw it.
