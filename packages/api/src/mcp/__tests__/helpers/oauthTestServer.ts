@@ -608,15 +608,31 @@ export class InMemoryTokenStore {
     return null;
   }) as unknown as TokenMethods['findToken'];
 
-  listScheduledOboGrantIdentifiers = async (userId: string): Promise<string[]> =>
-    [...this.tokens.values()]
-      .filter(
-        (token) =>
-          token.userId === userId &&
-          token.type === 'mcp_oauth_refresh' &&
-          token.identifier.startsWith('mcp:schedule-obo:'),
-      )
+  listScheduledOboGrantIdentifiers = async (userId: string): Promise<string[]> => {
+    const owned = [...this.tokens.values()].filter((token) => token.userId === userId);
+    return owned
+      .filter((token) => {
+        if (token.type !== 'mcp_oauth_refresh') return false;
+        if (token.identifier.startsWith('scheduled-mcp:schedule-obo:')) return true;
+        if (!token.identifier.startsWith('mcp:schedule-obo:')) return false;
+        const client = owned.find(
+          (record) =>
+            record.type === 'mcp_oauth_client' &&
+            record.identifier === token.identifier.replace(/:refresh$/, ':client'),
+        );
+        const clientMetadata =
+          client?.metadata instanceof Map ? Object.fromEntries(client.metadata) : client?.metadata;
+        const tokenMetadata =
+          token.metadata instanceof Map ? Object.fromEntries(token.metadata) : token.metadata;
+        return (
+          typeof clientMetadata?.openid_subject === 'string' &&
+          typeof clientMetadata.openid_issuer === 'string' &&
+          typeof clientMetadata.credential_set_id === 'string' &&
+          clientMetadata.credential_set_id === tokenMetadata?.credential_set_id
+        );
+      })
       .map((token) => token.identifier);
+  };
 
   createToken = (async (data: {
     userId: string;

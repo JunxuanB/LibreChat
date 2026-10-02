@@ -222,10 +222,43 @@ export function createTokenMethods(mongoose: typeof import('mongoose')): {
   async function listScheduledOboGrantIdentifiers(userId: string): Promise<string[]> {
     const Token = mongoose.models.Token;
     const grants = await Token.find(
-      { userId, type: 'mcp_oauth_refresh', identifier: /^mcp:schedule-obo:/ },
-      { _id: 0, identifier: 1 },
-    ).lean<Array<{ identifier: string }>>();
-    return grants.map((grant) => grant.identifier);
+      {
+        userId,
+        type: { $in: ['mcp_oauth_refresh', 'mcp_oauth_client'] },
+        identifier: /^(?:scheduled-mcp|mcp):schedule-obo:/,
+      },
+      {
+        _id: 0,
+        identifier: 1,
+        type: 1,
+        'metadata.openid_subject': 1,
+        'metadata.openid_issuer': 1,
+        'metadata.credential_set_id': 1,
+      },
+    ).lean<Array<{ identifier: string; type: string; metadata?: Record<string, string> }>>();
+    const legacyClients = new Map<string, string>();
+    for (const grant of grants) {
+      if (
+        grant.type === 'mcp_oauth_client' &&
+        grant.identifier.startsWith('mcp:') &&
+        typeof grant.metadata?.openid_subject === 'string' &&
+        typeof grant.metadata?.openid_issuer === 'string' &&
+        grant.metadata.credential_set_id
+      )
+        legacyClients.set(
+          grant.identifier.replace(/:client$/, ':refresh'),
+          grant.metadata.credential_set_id,
+        );
+    }
+    return grants
+      .filter(
+        (grant) =>
+          grant.type === 'mcp_oauth_refresh' &&
+          (grant.identifier.startsWith('scheduled-mcp:') ||
+            (legacyClients.has(grant.identifier) &&
+              legacyClients.get(grant.identifier) === grant.metadata?.credential_set_id)),
+      )
+      .map((grant) => grant.identifier);
   }
 
   // Return all methods

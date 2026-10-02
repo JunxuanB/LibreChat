@@ -39,15 +39,71 @@ beforeEach(async () => {
 });
 
 describe('scheduled OBO grant identifier projection', () => {
+  it('lists only generation-matched legacy OBO grants, not ordinary prefix servers', async () => {
+    const owner = new mongoose.Types.ObjectId();
+    const records = [
+      {
+        type: 'mcp_oauth_client',
+        identifier: 'mcp:schedule-obo:legacy:Files:client',
+        metadata: {
+          openid_subject: 'subject',
+          openid_issuer: 'https://issuer.test',
+          credential_set_id: 'legacy-generation',
+        },
+      },
+      {
+        type: 'mcp_oauth_refresh',
+        identifier: 'mcp:schedule-obo:legacy:Files:refresh',
+        metadata: { credential_set_id: 'legacy-generation' },
+      },
+      {
+        type: 'mcp_oauth_client',
+        identifier: 'mcp:schedule-obo:legacy:Ordinary:client',
+        metadata: { credential_set_id: 'ordinary-generation' },
+      },
+      {
+        type: 'mcp_oauth_refresh',
+        identifier: 'mcp:schedule-obo:legacy:Ordinary:refresh',
+        metadata: { credential_set_id: 'ordinary-generation' },
+      },
+      {
+        type: 'mcp_oauth_client',
+        identifier: 'mcp:schedule-obo:mixed:Files:client',
+        metadata: {
+          openid_subject: 'subject',
+          openid_issuer: 'https://issuer.test',
+          credential_set_id: 'old-generation',
+        },
+      },
+      {
+        type: 'mcp_oauth_refresh',
+        identifier: 'mcp:schedule-obo:mixed:Files:refresh',
+        metadata: { credential_set_id: 'new-generation' },
+      },
+    ];
+    await Token.create(
+      records.map((record) => ({
+        ...record,
+        userId: owner,
+        token: 'encrypted-secret',
+        expiresAt: new Date(Date.now() + 3600_000),
+      })),
+    );
+    await expect(methods.listScheduledOboGrantIdentifiers(owner.toString())).resolves.toEqual([
+      'mcp:schedule-obo:legacy:Files:refresh',
+    ]);
+  });
+
   it('returns only owner-scoped refresh identifiers, never access, direct OAuth or secrets', async () => {
     const owner = new mongoose.Types.ObjectId();
     const other = new mongoose.Types.ObjectId();
     const values = [
-      [owner, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_1:Files:refresh'],
-      [owner, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_2:Files:refresh'],
-      [owner, 'mcp_oauth', 'mcp:schedule-obo:sched_1:Files'],
+      [owner, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_1:Files:refresh'],
+      [owner, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_2:Files:refresh'],
+      [owner, 'mcp_oauth', 'scheduled-mcp:schedule-obo:sched_1:Files'],
       [owner, 'mcp_oauth_refresh', 'mcp:direct:refresh'],
-      [other, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_3:Private:refresh'],
+      [owner, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_1:Files:refresh'],
+      [other, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_3:Private:refresh'],
     ] as const;
     await Token.create(
       values.map(([userId, type, identifier]) => ({
@@ -61,8 +117,8 @@ describe('scheduled OBO grant identifier projection', () => {
 
     const identifiers = await methods.listScheduledOboGrantIdentifiers(owner.toString());
     expect(identifiers.sort()).toEqual([
-      'mcp:schedule-obo:sched_1:Files:refresh',
-      'mcp:schedule-obo:sched_2:Files:refresh',
+      'scheduled-mcp:schedule-obo:sched_1:Files:refresh',
+      'scheduled-mcp:schedule-obo:sched_2:Files:refresh',
     ]);
     expect(JSON.stringify(identifiers)).not.toContain('encrypted-secret');
   });

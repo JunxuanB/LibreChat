@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { logger, getTenantId, isRuntimeDisabled } from '@librechat/data-schemas';
 import { Constants, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type {
@@ -23,6 +24,7 @@ import type { ServerRequest } from '../types/http';
 import {
   getJwtAccessTokenExpiry,
   getMCPOAuthLeaseId,
+  getMCPOAuthTokenIdentifier,
   MCPTokenRefreshUnavailableError,
   ReauthenticationRequiredError,
 } from '../mcp/oauth/tokens';
@@ -74,6 +76,8 @@ interface ScheduledOboClientInfo extends OAuthClientInformation {
   scheduled_obo_scope_binding?: ScheduledOboScopeBinding;
 }
 interface GrantDeps {
+  /** Replica-stable host key; never included in preview responses. */
+  previewKey?: string;
   /** Current agent/resource consent (including absolute expiry) and read-only
    * invocation policy. Absent in the default host until its authority gate ships. */
   authorizeInvocation?: (
@@ -177,7 +181,7 @@ export interface ScheduledOboGrantService {
     serverName: string,
     accessToken: string,
     expectedScopes?: string,
-    expectedUrl?: string,
+    expectedBinding?: string,
   ) => Promise<void>;
   revoke: (userId: string, scheduleId: string, serverName: string) => Promise<void>;
   listEnrolled: (userId: string) => Promise<Record<string, string[]>>;
@@ -196,7 +200,31 @@ export interface ScheduledOboGrantService {
 
 export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGrantService {
   const { tokens } = deps;
-  const isAvailable = (): boolean => deps.authorizeInvocation != null;
+  const isAvailable = (): boolean => deps.authorizeInvocation != null && !!deps.previewKey;
+  const previewBinding = (
+    userId: string,
+    schedule: ScheduleGrantRow,
+    serverName: string,
+    url: string,
+    scopes: string,
+  ): string => {
+    if (!deps.previewKey) throw missingGrant();
+    return createHmac('sha256', deps.previewKey)
+      .update(
+        JSON.stringify([
+          'scheduled-obo-preview-v1',
+          userId,
+          schedule.tenantId ?? '',
+          schedule.id,
+          schedule.agent_id,
+          schedule.configRevision,
+          serverName,
+          url,
+          scopes,
+        ]),
+      )
+      .digest('hex');
+  };
   const assertInvocationAuthorized = async (
     user: IUser,
     context: ScheduledTokenContext,
@@ -303,7 +331,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     };
   };
 
-  const getServer = async (user: IUser, name: string) => {
+  const getServer = async (user: IUser, name: string, preview = false) => {
     const appConfig = await deps.getAppConfig({
       ...getAppConfigOptionsFromUser(user),
       failClosed: true,
@@ -314,14 +342,14 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     const server = (await deps.getServerConfigs(user.id, parsed, user.role))[name];
     if (!server) return undefined;
     if (!server.customUserVars && !server.url?.includes('{{'))
-      return resolveScheduledOboServer(server, user);
+      return resolveScheduledOboServer(server, user, undefined, preview);
     const key = `${Constants.mcp_prefix}${name}`;
     const auth = await getPluginAuthMap({
       userId: user.id,
       pluginKeys: [key],
       findPluginAuthsByKeys: deps.findPluginAuthsByKeys,
     });
-    return resolveScheduledOboServer(server, user, auth[key]);
+    return resolveScheduledOboServer(server, user, auth[key], preview);
   };
 
   const validate = async (
@@ -330,6 +358,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     target: UpstreamTokenTarget,
     allowDisabled = false,
     writePreflight?: ScheduleWritePreflight,
+    preview = false,
   ) => {
     if (!isAvailable() || context.ownerId !== userId || context.invocationMode !== 'delegated')
       throw missingGrant();
@@ -379,7 +408,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         getRoleByName,
       }),
       deps.agentAccess(context.agentId, user),
-      getServer(user, target.mcpServer),
+      getServer(user, target.mcpServer, preview),
     ]);
     if (
       !limits.enabled ||
@@ -430,7 +459,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     const { user, config, provider } = authorized;
     if (config.url !== target.url) throw missingGrant();
     const key = scheduledOboGrantKey(context.scheduleId, target.mcpServer);
-    const identifier = `mcp:${key}`;
+    const identifier = getMCPOAuthTokenIdentifier(key, true);
     const assertMetadata = (binding: Record<string, unknown>): void => {
       if (
         binding.server_url !== target.url ||
@@ -450,7 +479,9 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     // Hold only the persistence fence, never the network refresh flight. All writers
     // of this namespace use it, so the two rows form one coherent observation.
     const snapshot = async (expectedGeneration?: string): Promise<string> => {
-      const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
+      const lease = await deps.flowManager.acquireLease(
+        getMCPOAuthLeaseId(userId, key, undefined, true),
+      );
       if (!lease)
         throw new MCPTokenRefreshUnavailableError(
           key,
@@ -534,7 +565,9 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       )
         throw new ReauthenticationRequiredError(key, 'binding');
       const rejectRenewal = async (reason: 'expired' | 'invalid_client'): Promise<never> => {
-        const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key));
+        const lease = await deps.flowManager.acquireLease(
+          getMCPOAuthLeaseId(userId, key, undefined, true),
+        );
         if (!lease)
           throw new MCPTokenRefreshUnavailableError(
             key,
@@ -718,7 +751,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     serverName: string,
     accessToken: string,
     expectedScopes?: string,
-    expectedUrl?: string,
+    expectedBinding?: string,
   ): Promise<void> => {
     if (!isAvailable()) throw missingGrant();
     const scheduleLease = scheduleGrantLeaseId(userId, scheduleId);
@@ -756,20 +789,24 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       if (
         !selected.obo?.scopes ||
         (expectedScopes != null && selected.obo.scopes !== expectedScopes) ||
-        (expectedUrl != null && selected.url !== expectedUrl)
+        (expectedBinding != null &&
+          previewBinding(userId, schedule, serverName, selected.url!, selected.obo.scopes) !==
+            expectedBinding)
       )
         throw missingGrant();
       const target = { mcpServer: serverName, scopes: selected.obo.scopes };
       const { config, provider } = await validate(userId, context, target, true);
       const key = scheduledOboGrantKey(scheduleId, serverName);
-      const leaseId = getMCPOAuthLeaseId(userId, key);
+      const leaseId = getMCPOAuthLeaseId(userId, key, undefined, true);
       const generation = await deps.flowManager.getLeaseGeneration(leaseId);
       if (generation == null)
         throw new MCPTokenRefreshUnavailableError(key, new Error('Grant teardown in progress'));
       if (
         config.url !== selected.url ||
         config.obo?.scopes !== selected.obo.scopes ||
-        (expectedUrl != null && config.url !== expectedUrl)
+        (expectedBinding != null &&
+          previewBinding(userId, schedule, serverName, config.url!, config.obo!.scopes) !==
+            expectedBinding)
       )
         throw missingGrant();
       let response: GrantResponse;
@@ -820,9 +857,14 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
             fresh.tenantId !== user.tenantId
           )
             throw missingGrant();
-          if (expectedUrl != null) {
+          if (expectedBinding != null) {
             const currentServer = await getServer(user, serverName);
-            if (currentServer?.url !== expectedUrl || currentServer.obo?.scopes !== expectedScopes)
+            if (
+              !currentServer?.url ||
+              currentServer.obo?.scopes !== expectedScopes ||
+              previewBinding(userId, fresh, serverName, currentServer.url, expectedScopes!) !==
+                expectedBinding
+            )
               throw missingGrant();
           }
           await assertInvocationAuthorized(user, context, { ...target, url: config.url });
@@ -861,66 +903,108 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
     });
   };
 
+  const legacyGrant = async (userId: string, key: string): Promise<string | undefined> => {
+    const [client, refresh] = await Promise.all([
+      tokens.findToken({ userId, type: 'mcp_oauth_client', identifier: `mcp:${key}:client` }),
+      tokens.findToken({ userId, type: 'mcp_oauth_refresh', identifier: `mcp:${key}:refresh` }),
+    ]);
+    const binding = client && metadata(client);
+    const generation = binding?.credential_set_id;
+    if (
+      typeof binding?.openid_subject === 'string' &&
+      typeof binding.openid_issuer === 'string' &&
+      typeof generation === 'string' &&
+      refresh &&
+      metadata(refresh).credential_set_id === generation
+    )
+      return generation;
+  };
+
+  const deleteLegacyGrant = async (
+    userId: string,
+    key: string,
+    generation: string,
+  ): Promise<void> => {
+    const identifier = `mcp:${key}`;
+    const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await tokens.deleteTokens({
+      userId,
+      identifier: new RegExp(`^${escaped}(?::refresh|:client)?$`),
+      metadataCredentialSetId: generation,
+    });
+  };
+
   const revoke = async (userId: string, scheduleId: string, serverName: string) => {
     const schedule = await deps.getSchedule(scheduleId, userId);
     if (!schedule || String(schedule.user) !== userId) throw missingGrant();
     const key = scheduledOboGrantKey(scheduleId, serverName);
-    const refresh = await tokens.findToken({
-      userId,
-      type: 'mcp_oauth_refresh',
-      identifier: `mcp:${key}:refresh`,
-    });
-    if (!refresh) throw missingGrant();
-    const release = await deps.tokenStorage.beginRefreshTeardown(userId, key);
-    const leaseId = getMCPOAuthLeaseId(userId, key);
+    const [refresh, legacyGeneration] = await Promise.all([
+      tokens.findToken({
+        userId,
+        type: 'mcp_oauth_refresh',
+        identifier: `${getMCPOAuthTokenIdentifier(key, true)}:refresh`,
+      }),
+      legacyGrant(userId, key),
+    ]);
+    if (!refresh && !legacyGeneration) throw missingGrant();
+    const purposes: Array<true | undefined> = legacyGeneration ? [undefined, true] : [true];
+    const releases: Array<() => void> = [];
+    const leases: Array<{ release: () => Promise<void> }> = [];
     try {
-      const generation = await deps.flowManager.getLeaseGeneration(leaseId);
-      if (generation == null)
-        throw new MCPTokenRefreshUnavailableError(key, new Error('Grant teardown in progress'));
-      const lease = await deps.flowManager.acquireLease(leaseId, {
-        expectedGeneration: generation,
-        advanceGeneration: true,
-      });
-      if (!lease)
-        throw new MCPTokenRefreshUnavailableError(key, new Error('Grant is being changed'));
-      try {
-        // Publish the pause only after credential snapshots are fenced. Earlier
-        // activations lose their revision CAS; later ones cannot read the grant.
-        if (!(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision))) {
-          throw new MCPTokenRefreshUnavailableError(
-            scheduledOboGrantKey(scheduleId, serverName),
-            new Error('Schedule changed during revocation'),
-          );
-        }
-        await deps.tokenStorage.deleteUserTokens({
-          userId,
-          serverName: key,
-          scheduledGrant: true as const,
-          deleteToken: async (filter) => {
-            await tokens.deleteTokens(filter);
-          },
+      for (const purpose of purposes) {
+        releases.push(await deps.tokenStorage.beginRefreshTeardown(userId, key, purpose));
+        const leaseId = getMCPOAuthLeaseId(userId, key, undefined, purpose);
+        const generation = await deps.flowManager.getLeaseGeneration(leaseId);
+        if (generation == null)
+          throw new MCPTokenRefreshUnavailableError(key, new Error('Grant teardown in progress'));
+        const lease = await deps.flowManager.acquireLease(leaseId, {
+          expectedGeneration: generation,
+          advanceGeneration: true,
         });
-      } finally {
-        await lease.release();
+        if (!lease)
+          throw new MCPTokenRefreshUnavailableError(key, new Error('Grant is being changed'));
+        leases.push(lease);
+      }
+      if (!(await deps.pauseSchedule(scheduleId, userId, schedule.configRevision)))
+        throw new MCPTokenRefreshUnavailableError(
+          key,
+          new Error('Schedule changed during revocation'),
+        );
+      await deps.tokenStorage.deleteUserTokens({
+        userId,
+        serverName: key,
+        scheduledGrant: true,
+        deleteToken: async (filter) => {
+          await tokens.deleteTokens(filter);
+        },
+      });
+      if (legacyGeneration) {
+        const currentGeneration = await legacyGrant(userId, key);
+        if (currentGeneration) await deleteLegacyGrant(userId, key, currentGeneration);
       }
     } finally {
-      release();
+      try {
+        await Promise.all(leases.reverse().map((lease) => lease.release()));
+      } finally {
+        for (const release of releases) release();
+      }
     }
   };
 
   const listEnrolled = async (userId: string): Promise<Record<string, string[]>> => {
     const identifiers = await tokens.listScheduledOboGrantIdentifiers(userId);
     const grants: Record<string, string[]> = Object.create(null);
-    const prefix = 'mcp:schedule-obo:';
+    const prefix = 'scheduled-mcp:schedule-obo:';
     const suffix = ':refresh';
     for (const identifier of identifiers) {
-      if (!identifier.startsWith(prefix) || !identifier.endsWith(suffix)) continue;
-      const name = identifier.slice(prefix.length, -suffix.length);
+      const storedPrefix = identifier.startsWith(prefix) ? prefix : 'mcp:schedule-obo:';
+      if (!identifier.startsWith(storedPrefix) || !identifier.endsWith(suffix)) continue;
+      const name = identifier.slice(storedPrefix.length, -suffix.length);
       const separator = name.indexOf(':');
       if (separator < 1) continue;
       const scheduleId = name.slice(0, separator);
       const server = name.slice(separator + 1);
-      if (server) (grants[scheduleId] ??= []).push(server);
+      if (server && !grants[scheduleId]?.includes(server)) (grants[scheduleId] ??= []).push(server);
     }
     return grants;
   };
@@ -956,17 +1040,16 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       return;
     }
     try {
-      const { expectedScopes, expectedUrl } = (req.body ?? {}) as {
+      const { expectedScopes, expectedBinding } = (req.body ?? {}) as {
         expectedScopes?: string;
-        expectedUrl?: string;
+        expectedBinding?: string;
       };
       if (
         typeof expectedScopes !== 'string' ||
         !expectedScopes ||
         expectedScopes.length > 2048 ||
-        typeof expectedUrl !== 'string' ||
-        !expectedUrl ||
-        expectedUrl.length > 4096
+        typeof expectedBinding !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(expectedBinding)
       ) {
         res
           .status(400)
@@ -979,7 +1062,7 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
         serverName,
         session.accessToken,
         expectedScopes,
-        expectedUrl,
+        expectedBinding,
       );
       res.status(204).end();
     } catch (error) {
@@ -1019,9 +1102,14 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
           invocationMode: 'delegated',
         };
         const target = { mcpServer: serverName, scopes: selected.obo.scopes };
-        const { config } = await validate(userId, context, target, true);
-        if (config.url !== selected.url) throw missingGrant();
-        res.json({ server: serverName, scopes: target.scopes, url: config.url });
+        const { config } = await validate(userId, context, target, true, undefined, true);
+        if (config.url !== selected.url || !config.displayUrl) throw missingGrant();
+        res.json({
+          server: serverName,
+          scopes: target.scopes,
+          url: config.displayUrl,
+          binding: previewBinding(userId, schedule, serverName, config.url!, target.scopes),
+        });
       });
     } catch (error) {
       if (
@@ -1069,8 +1157,29 @@ export function createScheduledOboGrantService(deps: GrantDeps): ScheduledOboGra
       const escaped = scheduleId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       await tokens.deleteTokens({
         userId,
-        identifier: new RegExp(`^mcp:schedule-obo:${escaped}:`),
+        identifier: new RegExp(`^scheduled-mcp:schedule-obo:${escaped}:`),
       });
+      const legacyIdentifiers = (await tokens.listScheduledOboGrantIdentifiers(userId)).filter(
+        (identifier) => identifier.startsWith(`mcp:schedule-obo:${scheduleId}:`),
+      );
+      for (const identifier of legacyIdentifiers) {
+        const key = identifier.slice('mcp:'.length, -':refresh'.length);
+        const release = await deps.tokenStorage.beginRefreshTeardown(userId, key);
+        try {
+          const lease = await deps.flowManager.acquireLease(getMCPOAuthLeaseId(userId, key), {
+            advanceGeneration: true,
+          });
+          if (!lease) throw new Error('Legacy scheduled OBO cleanup is in progress');
+          try {
+            const generation = await legacyGrant(userId, key);
+            if (generation) await deleteLegacyGrant(userId, key, generation);
+          } finally {
+            await lease.release();
+          }
+        } finally {
+          release();
+        }
+      }
       return await afterPurge?.();
     } finally {
       await lease.release();

@@ -1,5 +1,6 @@
 import { Keyv } from 'keyv';
 import jwt from 'jsonwebtoken';
+import { createHmac } from 'node:crypto';
 import { AgentCapabilities, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type { AppConfig, IUser } from '@librechat/data-schemas';
 import type { Response } from 'express';
@@ -12,11 +13,15 @@ import {
   MockKeyv,
   createOAuthMCPServer,
 } from '../mcp/__tests__/helpers/oauthTestServer';
+import {
+  MCPTokenStorage,
+  getMCPOAuthLeaseId,
+  getMCPOAuthRefreshFlightLeaseId,
+} from '../mcp/oauth/tokens';
 import { createScheduledOboGrantService, createLazyScheduledOboGrantService } from './obo';
 import { OboTokenResolutionError, resolveOboToken } from '../mcp/oauth/obo';
 import { createScheduleMCPPreflight, ScheduleMCPError } from './mcp';
 import { MCPConnectionFactory } from '../mcp/MCPConnectionFactory';
-import { MCPTokenStorage } from '../mcp/oauth/tokens';
 import { resolveScheduledOboServer } from './target';
 import { FlowStateManager } from '../flow/manager';
 import { MCPConnection } from '../mcp/connection';
@@ -108,6 +113,7 @@ function harness(
   let invocationAllowed = true;
   const authorizeInvocation = jest.fn(async () => invocationAllowed);
   const deps = {
+    previewKey: 'test-only-preview-key',
     ...(installAuthority && { authorizeInvocation }),
     tokens: tokenStore,
     tokenStorage,
@@ -198,7 +204,83 @@ function harness(
   };
 }
 
+function binding(url = config.url!, scopes = target.scopes, revision = 1): string {
+  return createHmac('sha256', 'test-only-preview-key')
+    .update(
+      JSON.stringify([
+        'scheduled-obo-preview-v1',
+        user.id,
+        user.tenantId,
+        context.scheduleId,
+        context.agentId,
+        revision,
+        'Files',
+        url,
+        scopes,
+      ]),
+    )
+    .digest('hex');
+}
+
 describe('separately authorized scheduled OBO grants', () => {
+  it('keeps decrypted URL variables out of the preview while binding enrollment to their value', async () => {
+    const { service, row, setServer, setVariables } = harness();
+    setServer({
+      ...config,
+      url: 'https://mcp.test/{{KEY}}?key={{KEY}}',
+      customUserVars: { KEY: { title: 'Key', description: 'Credential', sensitive: true } },
+    });
+    setVariables({ KEY: 'private-provider-key' });
+    const response = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    await service.describeFromRequest(
+      { user, params: { id: row.id, server: 'Files' } } as unknown as ServerRequest,
+      response as unknown as Response,
+    );
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({ server: 'Files' }));
+    expect(JSON.stringify(response.json.mock.calls)).not.toContain('private-provider-key');
+    const preview = response.json.mock.calls[0][0];
+    expect(preview.binding).toMatch(/^[a-f0-9]{64}$/);
+    await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, preview.binding);
+    setVariables({ KEY: 'changed-provider-key' });
+    await expect(
+      service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, preview.binding),
+    ).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
+  });
+
+  it('preserves ordinary OAuth credentials for a previously valid scheduled-looking server name', async () => {
+    const { tokenStore, flow } = harness();
+    const ordinary = {
+      userId: user.id,
+      serverName: 'schedule-obo:existing:Files',
+      findToken: tokenStore.findToken,
+      createToken: tokenStore.createToken,
+      updateToken: tokenStore.updateToken,
+      deleteTokens: tokenStore.deleteTokens,
+      flowManager: flow,
+    };
+    await MCPTokenStorage.storeTokens({
+      ...ordinary,
+      tokens: {
+        access_token: 'ordinary-access',
+        refresh_token: 'ordinary-refresh',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      },
+      clientInfo: { client_id: 'ordinary-client' },
+      metadata: {
+        server_url: 'https://ordinary.test/mcp',
+        token_endpoint: 'https://ordinary.test/token',
+        client_source: 'configured',
+      },
+    });
+    await expect(MCPTokenStorage.getTokens(ordinary)).resolves.toMatchObject({
+      access_token: 'ordinary-access',
+    });
+    await expect(
+      MCPTokenStorage.hasStoredAuthorization({ ...ordinary, validateClientBinding: jest.fn() }),
+    ).resolves.toBe(true);
+  });
+
   it('does not let a server allowlist activate enrollment or a provider without invocation authority', async () => {
     const { service, row, requestGrant, tokenStore, inspect } = harness(MCPTokenStorage, false);
     expect(service.isAvailable()).toBe(false);
@@ -277,57 +359,163 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(requestGrant).toHaveBeenCalledTimes(1);
   });
 
-  it('does not expose a retained scheduled grant through an ordinary OAuth lookup', async () => {
+  it('isolates scheduled grants while an ordinary OAuth server has the same logical name', async () => {
     const { service, row, tokenStore, flow, deps } = harness();
     await service.enroll(user.id, row.id, 'Files', 'assertion');
     const locked = createScheduledOboGrantService({ ...deps, authorizeInvocation: undefined });
-    await expect(locked.resolve(user, { context, target })).resolves.toBeUndefined();
-    await expect(
-      MCPTokenStorage.getTokens({
-        userId: user.id,
-        serverName: 'schedule-obo:sched-1:Files',
-        findToken: tokenStore.findToken,
-        flowManager: flow,
-      }),
-    ).rejects.toMatchObject({ name: 'ReauthenticationRequiredError', reason: 'binding' });
     const ordinary = {
       userId: user.id,
       serverName: 'schedule-obo:sched-1:Files',
       findToken: tokenStore.findToken,
+      createToken: tokenStore.createToken,
+      updateToken: tokenStore.updateToken,
+      deleteTokens: tokenStore.deleteTokens,
       flowManager: flow,
     };
-    await expect(MCPTokenStorage.getClientInfoAndMetadata(ordinary)).rejects.toMatchObject({
-      reason: 'binding',
-    });
-    await expect(MCPTokenStorage.forceRefreshTokens(ordinary)).rejects.toMatchObject({
-      reason: 'binding',
-    });
+    await expect(MCPTokenStorage.getTokens(ordinary)).rejects.toMatchObject({ reason: 'missing' });
+    await expect(MCPTokenStorage.getClientInfoAndMetadata(ordinary)).resolves.toBeNull();
     const validateClientBinding = jest.fn();
     await expect(
       MCPTokenStorage.hasStoredAuthorization({ ...ordinary, validateClientBinding }),
     ).resolves.toBe(false);
     expect(validateClientBinding).not.toHaveBeenCalled();
+    await MCPTokenStorage.storeTokens({
+      ...ordinary,
+      tokens: {
+        access_token: 'ordinary',
+        refresh_token: 'ordinary-refresh',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      },
+      clientInfo: { client_id: 'ordinary-client' },
+      metadata: {
+        server_url: 'https://ordinary.test/mcp',
+        token_endpoint: 'https://ordinary.test/token',
+        client_source: 'configured',
+      },
+    });
+    const refreshTokens = jest.fn(async () => ({
+      obtained_at: Date.now(),
+      access_token: 'ordinary-renewed',
+      refresh_token: 'ordinary-rotated',
+      expires_at: Date.now() + 3600_000,
+      token_type: 'Bearer',
+    }));
     await expect(
-      MCPTokenStorage.isCurrentAccessToken({
-        ...ordinary,
-        accessToken: 'first',
-        credentialSetId: 'caller-generation',
-      }),
-    ).resolves.toBe(false);
+      MCPTokenStorage.forceRefreshTokens({ ...ordinary, refreshTokens, coordinateRefresh: true }),
+    ).resolves.toMatchObject({ access_token: 'ordinary-renewed' });
+    expect(refreshTokens).toHaveBeenCalledWith(
+      'ordinary-refresh',
+      expect.objectContaining({ clientInfo: { client_id: 'ordinary-client' } }),
+      expect.any(AbortSignal),
+    );
+    await expect(MCPTokenStorage.getClientInfoAndMetadata(ordinary)).resolves.toMatchObject({
+      clientInfo: { client_id: 'ordinary-client' },
+      clientMetadata: {
+        server_url: 'https://ordinary.test/mcp',
+        token_endpoint: 'https://ordinary.test/token',
+        client_source: 'configured',
+      },
+    });
     await expect(
-      MCPTokenStorage.storeTokens({
-        ...ordinary,
-        tokens: { access_token: 'replacement', token_type: 'Bearer', expires_in: 3600 },
-        createToken: tokenStore.createToken,
-      }),
-    ).rejects.toMatchObject({ reason: 'binding' });
-    await expect(
-      MCPTokenStorage.deleteUserTokens({ ...ordinary, deleteToken: tokenStore.deleteToken }),
-    ).rejects.toMatchObject({ reason: 'binding' });
+      MCPTokenStorage.hasStoredAuthorization({ ...ordinary, validateClientBinding }),
+    ).resolves.toBe(true);
+    await MCPTokenStorage.deleteUserTokens({ ...ordinary, deleteToken: tokenStore.deleteToken });
     expect(tokenStore.getAll()).toHaveLength(3);
+    await expect(locked.resolve(user, { context, target })).resolves.toBeUndefined();
     await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
     await locked.revoke(user.id, row.id, 'Files');
     expect(tokenStore.getAll()).toEqual([]);
+  });
+
+  it.each(['revoke', 'purge'] as const)(
+    'keeps legacy grants safely cleanable with %s while preserving an ordinary prefix server',
+    async (operation) => {
+      const { service, row, tokenStore, deps } = harness();
+      await service.enroll(user.id, row.id, 'Files', 'assertion');
+      for (const record of tokenStore.getAll()) {
+        await tokenStore.updateToken(
+          { userId: user.id, type: record.type, identifier: record.identifier },
+          { identifier: record.identifier.replace('scheduled-mcp:', 'mcp:') },
+        );
+      }
+      const ordinary = {
+        userId: user.id,
+        serverName: 'schedule-obo:sched-1:Other',
+        findToken: tokenStore.findToken,
+        createToken: tokenStore.createToken,
+      };
+      await MCPTokenStorage.storeTokens({
+        ...ordinary,
+        tokens: {
+          access_token: 'ordinary',
+          refresh_token: 'ordinary-refresh',
+          token_type: 'Bearer',
+          expires_in: 3600,
+        },
+        clientInfo: { client_id: 'ordinary-client' },
+      });
+      const locked = createScheduledOboGrantService({ ...deps, authorizeInvocation: undefined });
+      await expect(locked.listEnrolled(user.id)).resolves.toEqual({ 'sched-1': ['Files'] });
+      if (operation === 'revoke') await locked.revoke(user.id, row.id, 'Files');
+      else await locked.purge(user.id, row.id);
+      await expect(MCPTokenStorage.getTokens(ordinary)).resolves.toMatchObject({
+        access_token: 'ordinary',
+      });
+      await expect(locked.listEnrolled(user.id)).resolves.toEqual({});
+      expect(tokenStore.getAll()).toHaveLength(3);
+    },
+  );
+
+  it('keeps purpose-specific persistence, redemption and teardown fences separate', async () => {
+    const key = 'schedule-obo:sched-1:Files';
+    expect(getMCPOAuthLeaseId(user.id, key, 'tenant', true)).not.toBe(
+      getMCPOAuthLeaseId(user.id, key, 'tenant'),
+    );
+    expect(getMCPOAuthRefreshFlightLeaseId(user.id, key, 'tenant', true)).not.toBe(
+      getMCPOAuthRefreshFlightLeaseId(user.id, key, 'tenant'),
+    );
+    const release = await MCPTokenStorage.beginRefreshTeardown(user.id, key, true);
+    try {
+      expect(MCPTokenStorage.isRefreshTeardownActive(user.id, key, 'tenant', true)).toBe(true);
+      expect(MCPTokenStorage.isRefreshTeardownActive(user.id, key, 'tenant')).toBe(false);
+    } finally {
+      release();
+    }
+  });
+
+  it('keeps legacy pre-release OBO metadata unavailable to ordinary colliding servers', async () => {
+    const { tokenStore } = harness();
+    const params = {
+      userId: user.id,
+      serverName: 'schedule-obo:sched-1:Files',
+      findToken: tokenStore.findToken,
+      createToken: tokenStore.createToken,
+    };
+    await MCPTokenStorage.storeTokens({
+      ...params,
+      tokens: {
+        access_token: 'legacy-internal',
+        refresh_token: 'legacy-refresh',
+        token_type: 'Bearer',
+        expires_in: 3600,
+      },
+      clientInfo: { client_id: 'client' },
+      metadata: Object.assign(
+        { server_url: config.url! },
+        { openid_subject: user.openidId, openid_issuer: user.openidIssuer },
+      ),
+    });
+    await expect(MCPTokenStorage.getTokens(params)).rejects.toMatchObject({ reason: 'binding' });
+    await expect(MCPTokenStorage.forceRefreshTokens(params)).rejects.toMatchObject({
+      reason: 'binding',
+    });
+    await expect(MCPTokenStorage.getClientInfoAndMetadata(params)).rejects.toMatchObject({
+      reason: 'binding',
+    });
+    await expect(
+      MCPTokenStorage.hasStoredAuthorization({ ...params, validateClientBinding: jest.fn() }),
+    ).resolves.toBe(false);
   });
 
   it.each([
@@ -653,7 +841,7 @@ describe('separately authorized scheduled OBO grants', () => {
     const request = {
       user,
       params: { id: 'sched-1', server: 'Files' },
-      body: { expectedScopes: 'api://resource/Read', expectedUrl: config.url },
+      body: { expectedScopes: 'api://resource/Read', expectedBinding: binding() },
       session: {
         openidTokens: {
           appUserId: 'owner',
@@ -671,6 +859,7 @@ describe('separately authorized scheduled OBO grants', () => {
       server: 'Files',
       scopes: 'api://resource/Read',
       url: config.url,
+      binding: binding(),
     });
     await service.enrollFromRequest(request, response);
     expect(response.status).toHaveBeenCalledWith(204);
@@ -700,7 +889,7 @@ describe('separately authorized scheduled OBO grants', () => {
     const request = {
       user,
       params: { id: context.scheduleId, server: target.mcpServer },
-      body: { expectedScopes: target.scopes, expectedUrl: config.url },
+      body: { expectedScopes: target.scopes, expectedBinding: binding() },
       session: {
         openidTokens: {
           appUserId: user.id,
@@ -769,7 +958,7 @@ describe('separately authorized scheduled OBO grants', () => {
     const request = {
       user,
       params: { id: context.scheduleId, server: 'Files' },
-      body: { expectedScopes: target.scopes, expectedUrl: config.url },
+      body: { expectedScopes: target.scopes, expectedBinding: binding() },
       session: {
         openidTokens: {
           appUserId: user.id,
@@ -786,6 +975,7 @@ describe('separately authorized scheduled OBO grants', () => {
       server: 'Files',
       scopes: target.scopes,
       url: config.url,
+      binding: binding(),
     });
     setServer({ ...config, url: 'https://other-mcp.test/tools' });
     await service.enrollFromRequest(request, response);
@@ -794,7 +984,7 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(tokenStore.getAll()).toEqual([]);
 
     setServer(config);
-    Object.assign(request.body, { expectedUrl: undefined });
+    Object.assign(request.body, { expectedBinding: undefined });
     await service.enrollFromRequest(request, response);
     expect(response.status).toHaveBeenLastCalledWith(400);
     expect(requestGrant).not.toHaveBeenCalled();
@@ -807,7 +997,7 @@ describe('separately authorized scheduled OBO grants', () => {
       return { access_token: 'received', refresh_token: 'grant', expires_in: 3600 };
     });
     await expect(
-      service.enroll(user.id, context.scheduleId, 'Files', 'assertion', target.scopes, config.url!),
+      service.enroll(user.id, context.scheduleId, 'Files', 'assertion', target.scopes, binding()),
     ).rejects.toMatchObject({ reason: 'missing_upstream_provider' });
     expect(tokenStore.getAll()).toEqual([]);
   });
@@ -1038,7 +1228,14 @@ describe('separately authorized scheduled OBO grants', () => {
     const replacement = { ...config, url: 'https://replacement.test/mcp' };
     setServer(original);
     try {
-      await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, original.url);
+      await service.enroll(
+        user.id,
+        row.id,
+        'Files',
+        'assertion',
+        target.scopes,
+        binding(original.url),
+      );
       row.enabled = true;
       requestGrant.mockResolvedValue({
         access_token: 'replacement-only',
@@ -1053,7 +1250,7 @@ describe('separately authorized scheduled OBO grants', () => {
           'Files',
           'new-assertion',
           target.scopes,
-          replacement.url,
+          binding(replacement.url),
         );
         mcp.issuedTokens.add('replacement-only');
         mcp.tokenIssueTimes.set('replacement-only', Date.now());
@@ -1302,9 +1499,10 @@ describe('separately authorized scheduled OBO grants', () => {
     expect(response.json).toHaveBeenCalledWith({
       server: 'Files',
       scopes: target.scopes,
-      url: resolved,
+      url: 'https://mcp.test/[redacted]/owner',
+      binding: binding(resolved),
     });
-    await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, resolved);
+    await service.enroll(user.id, row.id, 'Files', 'assertion', target.scopes, binding(resolved));
     const provider = (await service.resolve(user, {
       context,
       target: { ...target, url: resolved },

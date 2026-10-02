@@ -53,3 +53,35 @@ it('preserves remote WebSocket URL resolution and denies malformed URLs as missi
     'no supported unattended destination',
   );
 });
+
+it.each([undefined, true])(
+  'redacts sensitive custom variables by default, including hostname and path (%s)',
+  (sensitive) => {
+    const resolved = resolveScheduledOboServer(
+      {
+        ...server,
+        url: 'https://{{KEY}}.example.test/{{KEY}}?secret=static-key#static-secret',
+        customUserVars: { KEY: { title: 'Key', description: 'Credential', sensitive } },
+      },
+      user,
+      { KEY: 'private-value' },
+      true,
+    );
+    expect(resolved.url).toContain('private-value');
+    expect(resolved.displayUrl).not.toContain('private-value');
+    expect(resolved.displayUrl).not.toContain('static-key');
+    expect(resolved.displayUrl).not.toContain('static-secret');
+  },
+);
+it('retains explicitly non-sensitive routing values in the display URL', () => {
+  const resolved = resolveScheduledOboServer(
+    {
+      ...server,
+      customUserVars: { REGION: { title: 'Region', description: 'Region', sensitive: false } },
+    },
+    user,
+    { REGION: 'europe' },
+    true,
+  );
+  expect(resolved.displayUrl).toBe(resolved.url);
+});

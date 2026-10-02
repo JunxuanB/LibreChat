@@ -24,6 +24,7 @@ const requestGrant = createSignalBoundGrantRequest({
 // No authorizeInvocation adapter is installed until delegated consent/read-only gates pass.
 module.exports = createLazyScheduledOboGrantService(() =>
   createScheduledOboGrantService({
+    previewKey: process.env.CREDS_KEY,
     tokenStorage: MCPTokenStorage,
     tokens: {
       findToken: methods.findToken,

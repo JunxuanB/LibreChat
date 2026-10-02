@@ -1352,9 +1352,9 @@ export function authorizeScheduledObo(
   id: string,
   server: string,
   expectedScopes: string,
-  expectedUrl: string,
+  expectedBinding: string,
 ): Promise<void> {
-  return request.post(endpoints.scheduledObo(id, server), { expectedScopes, expectedUrl });
+  return request.post(endpoints.scheduledObo(id, server), { expectedScopes, expectedBinding });
 }
 
 export function revokeScheduledObo(id: string, server: string): Promise<void> {

@@ -10,7 +10,8 @@ export function resolveScheduledOboServer(
   server: ParsedServerConfig,
   user: IUser,
   customUserVars?: Record<string, string>,
-): ParsedServerConfig {
+  preview = false,
+): ParsedServerConfig & { displayUrl?: string } {
   if (
     !server.url ||
     /\{\{LIBRECHAT_(?:BODY_|OPENID_|GRAPH_)/.test(server.url) ||
@@ -48,5 +49,23 @@ export function resolveScheduledOboServer(
       'missing_upstream_provider',
       'This server has no supported unattended destination.',
     );
-  return { ...server, url: resolved.url };
+  if (!preview) return { ...server, url: resolved.url };
+  const displayVariables = Object.fromEntries(
+    Object.entries(customUserVars ?? {}).map(([name, value]) => [
+      name,
+      server.customUserVars?.[name]?.sensitive === false ? value : '[redacted]',
+    ]),
+  );
+  const display = processMCPEnv({
+    options: {
+      type: 'streamable-http',
+      url: server.url.replace(/\$\{[^}]+\}/g, '[redacted]'),
+      dbId: server.dbId,
+      source: server.source,
+    },
+    user,
+    customUserVars: displayVariables,
+  });
+  const displayUrl = 'url' in display ? display.url.replace(/[?#].*$/, '[redacted]') : '[redacted]';
+  return { ...server, url: resolved.url, displayUrl };
 }

@@ -77,6 +77,7 @@ describe('saved schedule OBO grant actions', () => {
       server: 'Files',
       scopes: 'api://files/Read',
       url: 'https://mcp.example.test',
+      binding: 'opaque-preview-binding',
     });
   });
 
@@ -97,7 +98,7 @@ describe('saved schedule OBO grant actions', () => {
         id: 'sched-1',
         server: 'Files',
         expectedScopes: 'api://files/Read',
-        expectedUrl: 'https://mcp.example.test',
+        expectedBinding: 'opaque-preview-binding',
       }),
     );
   });

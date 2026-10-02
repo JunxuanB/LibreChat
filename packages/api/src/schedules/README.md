@@ -52,12 +52,11 @@ closed even if `interface.schedules.oboServers` names a server. The schedule lis
 omits enrollment controls; previously stored grants remain listable, revocable
 and deletable. Configuration alone cannot satisfy the authority release gate.
 
-The `schedule-obo:` credential-key prefix is reserved for this internal grant
-lifecycle, not a YAML/user MCP server name. Shared storage requires the trusted
-scheduled-grant purpose for reads, refreshes, client metadata and writes;
-ordinary OAuth cannot consume retained grants, including older records with the
-same persistence format. Scheduled revoke/purge use the explicit purpose and
-remain available while invocation authority is absent.
+Scheduled credentials use a separate `scheduled-mcp:` persisted namespace and
+purpose-specific refresh/teardown leases. Ordinary MCP server names, including
+`schedule-obo:` names, remain valid. Older pre-release OBO records are identified
+by their owner/issuer-bound metadata, denied to ordinary OAuth and retained for
+revocation/deletion. They require explicit re-enrollment before use.
 
 A host may supply `authorizeInvocation(user, context, target)` only when it
 implements current enrolled-agent/resource consent, absolute consent expiry and
@@ -77,8 +76,10 @@ those scopes plus `offline_access`. A checked permission alone does not mint one
 
 For an authorized host, create the schedule paused using the dialog's OBO setup checkbox.
 While signed in with a current OpenID session, click **Authorize offline** on
-the saved card for the exact named server. Confirm the displayed scopes and MCP
-URL; the POST refuses enrollment if either changed after the preview. It uses the
+the saved card for the exact named server. Confirm the displayed scopes and redacted MCP
+URL. A keyed opaque fingerprint binds the owner, tenant, schedule revision, root
+agent, server, resolved URL and scopes; the POST rejects changes before exchange
+and persistence. Decrypted custom variables never enter the preview response. It uses the
 live user access token once as an OBO assertion. It saves only the encrypted downstream OBO
 refresh grant under the owner, schedule id and server name. It never persists
 the browser login refresh token, and does not present a downstream token as an
@@ -120,8 +121,9 @@ use **Revoke offline access** or delete the schedule to withdraw it.
 Preview, enrollment and use resolve the operator-owned URL through the same
 user/custom-variable rules as MCP runtime. A request/session-dependent URL cannot
 be a durable unattended grant target. Changing a custom variable or endpoint
-requires another preview and enrollment. Existing literal-URL grants keep their
-stored format; previously enrolled raw-template URLs must be reauthorized.
+requires another preview and enrollment. The persisted grant binds the actual resolved destination, not the redacted
+display URL. Raw-template and pre-release shared-namespace grants must be
+reauthorized.
 
 Provider responses that explicitly list scopes must contain all required MCP
 resource scopes. An omitted scope retains the requested scope per OAuth; it is

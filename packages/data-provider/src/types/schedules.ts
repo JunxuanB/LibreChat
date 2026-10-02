@@ -186,7 +186,7 @@ export type TScheduleLimits = {
   oboServers?: string[];
 };
 
-export type TScheduledOboTarget = { server: string; url: string; scopes: string };
+export type TScheduledOboTarget = { server: string; url: string; scopes: string; binding: string };
 
 export type TSchedulesResponse = {
   schedules: TSchedule[];
