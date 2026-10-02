@@ -136,7 +136,7 @@ async function sendAssertion(
   );
   expect(response.ok()).toBeTruthy();
 
-  const conversationId = /\/c\/([^/]+)/.exec(page.url())?.[1];
+  const conversationId = /\/c\/([^/?#]+)/.exec(page.url())?.[1];
   expect(conversationId, 'conversation should have a persisted id').toBeTruthy();
   cleanupConversationIds.push(conversationId as string);
 
