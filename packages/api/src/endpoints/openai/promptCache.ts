@@ -11,33 +11,6 @@ import { canonicalize } from '~/utils/canonicalize';
 export const PROMPT_CACHE_KEY_VERSION = 4;
 
 /**
- * Models that accept the GPT-5.6 explicit cache controls the agents SDK emits
- * (`prompt_cache_options`, `prompt_cache_breakpoint`). OpenAI rejects unknown
- * body parameters outright, so a model outside this set must never receive
- * them. GPT-6 Astra shares GPT-5.6's managed-request surface; the rest of the
- * GPT-6 family does not, so the pattern names Astra rather than the
- * generation.
- *
- * The dash form matches Azure deployment names, which cannot contain a dot.
- */
-const explicitPromptCachePattern = /\bgpt-(?:5[.-]6|6-astra)\b/i;
-
-export function supportsExplicitPromptCache(model?: string | null): boolean {
-  return typeof model === 'string' && explicitPromptCachePattern.test(model);
-}
-
-/**
- * Whether a name identifies an OpenAI model family at all. An Azure deployment
- * name is an administrator's label: one that names a family can veto explicit
- * caching, but an opaque one proves nothing about the model behind it.
- */
-const openAIModelNamePattern = /\b(?:(?:chat)?gpt-\d|o\d+\b|codex\b)/i;
-
-export function namesOpenAIModel(name?: string | null): boolean {
-  return typeof name === 'string' && openAIModelNamePattern.test(name);
-}
-
-/**
  * Everything a projection needs that is not the value itself.
  */
 interface PromptCacheProjectionContext {

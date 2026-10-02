@@ -96,11 +96,6 @@ import {
   isSteerTerminalContinuationSupported,
 } from '~/agents/steering/runtime';
 import {
-  buildPromptCacheKey,
-  PROMPT_CACHE_MARKER_FIELDS,
-  supportsExplicitPromptCache,
-} from '~/endpoints/openai/promptCache';
-import {
   resolveToolApprovalPolicy,
   healToolApprovalPolicy,
   exemptAskUserQuestionFromApproval,
@@ -115,6 +110,7 @@ import {
   isRunFileSharingSupported,
 } from './files/runtime';
 import { applyCustomHandoffPromptKeyCompatibility } from '~/agents/handoffPromptKeyCompatibility';
+import { buildPromptCacheKey, PROMPT_CACHE_MARKER_FIELDS } from '~/endpoints/openai/promptCache';
 import { stripIntentFromToolRegistry, stripIntentFromToolDefinitions } from '~/agents/intent';
 import { resolveConfigHeaders, resolveModelHeaders, mergeHeaders } from '~/utils/headers';
 import { extractDefaultParams, resolveReasoningParams } from '~/endpoints/openai/llm';
@@ -1489,7 +1485,6 @@ function shapeSummarizationConfig(
     | {
         promptCacheKeyEnabled?: boolean;
         promptCacheKey?: string;
-        promptCacheExplicit?: boolean;
         modelKwargs?: Record<string, unknown>;
       }
     | undefined;
@@ -1539,73 +1534,6 @@ function shapeSummarizationConfig(
           prompt_cache_key: undefined,
         },
       };
-    }
-  }
-  /**
-   * The explicit cache controls are model-gated, and that gate ran against the
-   * agent's model. A same-provider summarizer that selects another model
-   * inherits the flag without passing the gate, and OpenAI rejects unknown
-   * body parameters outright rather than ignoring them — so an unsupported
-   * summary model has it withheld, unless the summarization config asked for
-   * it itself.
-   *
-   * Decided by the deployment the summary request addresses whenever it has
-   * one: on Azure an alias such as `production-chat` can front a supported
-   * deployment, and it can equally front an unsupported one, so the override
-   * has to be able to veto as well as to permit — the same precedence
-   * `applyExplicitPromptCache` uses. `resolveAzureSummarization` puts the
-   * resolved deployment on `modelKwargs.model`, which is what the wire sends.
-   */
-  const summaryWireModel = isPlainObject(parameters?.modelKwargs)
-    ? parameters.modelKwargs.model
-    : undefined;
-  const summarySupportsExplicitCache =
-    typeof summaryWireModel === 'string'
-      ? supportsExplicitPromptCache(summaryWireModel)
-      : supportsExplicitPromptCache(model);
-  /**
-   * Model capability, not inheritance. The block below clears an inherited
-   * value and one the summarization config set for itself, and only the
-   * inherited half depends on the summarizer sharing the agent's provider —
-   * `inheritedKwargs` is already undefined otherwise. Gating the whole check
-   * on a provider match let an Anthropic or Google agent select a built-in
-   * OpenAI summarizer, set `promptCacheExplicit` in its own parameters, and
-   * send the explicit controls to a model that rejects unknown body fields
-   * outright, failing the compaction this gate exists to protect.
-   */
-  if (!summarySupportsExplicitCache) {
-    /**
-     * Regardless of who asked for it. This is not a preference the
-     * summarization configuration can outvote: a model that does not accept
-     * the explicit controls rejects the request outright, so a value set for
-     * such a model is a misconfiguration rather than a choice, and a failed
-     * compaction is a worse outcome than caching less.
-     */
-    if (
-      agentParameters?.promptCacheExplicit === true ||
-      userParameters?.promptCacheExplicit != null
-    ) {
-      parameters = { ...parameters, promptCacheExplicit: undefined };
-    }
-    /**
-     * And in the wire spellings, which `addParams` can set on either side:
-     * the agent's request kwargs are inherited whole and the summarization
-     * config can add its own, and neither passes the field above. Only the
-     * two explicit controls — the retention beside them is independently
-     * supported and independently configured, and this gate says nothing
-     * about it.
-     */
-    const unsupportedExplicitFields = (
-      ['prompt_cache_options', 'prompt_cache_breakpoint'] as const
-    ).filter((field) => inheritedKwargs?.[field] != null || ownKwargs?.[field] != null);
-    if (unsupportedExplicitFields.length > 0) {
-      const summaryKwargs = isPlainObject(parameters?.modelKwargs)
-        ? { ...parameters.modelKwargs }
-        : {};
-      for (const field of unsupportedExplicitFields) {
-        summaryKwargs[field] = undefined;
-      }
-      parameters = { ...parameters, modelKwargs: summaryKwargs };
     }
   }
 

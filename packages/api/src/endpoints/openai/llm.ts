@@ -19,10 +19,7 @@ import {
   PROMPT_CACHE_LEVERS,
   PROMPT_CACHE_KEY_LEVER,
   PROMPT_CACHE_RETENTION_LEVER,
-  PROMPT_CACHE_EXPLICIT_LEVER,
   isPromptCacheLeverDropped,
-  supportsExplicitPromptCache,
-  namesOpenAIModel,
 } from './promptCache';
 import {
   sanitizeModelName,
@@ -665,7 +662,6 @@ export function getOpenAILLMConfig({
   promptCacheKeyEnabled,
   promptCacheScope,
   promptCacheRetention,
-  promptCacheExplicit,
   reasoningFormat = ReasoningParameterFormat.reasoningEffort,
   modelOptions: _modelOptions,
 }: {
@@ -682,7 +678,6 @@ export function getOpenAILLMConfig({
   promptCacheKeyEnabled?: boolean;
   promptCacheScope?: t.OpenAIPromptCacheScope;
   promptCacheRetention?: t.OpenAIPromptCacheRetention;
-  promptCacheExplicit?: boolean;
   azure?: false | t.AzureOptions;
 }): Pick<t.LLMConfigResult, 'llmConfig' | 'tools'> & {
   azure?: t.AzureOptions;
@@ -1137,114 +1132,6 @@ export function getOpenAILLMConfig({
     delete modelKwargs.prompt_cache_retention;
   }
   /**
-   * The explicit controls get the same promotion. A raw `prompt_cache_options`
-   * left in the kwargs reaches the wire without the breakpoints, which the SDK
-   * adds only for the constructor field, and an endpoint-wide `true` replaces
-   * it anyway. Presence opts in unless its `mode` names something else.
-   */
-  if (firstPartyEndpoint) {
-    for (const name of PROMPT_CACHE_EXPLICIT_LEVER.wire) {
-      const value = modelKwargs[name];
-      if (value == null) {
-        continue;
-      }
-      const mode = (value as { mode?: unknown }).mode;
-      llmConfig.promptCacheExplicit = typeof mode !== 'string' || mode === 'explicit';
-      delete modelKwargs[name];
-    }
-  }
-  /**
-   * Explicit cache controls require a model that accepts them, because OpenAI
-   * rejects unknown body parameters outright rather than ignoring them. The
-   * decision is deferred to `applyExplicitPromptCache` below, once the wire
-   * identity is final: on Azure the served model is the deployment, and which
-   * deployment that is depends on `AZURE_USE_MODEL_AS_DEPLOYMENT_NAME` and the
-   * base URL, neither of which is resolved yet here.
-   */
-  /** Either spelling disables it: the raw names are what OpenAI's own docs use. */
-  const promptCacheExplicitDropped = isPromptCacheLeverDropped(
-    PROMPT_CACHE_EXPLICIT_LEVER,
-    dropParams,
-  );
-  const applyExplicitPromptCache = (deploymentName?: string) => {
-    /**
-     * Every name the request can address. `modelKwargs.model` overrides the
-     * visible one on the wire — the digest already keys on it — so a supported
-     * visible model fronting an unsupported override must not pass this gate,
-     * and a deployment alias fronting a supported one must.
-     */
-    const wireModel = (llmConfig.modelKwargs as { model?: unknown } | undefined)?.model;
-    /**
-     * By precedence, not by agreement: each name decides alone when it is
-     * present, and only then does the next one get a say. The `modelKwargs`
-     * override is the model the request addresses, so it comes first,
-     * permitting a supported deployment behind an unsupported visible name
-     * and vetoing the reverse. An Azure deployment name that names a model is
-     * next, because it is what the URL addresses while the visible model is a
-     * label over it. The visible model decides when there is no deployment, or
-     * when the deployment is an opaque label such as `production-chat` that
-     * says nothing about the model it serves.
-     *
-     * Asking whether *any* of them looks supported is what this must not do:
-     * a supported-looking alias over a `gpt-4o` deployment would send body
-     * parameters that deployment rejects outright.
-     */
-    const resolveExplicitSupport = (): boolean => {
-      if (typeof wireModel === 'string') {
-        return supportsExplicitPromptCache(wireModel);
-      }
-      if (namesOpenAIModel(deploymentName)) {
-        return supportsExplicitPromptCache(deploymentName);
-      }
-      return supportsExplicitPromptCache(llmConfig.model);
-    };
-    const supported = resolveExplicitSupport();
-    /**
-     * A default, like retention: `addParams` is the most specific layer, so a
-     * model group that opted out of explicit breakpoints keeps its own value
-     * rather than having the endpoint's turn them back on.
-     */
-    const explicitSuppliedByParams = typeof llmConfig.promptCacheExplicit === 'boolean';
-    if (
-      firstPartyEndpoint &&
-      promptCacheExplicit === true &&
-      supported &&
-      !promptCacheExplicitDropped &&
-      !explicitSuppliedByParams
-    ) {
-      llmConfig.promptCacheExplicit = true;
-      return;
-    }
-    if (
-      firstPartyEndpoint &&
-      explicitSuppliedByParams &&
-      supported &&
-      !promptCacheExplicitDropped
-    ) {
-      return;
-    }
-    /**
-     * `promptCacheExplicit` is a known parameter, so `addParams` and
-     * `defaultParams` assign it directly and would otherwise reach the wire
-     * without passing this gate. Declining to set it is not enough — on a
-     * surface whose contract we own, an unsupported model has to have it
-     * removed. Running after the drop cascade, this also has to re-honor an
-     * explicit drop rather than reinstate what the cascade removed. A gateway
-     * keeps whatever it is configured with.
-     *
-     * The wire spellings go with it: `addParams` can place
-     * `prompt_cache_options` or `prompt_cache_breakpoint` straight into the
-     * request kwargs, which are forwarded verbatim, so an unsupported model
-     * would be sent the parameters this gate exists to withhold.
-     */
-    if (firstPartyEndpoint && (!supported || promptCacheExplicitDropped)) {
-      delete llmConfig.promptCacheExplicit;
-      delete modelKwargs.prompt_cache_options;
-      delete modelKwargs.prompt_cache_breakpoint;
-    }
-  };
-
-  /**
    * The last word on every lever, after the generic drop cascade has run.
    *
    * The cascade removes the exact name an operator wrote, and by the time it
@@ -1256,8 +1143,7 @@ export function getOpenAILLMConfig({
    * thing in either alphabet no matter which one the value was resolved from.
    * A gateway keeps whatever it is configured with.
    */
-  const finalizePromptCachePolicy = (deploymentName?: string) => {
-    applyExplicitPromptCache(deploymentName);
+  const finalizePromptCachePolicy = () => {
     if (!firstPartyEndpoint) {
       return;
     }
@@ -1431,7 +1317,7 @@ export function getOpenAILLMConfig({
     : azure.azureOpenAIApiDeploymentName ||
       getAzureDeploymentName(baseURL, azure) ||
       (firstPartyResponsesModel || llmConfig.useResponsesApi ? model : undefined);
-  finalizePromptCachePolicy(updatedAzure.azureOpenAIApiDeploymentName);
+  finalizePromptCachePolicy();
 
   if (process.env.AZURE_OPENAI_DEFAULT_MODEL) {
     llmConfig.model = process.env.AZURE_OPENAI_DEFAULT_MODEL;

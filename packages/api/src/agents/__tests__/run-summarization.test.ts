@@ -1467,83 +1467,15 @@ describe('Azure deployment alias', () => {
     },
   );
 
-  it('withholds inherited explicit cache controls when the summary deployment is unsupported', async () => {
-    const { llmConfig, configOptions } = getOpenAIConfig(
-      'test-openai-key',
-      { modelOptions: { model: 'gpt-5.6' }, promptCacheExplicit: true },
-      EModelEndpoint.openAI,
-    );
-    const agents = await callAndCapture({
-      agents: [
-        makeReasoningAgent({
-          provider: EModelEndpoint.openAI,
-          endpoint: EModelEndpoint.openAI,
-          model: 'gpt-5.6',
-          model_parameters: { ...llmConfig, configuration: configOptions },
-        }),
-      ],
-      summarizationConfig: {
-        model: 'gpt-5.6',
-        parameters: { streaming: false, modelKwargs: { model: 'gpt-4o' } } as unknown as Record<
-          string,
-          string | number | boolean | null
-        >,
-      },
-    });
-
-    const summaryConfig = agents[0].summarizationConfig as Record<string, unknown>;
-    const parameters = summaryConfig.parameters as Record<string, unknown>;
-    /** The override is what the request addresses, so it decides — and vetoes. */
-    expect(parameters).toHaveProperty('promptCacheExplicit', undefined);
-  });
-
-  it('withholds explicit cache controls a cross-provider summarizer asked for itself', async () => {
-    /**
-     * An Anthropic agent selecting a built-in OpenAI summarizer does not share
-     * the agent's provider, so the inherited half of this cleanup is empty —
-     * but the model gate is about what `gpt-4o` accepts, not about who the
-     * agent is. Leaving the configuration's own flag on sends body parameters
-     * OpenAI rejects outright, failing the compaction.
-     */
-    const agents = await callAndCapture({
-      agents: [
-        makeAgent({
-          provider: EModelEndpoint.anthropic,
-          endpoint: EModelEndpoint.anthropic,
-          model: 'claude-sonnet-4-5',
-          model_parameters: { model: 'claude-sonnet-4-5' },
-        }),
-      ],
-      summarizationConfig: {
-        provider: EModelEndpoint.openAI,
-        model: 'gpt-4o',
-        parameters: { streaming: false, promptCacheExplicit: true },
-      },
-    });
-
-    const summaryConfig = agents[0].summarizationConfig as Record<string, unknown>;
-    const parameters = summaryConfig.parameters as Record<string, unknown>;
-    expect(parameters).toHaveProperty('promptCacheExplicit', undefined);
-    /**
-     * And nothing of the agent's identity travels with it: a different
-     * provider builds its own client rather than layering over the agent's
-     * options, so there is no inherited key here to clear.
-     */
-    expect(parameters.promptCacheKey).toBeUndefined();
-    const summaryKwargs = (parameters.modelKwargs ?? {}) as Record<string, unknown>;
-    expect(summaryKwargs.prompt_cache_key).toBeUndefined();
-  });
-
-  it('withholds inherited explicit cache controls from an unsupported summary model', async () => {
+  it("withholds the agent's synthesized cache key from a different summary model", async () => {
     const { llmConfig, configOptions } = getOpenAIConfig(
       'test-openai-key',
       {
         modelOptions: { model: 'gpt-5.6' },
-        promptCacheExplicit: true,
       },
       EModelEndpoint.openAI,
     );
-    expect(llmConfig.promptCacheExplicit).toBe(true);
+    expect(llmConfig.promptCacheKeyEnabled).toBe(true);
     const agents = await callAndCapture({
       agents: [
         makeReasoningAgent({
@@ -1558,12 +1490,7 @@ describe('Azure deployment alias', () => {
 
     const summaryConfig = agents[0].summarizationConfig as Record<string, unknown>;
     const parameters = summaryConfig.parameters as Record<string, unknown>;
-    /**
-     * `gpt-4o` rejects the explicit cache body parameters outright, and the
-     * model gate that withheld them ran against the agent's model, not this
-     * one.
-     */
-    expect(parameters).toHaveProperty('promptCacheExplicit', undefined);
+    /** The key names the agent's stable prefix, which a summary request does not send. */
     expect(parameters).toHaveProperty('promptCacheKey', undefined);
   });
 

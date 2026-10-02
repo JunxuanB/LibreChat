@@ -1974,13 +1974,11 @@ describe('prompt caching', () => {
       streaming: true,
       modelOptions: { model: 'gpt-5.6' },
       promptCacheRetention: '24h',
-      promptCacheExplicit: true,
       ...options,
     });
 
     expect(result.llmConfig).not.toHaveProperty('promptCacheKeyEnabled');
     expect(result.llmConfig).not.toHaveProperty('promptCacheRetention');
-    expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
   });
 
   it('honors an administrator opting out of the cache key', () => {
@@ -2169,20 +2167,6 @@ describe('prompt caching', () => {
     expect(kwargs).not.toHaveProperty('prompt_cache_key');
   });
 
-  it('preserves a model group\u2019s explicit-cache opt-out', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
-      addParams: { promptCacheExplicit: false },
-    });
-
-    /** The endpoint value is a default; the group's own is the instruction. */
-    expect(result.llmConfig.promptCacheExplicit).toBe(false);
-  });
-
   it('keeps a group-scoped cache scope off the request body', () => {
     const result = getOpenAILLMConfig({
       apiKey: 'test-api-key',
@@ -2213,60 +2197,13 @@ describe('prompt caching', () => {
     expect(result.llmConfig.promptCacheRetention).toBe('in-memory');
   });
 
-  it('withholds raw explicit controls from a model that rejects them', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-4o' },
-      addParams: { prompt_cache_options: { mode: 'explicit' } },
-    });
-
-    const kwargs = (result.llmConfig.modelKwargs ?? {}) as Record<string, unknown>;
-    /** The kwargs are forwarded verbatim, and gpt-4o rejects unknown parameters. */
-    expect(kwargs).not.toHaveProperty('prompt_cache_options');
-  });
-
-  it.each([
-    ['prompt_cache_options', { mode: 'explicit' }],
-    ['prompt_cache_breakpoint', { mode: 'explicit' }],
-  ])('promotes a model group %s onto the explicit-cache field', (name, value) => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-5.6' },
-      addParams: { [name]: value },
-    });
-
-    const kwargs = (result.llmConfig.modelKwargs ?? {}) as Record<string, unknown>;
-    /** Only the constructor field makes the SDK add the breakpoints as well. */
-    expect(result.llmConfig.promptCacheExplicit).toBe(true);
-    expect(kwargs).not.toHaveProperty(name);
-  });
-
-  it('lets a wire-spelled model group opt out of endpoint explicit caching', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
-      addParams: { prompt_cache_options: { mode: 'implicit' } },
-    });
-
-    const kwargs = (result.llmConfig.modelKwargs ?? {}) as Record<string, unknown>;
-    expect(result.llmConfig.promptCacheExplicit).toBe(false);
-    expect(kwargs).not.toHaveProperty('prompt_cache_options');
-  });
-
   it('honors a wire-spelled explicit-cache drop', () => {
     const result = getOpenAILLMConfig({
       apiKey: 'test-api-key',
       streaming: true,
       endpoint: EModelEndpoint.openAI,
       modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
+      addParams: { promptCacheExplicit: true },
       dropParams: ['prompt_cache_options'],
     });
 
@@ -2384,82 +2321,6 @@ describe('prompt caching', () => {
     expect(fallback).toHaveProperty('model', 'gpt-5.6');
   });
 
-  it('withholds explicit cache controls when the wire override is unsupported', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-5.6', modelKwargs: { model: 'gpt-4o' } } as unknown as Parameters<
-        typeof getOpenAILLMConfig
-      >[0]['modelOptions'],
-      promptCacheExplicit: true,
-    });
-
-    /** `modelKwargs.model` is the model the request addresses, and gpt-4o rejects them. */
-    expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
-  });
-
-  it('lets an unsupported Azure deployment veto a supported visible alias', () => {
-    /**
-     * The deployment is what the URL addresses; the visible model is a label
-     * over it. Asking whether either looks supported would send body
-     * parameters `gpt-4o-prod` rejects outright, and a rejected request is
-     * worse than the caching an opaque deployment name costs.
-     */
-    const result = getOpenAILLMConfig({
-      azure: {
-        azureOpenAIApiInstanceName: 'test-instance',
-        azureOpenAIApiDeploymentName: 'gpt-4o-prod',
-        azureOpenAIApiVersion: '2025-04-01-preview',
-        azureOpenAIApiKey: 'test-api-key',
-      },
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.azureOpenAI,
-      modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
-    });
-
-    expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
-  });
-
-  it('falls back to the visible model when the Azure deployment name names no model', () => {
-    /** An administrator-chosen label proves nothing about what it serves. */
-    const result = getOpenAILLMConfig({
-      azure: {
-        azureOpenAIApiInstanceName: 'test-instance',
-        azureOpenAIApiDeploymentName: 'production-chat',
-        azureOpenAIApiVersion: '2025-04-01-preview',
-        azureOpenAIApiKey: 'test-api-key',
-      },
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.azureOpenAI,
-      modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
-    });
-
-    expect(result.llmConfig.promptCacheExplicit).toBe(true);
-  });
-
-  it('lets a supported Azure deployment enable them behind an unsupported alias', () => {
-    const result = getOpenAILLMConfig({
-      azure: {
-        azureOpenAIApiInstanceName: 'test-instance',
-        azureOpenAIApiDeploymentName: 'gpt-5-6-prod',
-        azureOpenAIApiVersion: '2025-04-01-preview',
-        azureOpenAIApiKey: 'test-api-key',
-      },
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.azureOpenAI,
-      modelOptions: { model: 'gpt-4o' },
-      promptCacheExplicit: true,
-    });
-
-    expect(result.llmConfig.promptCacheExplicit).toBe(true);
-  });
-
   it('sends no key at all when an endpoint opts out over a pinned one', () => {
     const result = getOpenAILLMConfig({
       apiKey: 'test-api-key',
@@ -2515,43 +2376,6 @@ describe('prompt caching', () => {
     expect(result.llmConfig.promptCacheRetention).toBe('24h');
   });
 
-  it('withholds explicit cache controls from models that reject them', () => {
-    const unsupported = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-4o' },
-      promptCacheExplicit: true,
-    });
-    const supported = getOpenAILLMConfig({
-      apiKey: 'test-api-key',
-      streaming: true,
-      endpoint: EModelEndpoint.openAI,
-      modelOptions: { model: 'gpt-5.6' },
-      promptCacheExplicit: true,
-    });
-
-    expect(unsupported.llmConfig).not.toHaveProperty('promptCacheExplicit');
-    expect(supported.llmConfig.promptCacheExplicit).toBe(true);
-  });
-
-  it.each(['addParams', 'defaultParams'] as const)(
-    'strips explicit cache controls an unsupported model received through %s',
-    (source) => {
-      const result = getOpenAILLMConfig({
-        apiKey: 'test-api-key',
-        streaming: true,
-        endpoint: EModelEndpoint.openAI,
-        modelOptions: { model: 'gpt-4o' },
-        [source]: { promptCacheExplicit: true },
-      });
-
-      /** A known parameter reaches `llmConfig` directly, so the gate must
-       *  remove it rather than merely decline to add it. */
-      expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
-    },
-  );
-
   it('keeps explicit cache controls off unless asked for', () => {
     const result = getOpenAILLMConfig({
       apiKey: 'test-api-key',
@@ -2587,8 +2411,7 @@ describe('prompt caching', () => {
       endpoint: EModelEndpoint.openAI,
       modelOptions: { model: 'gpt-5.6' },
       promptCacheRetention: '24h',
-      promptCacheExplicit: true,
-      addParams: { promptCacheKey: 'tenant-fixed-key' },
+      addParams: { promptCacheKey: 'tenant-fixed-key', promptCacheExplicit: true },
       dropParams: ['promptCacheKey', 'promptCacheRetention', 'promptCacheExplicit'],
     });
 
@@ -2597,31 +2420,5 @@ describe('prompt caching', () => {
     expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
     /** Dropping the key must also withhold the marker, or `createRun` recreates it. */
     expect(result.llmConfig).not.toHaveProperty('promptCacheKeyEnabled');
-  });
-
-  it('honors explicit caching for an Azure alias whose deployment is a supported model', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-azure-key',
-      streaming: true,
-      endpoint: EModelEndpoint.azureOpenAI,
-      azure: { ...azure, azureOpenAIApiDeploymentName: 'gpt-5-6' },
-      modelOptions: { model: 'production-chat' },
-      promptCacheExplicit: true,
-    });
-
-    expect(result.llmConfig.promptCacheExplicit).toBe(true);
-  });
-
-  it('withholds explicit caching when neither the alias nor its deployment is supported', () => {
-    const result = getOpenAILLMConfig({
-      apiKey: 'test-azure-key',
-      streaming: true,
-      endpoint: EModelEndpoint.azureOpenAI,
-      azure: { ...azure, azureOpenAIApiDeploymentName: 'gpt-4o-prod' },
-      modelOptions: { model: 'production-chat' },
-      promptCacheExplicit: true,
-    });
-
-    expect(result.llmConfig).not.toHaveProperty('promptCacheExplicit');
   });
 });

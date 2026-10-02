@@ -199,7 +199,7 @@ export async function initializeOpenAI(
    * documents ("as a global default, under `endpoints.all`") and what an
    * operator who wrote a value on the endpoint they are configuring expects.
    * The `streamRate` block below reads the other way round for historical
-   * reasons; these four do not inherit that.
+   * reasons; these three do not inherit that.
    */
   const cacheConfig = (isAzureOpenAI ? azureConfig || undefined : openAIConfig) ?? {};
 
@@ -209,7 +209,6 @@ export async function initializeOpenAI(
     promptCacheKeyEnabled: cacheConfig.promptCacheKey ?? allConfig?.promptCacheKey,
     promptCacheScope: cacheConfig.promptCacheScope ?? allConfig?.promptCacheScope,
     promptCacheRetention: cacheConfig.promptCacheRetention ?? allConfig?.promptCacheRetention,
-    promptCacheExplicit: cacheConfig.promptCacheExplicit ?? allConfig?.promptCacheExplicit,
   };
 
   const options: InitializeResultBase = getOpenAIConfig(apiKey, finalClientOptions, endpoint);

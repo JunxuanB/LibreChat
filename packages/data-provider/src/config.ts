@@ -824,14 +824,6 @@ export const baseEndpointSchema = z.object({
    * it.
    */
   promptCacheRetention: z.union([z.literal('in-memory'), z.literal('24h')]).optional(),
-  /**
-   * GPT-5.6 explicit cache breakpoints (`prompt_cache_options`,
-   * `prompt_cache_breakpoint`). Off by default: explicit mode replaces the
-   * implicit latest-message breakpoint, and the breakpoint currently lands on
-   * the whole system message rather than on its stable prefix, so enabling it
-   * can cache less than the default. Requires a GPT-5.6-class model.
-   */
-  promptCacheExplicit: z.boolean().optional(),
 });
 
 export type TBaseEndpoint = z.infer<typeof baseEndpointSchema>;
@@ -1931,7 +1923,6 @@ export const azureEndpointSchema = z
         promptCacheKey: true,
         promptCacheScope: true,
         promptCacheRetention: true,
-        promptCacheExplicit: true,
       })
       .partial(),
   );

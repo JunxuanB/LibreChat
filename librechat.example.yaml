@@ -935,12 +935,6 @@ endpoints:
   #   # `prompt_cache_retention`. Omit for the provider's own in-memory lifetime;
   #   # `24h` opts into extended retention and is billed for it.
   #   # promptCacheRetention: 24h
-  #   # GPT-5.6 explicit cache breakpoints. Off by default: explicit mode replaces
-  #   # the implicit latest-message breakpoint, and the breakpoint currently lands on
-  #   # the whole system message rather than on its stable prefix, so turning this on
-  #   # can cache less than the default does. Requires a GPT-5.6-class model, which
-  #   # on Azure may be named by the deployment rather than the visible alias.
-  #   # promptCacheExplicit: false
   # google:
   #   headers:
   #     cf-aig-metadata: '{"user_email":"{{LIBRECHAT_USER_EMAIL}}","app":"librechat"}'

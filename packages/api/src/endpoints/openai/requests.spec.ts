@@ -262,7 +262,6 @@ describe('prompt cache parameters', () => {
         azure: surface.azure,
         modelOptions: { model: 'gpt-5.6' },
         promptCacheRetention: '24h',
-        promptCacheExplicit: true,
         ...(surface.useResponsesApi === true ? { addParams: { useResponsesApi: true } } : {}),
       },
       surface.endpoint,
@@ -362,7 +361,6 @@ describe('prompt cache parameters', () => {
       );
       expect(second.prompt_cache_key).toBe(first.prompt_cache_key);
       expect(first.prompt_cache_retention).toBe('24h');
-      expect(first.prompt_cache_options).toEqual(expect.objectContaining({ mode: 'explicit' }));
       for (const key of [
         'promptCacheKey',
         'promptCacheKeyEnabled',

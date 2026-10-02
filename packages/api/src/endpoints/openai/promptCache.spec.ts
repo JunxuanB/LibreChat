@@ -1,47 +1,6 @@
 import { z } from 'zod';
 import type { AgentInputs } from '@librechat/agents';
-import { buildPromptCacheKey, namesOpenAIModel, supportsExplicitPromptCache } from './promptCache';
-
-describe('supportsExplicitPromptCache', () => {
-  it.each([
-    ['gpt-5.6', true],
-    ['gpt-5.6-terra', true],
-    ['gpt-5.6-luna', true],
-    ['gpt-6-astra', true],
-    ['gpt-6-astra-prod', true],
-    ['gpt-6-mini', false],
-    ['gpt-6', false],
-    /** Azure deployment names cannot contain a dot. */
-    ['gpt-5-6', true],
-    ['gpt-5-6-prod', true],
-    ['gpt-5-5', false],
-    ['production-chat', false],
-    ['gpt-5.5', false],
-    ['gpt-5.1', false],
-    ['gpt-5', false],
-    ['gpt-4o', false],
-    ['gpt-5.61', false],
-    [undefined, false],
-  ])('reports %s as %s', (model, supported) => {
-    expect(supportsExplicitPromptCache(model)).toBe(supported);
-  });
-});
-
-describe('namesOpenAIModel', () => {
-  it.each([
-    ['gpt-4o-prod', true],
-    ['gpt-5-6', true],
-    ['chatgpt-4o-latest', true],
-    ['my-o3-deployment', true],
-    ['codex-mini', true],
-    ['production-chat', false],
-    ['prod-eastus', false],
-    ['gpt', false],
-    [undefined, false],
-  ])('reports %s as %s', (name, names) => {
-    expect(namesOpenAIModel(name)).toBe(names);
-  });
-});
+import { buildPromptCacheKey } from './promptCache';
 
 describe('buildPromptCacheKey', () => {
   const searchTool = {

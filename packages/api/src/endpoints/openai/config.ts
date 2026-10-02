@@ -205,7 +205,6 @@ export function getOpenAIConfig(
       promptCacheKeyEnabled: options.promptCacheKeyEnabled,
       promptCacheScope: options.promptCacheScope,
       promptCacheRetention: options.promptCacheRetention,
-      promptCacheExplicit: options.promptCacheExplicit,
       reasoningFormat: getReasoningFormat({
         customFormat: options.customParams?.reasoningFormat,
         isVercel: Boolean(isVercel),

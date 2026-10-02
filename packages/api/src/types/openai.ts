@@ -57,7 +57,6 @@ export interface OpenAIConfigOptions {
   promptCacheKeyEnabled?: boolean;
   promptCacheScope?: OpenAIPromptCacheScope;
   promptCacheRetention?: OpenAIPromptCacheRetention;
-  promptCacheExplicit?: boolean;
   customParams?: Partial<TConfig['customParams']>;
 }
 
