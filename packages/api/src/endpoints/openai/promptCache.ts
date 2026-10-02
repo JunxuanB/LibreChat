@@ -401,8 +401,9 @@ function clientOptionsIdentity(value: unknown): unknown {
  * would let those flip without retiring the key.
  *
  * A runtime instance carries a Zod schema instead, which `canonicalize`
- * refuses to walk — it is self-referential for an action built from an
- * OpenAPI document. Name and description alone would not be an identity:
+ * cannot represent: it drops the `shape` thunk that holds an object's fields,
+ * and it refuses the self-reference an action built from an OpenAPI document
+ * carries. Name and description alone would not be an identity:
  * a user-defined action's schema is editable at runtime, so its parameters
  * can change under an unchanged name and the prefix would move beneath a
  * key that stayed still. The shape is walked instead, guarded against the
@@ -528,21 +529,39 @@ function runtimeSchemaShape(
   }
 }
 
+function runtimeToolIdentity(value: object): unknown {
+  const candidate = value as { name?: unknown; description?: unknown; schema?: unknown };
+  return {
+    name: typeof candidate.name === 'string' ? candidate.name : null,
+    ...(typeof candidate.description === 'string' ? { description: candidate.description } : {}),
+    ...(candidate.schema != null
+      ? { schema: runtimeSchemaShape(candidate.schema, new Set()) }
+      : {}),
+  };
+}
+
+/**
+ * A Zod schema keeps an object's fields behind its `shape` thunk, which
+ * `canonicalize` drops like any function, so an acyclic schema canonicalizes
+ * without throwing and without its fields. Recognized by `_def`, the schema
+ * goes to the walk whether or not it is cyclic.
+ */
+function hasRuntimeSchema(value: object): boolean {
+  const schema = (value as { schema?: unknown }).schema;
+  return schema != null && typeof schema === 'object' && '_def' in schema;
+}
+
 function safeIdentity(value: unknown): unknown {
   if (value == null || typeof value !== 'object') {
     return typeof value === 'function' ? null : value;
   }
+  if (hasRuntimeSchema(value)) {
+    return runtimeToolIdentity(value);
+  }
   try {
     return canonicalize(value);
   } catch {
-    const candidate = value as { name?: unknown; description?: unknown; schema?: unknown };
-    return {
-      name: typeof candidate.name === 'string' ? candidate.name : null,
-      ...(typeof candidate.description === 'string' ? { description: candidate.description } : {}),
-      ...(candidate.schema != null
-        ? { schema: runtimeSchemaShape(candidate.schema, new Set()) }
-        : {}),
-    };
+    return runtimeToolIdentity(value);
   }
 }
 

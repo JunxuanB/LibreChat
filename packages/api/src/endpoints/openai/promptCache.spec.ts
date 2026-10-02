@@ -86,6 +86,21 @@ describe('buildPromptCacheKey', () => {
       expect(key({ tools: [action(edited)] })).not.toBe(key({ tools: [action(base)] }));
     });
 
+    it('retires the key for an edited schema that is not self-referential', () => {
+      /** `canonicalize` succeeds on an acyclic schema and drops the `shape` thunk. */
+      const plain = (schema: z.ZodTypeAny) => ({
+        name: 'lookup_order',
+        description: 'Look up an order',
+        schema,
+      });
+      expect(key({ tools: [plain(z.object({ query: z.string() }))] })).not.toBe(
+        key({ tools: [plain(z.object({ path: z.string() }))] }),
+      );
+      expect(key({ tools: [plain(z.object({ query: z.string() }))] })).toBe(
+        key({ tools: [plain(z.object({ query: z.string() }))] }),
+      );
+    });
+
     it('retires the key for a changed regex pattern', () => {
       /**
        * A regular expression keeps its meaning on non-enumerable properties,
