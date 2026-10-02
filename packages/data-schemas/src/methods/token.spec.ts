@@ -102,7 +102,7 @@ describe('scheduled OBO grant identifier projection', () => {
       [owner, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_2:Files:refresh'],
       [owner, 'mcp_oauth', 'scheduled-mcp:schedule-obo:sched_1:Files'],
       [owner, 'mcp_oauth_refresh', 'mcp:direct:refresh'],
-      [owner, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_1:Files:refresh'],
+      [owner, 'mcp_oauth_refresh', 'mcp:schedule-obo:sched_1:Files:refresh'],
       [other, 'mcp_oauth_refresh', 'scheduled-mcp:schedule-obo:sched_3:Private:refresh'],
     ] as const;
     await Token.create(
