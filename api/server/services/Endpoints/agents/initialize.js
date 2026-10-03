@@ -43,6 +43,7 @@ const {
   encodeAndFormatVideos,
   extractFileContext,
   createScheduleUpstreamTokenProviderResolver,
+  prepareScheduledMCPBearer,
 } = require('@librechat/api');
 const {
   ResourceType,
@@ -1914,9 +1915,15 @@ const initializeClientWithProvider = async ({
  *
  * @param {object} [dependencies]
  * @param {import('@librechat/api').HostUpstreamTokenProviderResolver} [dependencies.resolveUpstreamTokenProvider]
+ * @param {import('@librechat/api').ScheduledMCPBearerHost} [dependencies.scheduledBearerHost]
  */
 function createInitializeClient(dependencies = {}) {
   return async (params) => {
+    prepareScheduledMCPBearer({
+      req: params.req,
+      restoredContext: params.scheduledTokenContext,
+      host: dependencies.scheduledBearerHost,
+    });
     const upstreamTokenProviderResolver = createScheduleUpstreamTokenProviderResolver(
       params.req,
       dependencies.resolveUpstreamTokenProvider,

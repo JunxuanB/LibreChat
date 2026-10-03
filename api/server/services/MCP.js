@@ -42,11 +42,13 @@ const {
   isOAuthServer,
   isAbortError,
   isDirectOpenIDBearerRecoveryEnabled,
+  bindScheduledMCPBearerInvocation,
   createMCPStructuredTool,
   buildMCPDomainValidationConfig,
   OpenIDReauthRequiredError,
   MCPAuthenticationRefreshError,
   MCPAuthenticationRejectedError,
+  ScheduledMCPBearerError,
   prepareMCPAuthorizationMutation,
   resolveMCPClientCapabilityProfile,
   getMCPConnectionPoolKey,
@@ -897,6 +899,7 @@ async function reconnectServer({
  * @returns { Promise<Array<typeof tool | { _call: (toolInput: Object | string) => unknown}>> } An object with `_call` method to execute the tool input.
  */
 async function createMCPTools({
+  agentId,
   res,
   mcpPermissionContext,
   user,
@@ -980,6 +983,7 @@ async function createMCPTools({
   );
   for (const tool of result.tools) {
     const toolInstance = await createMCPTool({
+      agentId,
       res,
       mcpPermissionContext,
       user,
@@ -1037,6 +1041,7 @@ async function createMCPTools({
  * @returns { Promise<typeof tool | { _call: (toolInput: Object | string) => unknown}> } An object with `_call` method to execute the tool input.
  */
 async function createMCPTool({
+  agentId,
   res,
   mcpPermissionContext,
   user,
@@ -1213,6 +1218,11 @@ async function createMCPTool({
   }
 
   return createToolInstance({
+    scheduledBearerInvocation: bindScheduledMCPBearerInvocation(
+      requestScopedConnections,
+      agentId,
+      strippedToolName,
+    ),
     res,
     mcpPermissionContext,
     user,
@@ -1244,6 +1254,7 @@ async function createMCPTool({
 }
 
 function createToolInstance({
+  scheduledBearerInvocation,
   res,
   mcpPermissionContext,
   user: capturedUser = null,
@@ -1351,6 +1362,7 @@ function createToolInstance({
        * as the jwt-bearer assertion.
        */
       const result = await mcpManager.callTool({
+        scheduledBearerInvocation,
         serverName,
         serverConfig: capturedServerConfig,
         /** The upstream server never sees stripped names — a key that dropped
@@ -1427,6 +1439,7 @@ function createToolInstance({
 
       /** Carries the actionable re-auth message; the substring heuristic below would misreport it as an OAuth configuration problem */
       if (
+        error instanceof ScheduledMCPBearerError ||
         error instanceof OpenIDReauthRequiredError ||
         error instanceof MCPAuthenticationRefreshError ||
         error instanceof MCPAuthenticationRejectedError
