@@ -2,8 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { useSearchPrincipalsQuery } from 'librechat-data-provider/react-query';
 import type { TPrincipal, PrincipalType, PrincipalSearchParams } from 'librechat-data-provider';
 import PeoplePickerSearchItem from './PeoplePickerSearchItem';
+import { useLocalize, useDebounce } from '~/hooks';
 import { SearchPicker } from './SearchPicker';
-import { useLocalize } from '~/hooks';
 
 interface UnifiedPeopleSearchProps {
   onAddPeople: (principals: TPrincipal[]) => void;
@@ -25,13 +25,15 @@ export default function UnifiedPeopleSearch({
   const localize = useLocalize();
   const [searchQuery, setSearchQuery] = useState('');
 
+  const debouncedQuery = useDebounce(searchQuery, 300);
+
   const searchParams: PrincipalSearchParams = useMemo(
     () => ({
-      q: searchQuery,
+      q: debouncedQuery,
       limit: 30,
       ...(typeFilter && typeFilter.length > 0 && { types: typeFilter }),
     }),
-    [searchQuery, typeFilter],
+    [debouncedQuery, typeFilter],
   );
 
   const {
@@ -39,10 +41,10 @@ export default function UnifiedPeopleSearch({
     isLoading: queryIsLoading,
     error,
   } = useSearchPrincipalsQuery(searchParams, {
-    enabled: searchQuery.length >= 2,
+    enabled: debouncedQuery.length >= 2,
   });
 
-  const isLoading = searchQuery.length >= 2 && queryIsLoading;
+  const isLoading = searchQuery.length >= 2 && (searchQuery !== debouncedQuery || queryIsLoading);
 
   const selectableResults = useMemo(() => {
     const results = searchResponse?.results || [];
