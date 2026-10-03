@@ -83,6 +83,24 @@ describe('backfillSearchTokens', () => {
     });
   });
 
+  it('creates the token indexes when the schema indexes were never built', async () => {
+    await users().insertOne({ name: 'No Index', email: 'noindex@x.io' });
+    await groups().insertOne({ name: 'Plain Group' });
+    await backfillSearchTokens(mongoose.connection);
+    const userIndexes = (await users().indexes()).map((index) => index.name);
+    const groupIndexes = (await groups().indexes()).map((index) => index.name);
+    expect(userIndexes).toEqual(
+      expect.arrayContaining([
+        'nameTokens_1_tenantId_1',
+        'emailTokens_1_tenantId_1',
+        'usernameTokens_1_tenantId_1',
+      ]),
+    );
+    expect(groupIndexes).toEqual(
+      expect.arrayContaining(['nameTokens_1_tenantId_1', 'emailTokens_1_tenantId_1']),
+    );
+  });
+
   it('writes nothing on a dry run', async () => {
     await users().insertOne({ name: 'Dry Run', email: 'dry@x.io' });
     await expect(backfillSearchTokens(mongoose.connection, { dryRun: true })).resolves.toEqual({

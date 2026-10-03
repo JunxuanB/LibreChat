@@ -6,6 +6,7 @@ import {
   USER_SEARCH_TOKEN_FIELDS,
   GROUP_SEARCH_TOKEN_FIELDS,
 } from '~/utils/search';
+import { buildIndexWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
 
 const DEFAULT_BATCH_SIZE = 500;
@@ -47,6 +48,17 @@ export async function backfillSearchTokens(
 
   for (const { name, fields } of SEARCH_TOKEN_COLLECTIONS) {
     const collection = connection.db!.collection(name);
+    if (!options.dryRun) {
+      /** Deployments running with `MONGO_AUTO_INDEX` off never build schema indexes, and
+       *  without these the token filters would scan the collection. Same spec and default
+       *  name as the schema declaration, so this is a no-op where Mongoose already built it. */
+      for (const field of fields) {
+        await buildIndexWithRetry(
+          () => collection.createIndex({ [field.tokens]: 1, tenantId: 1 }),
+          `createIndex(${name}.${field.tokens})`,
+        );
+      }
+    }
     const filter = missingTokens(fields);
     result.pending[name] = await collection.countDocuments(filter);
     result.updated[name] = 0;
