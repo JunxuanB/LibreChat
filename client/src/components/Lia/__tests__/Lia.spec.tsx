@@ -3,7 +3,7 @@ import { createStore, Provider } from 'jotai';
 import { act, render, screen } from '@testing-library/react';
 import type { TSubmission } from 'librechat-data-provider';
 import Lia, { FAREWELL_MS } from '../index';
-import { showLiaAtom } from '~/store/lia';
+import { showLiaAtom } from '../store';
 
 const mockUseGetStartupConfig = jest.fn();
 jest.mock('~/data-provider', () => ({

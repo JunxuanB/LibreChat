@@ -1,4 +1,4 @@
-import { createStorageAtom } from './jotai-utils';
+import { createStorageAtom } from '~/store/jotai-utils';
 
 const DEFAULT_SHOW_LIA = false;
 

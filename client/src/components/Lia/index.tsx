@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import type { TSubmission } from 'librechat-data-provider';
 import type { RefObject } from 'react';
 import { useGetStartupConfig } from '~/data-provider';
-import { showLiaAtom } from '~/store/lia';
+import { showLiaAtom } from './store';
 
 /* The engine and its art load only for people who turned Lia on, after the page has painted,
  * so the welcome screen's first paint never waits on them. */
