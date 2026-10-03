@@ -111,6 +111,25 @@ function writes(doc: UpdateDoc | undefined, key: string): doc is UpdateDoc {
   return doc != null && key in doc && doc[key] !== undefined;
 }
 
+const SKIP = Symbol('skip');
+
+/**
+ * The value an upsert insert takes for `key` from the query filter: a plain or
+ * `$eq` equality is copied into the new document, no condition leaves it unset.
+ * Any other condition is ambiguous, so the token field is left for the backfill.
+ */
+function insertedValue(filter: UpdateDoc | undefined, key: string): unknown {
+  const condition = filter?.[key];
+  if (condition === undefined) {
+    return undefined;
+  }
+  if (typeof condition === 'string') {
+    return condition;
+  }
+  const eq = operator({ condition }, 'condition');
+  return eq && Object.keys(eq).length === 1 && typeof eq.$eq === 'string' ? eq.$eq : SKIP;
+}
+
 function operator(update: UpdateDoc, key: string): UpdateDoc | undefined {
   const value = update[key];
   return value != null && typeof value === 'object' && !Array.isArray(value)
@@ -123,8 +142,9 @@ function operator(update: UpdateDoc, key: string): UpdateDoc | undefined {
  * writes, through `$set`, `$setOnInsert`, `$unset` or a top-level replacement
  * value. Each token field depends on one source field, so a partial update
  * stays correct. On an upsert, a token field whose source the update does not
- * write is initialized to `[]` on insert, so new documents never look
- * un-migrated. Copy-on-write: the same reference comes back when nothing
+ * write is initialized on insert from the source's equality condition in
+ * `filter` (MongoDB copies it into the new document), or to `[]` when the
+ * filter has none, so new documents never look un-migrated. Copy-on-write: the same reference comes back when nothing
  * changes. Pipeline updates are returned untouched.
  *
  * Mongoose runs no middleware for `bulkWrite`; a bulk write that changes a
@@ -133,7 +153,7 @@ function operator(update: UpdateDoc, key: string): UpdateDoc | undefined {
 export function withSearchTokens<T>(
   fields: readonly SearchTokenField[],
   update: T,
-  options: { upsert?: boolean } = {},
+  options: { upsert?: boolean; filter?: UpdateDoc } = {},
 ): T {
   if (update == null || typeof update !== 'object' || Array.isArray(update)) {
     return update;
@@ -170,7 +190,10 @@ export function withSearchTokens<T>(
         computeSearchTokens(field.kind, setOnInsert[field.source]),
       );
     } else if (options.upsert && !written) {
-      write('$setOnInsert', field.tokens, []);
+      const condition = insertedValue(options.filter, field.source);
+      if (condition !== SKIP) {
+        write('$setOnInsert', field.tokens, computeSearchTokens(field.kind, condition));
+      }
     }
   }
   return (next ?? source) as T;

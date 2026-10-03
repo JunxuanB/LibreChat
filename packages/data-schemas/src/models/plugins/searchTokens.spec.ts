@@ -99,6 +99,14 @@ describe('search token write paths', () => {
     expect(upserted?.nameTokens).toEqual(['new', 'person']);
     expect(upserted?.usernameTokens).toEqual([]);
 
+    await User.updateOne(
+      { email: 'filter@x.io' },
+      { $set: { name: 'From Filter', provider: 'local' } },
+      { upsert: true },
+    );
+    const fromFilter = await User.findOne({ email: 'filter@x.io' }).select(TOKENS).lean<t.IUser>();
+    expect(fromFilter?.emailTokens).toEqual(['filter@x.io', 'filter', 'x', 'io']);
+
     await User.insertMany([user('Many One', 'one@x.io', 'm1')]);
     const inserted = await User.findOne({ email: 'one@x.io' }).select(TOKENS).lean<t.IUser>();
     expect(inserted?.nameTokens).toEqual(['many', 'one']);

@@ -145,6 +145,23 @@ describe('warnOnMissingSearchTokens', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('counts through the token indexes, not a collection scan', async () => {
+    await users().insertMany(
+      Array.from({ length: 50 }, (_, i) => ({ name: `User ${i}`, email: `u${i}@x.io` })),
+    );
+    await backfillSearchTokens(mongoose.connection);
+    const explain = await users()
+      .find({
+        $or: ['nameTokens', 'emailTokens', 'usernameTokens'].map((field) => ({
+          [field]: { $exists: false },
+        })),
+      })
+      .explain('queryPlanner');
+    const plan = JSON.stringify(explain.queryPlanner.winningPlan);
+    expect(plan).toContain('IXSCAN');
+    expect(plan).not.toContain('COLLSCAN');
+  });
+
   it('logs a failed check instead of failing startup', async () => {
     const broken = {
       db: { collection: () => ({ countDocuments: () => Promise.reject(new Error('down')) }) },

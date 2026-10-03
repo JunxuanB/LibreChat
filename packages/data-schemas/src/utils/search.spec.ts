@@ -123,6 +123,29 @@ describe('withSearchTokens', () => {
     });
   });
 
+  it('takes upsert insert tokens from equality conditions the insert copies', () => {
+    expect(
+      withSearchTokens(
+        USER_SEARCH_TOKEN_FIELDS,
+        { $set: { name: 'Al' } },
+        { upsert: true, filter: { email: 'al@x.io', username: { $eq: 'al' } } },
+      ),
+    ).toEqual({
+      $set: { name: 'Al', nameTokens: ['al'] },
+      $setOnInsert: { emailTokens: ['al@x.io', 'al', 'x', 'io'], usernameTokens: ['al'] },
+    });
+    expect(
+      withSearchTokens(
+        USER_SEARCH_TOKEN_FIELDS,
+        { $set: { name: 'Al' } },
+        { upsert: true, filter: { email: { $in: ['a@x.io', 'b@x.io'] } } },
+      ),
+    ).toEqual({
+      $set: { name: 'Al', nameTokens: ['al'] },
+      $setOnInsert: { usernameTokens: [] },
+    });
+  });
+
   it('returns the same reference when no source field is written', () => {
     const update = { $set: { role: 'ADMIN' } };
     expect(withSearchTokens(USER_SEARCH_TOKEN_FIELDS, update)).toBe(update);
