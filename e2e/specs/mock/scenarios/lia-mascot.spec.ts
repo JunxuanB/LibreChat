@@ -16,7 +16,21 @@ const MORNING = new Date(2026, 0, 14, 10, 0);
 
 /** Opens the welcome screen; `optedIn` stores the preference before the app boots. */
 async function open(page: Page, { optedIn }: { optedIn: boolean }) {
-  await page.clock.setFixedTime(MORNING);
+  /* Only the wall clock moves to the morning: Playwright's clock would also take over timers and
+   * animation frames, freezing Lia's animation loop. */
+  await page.addInitScript((morning) => {
+    const RealDate = Date;
+    const offset = morning - RealDate.now();
+    class MorningDate extends RealDate {
+      constructor(...args: unknown[]) {
+        super(...((args.length ? args : [RealDate.now() + offset]) as [number]));
+      }
+      static now() {
+        return RealDate.now() + offset;
+      }
+    }
+    window.Date = MorningDate as DateConstructor;
+  }, MORNING.getTime());
   if (optedIn) {
     await page.addInitScript(() => localStorage.setItem('showLia', 'true'));
   }
