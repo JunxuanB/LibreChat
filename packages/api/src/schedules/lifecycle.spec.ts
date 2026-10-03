@@ -168,6 +168,104 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
     },
   );
 
+  it('recovers an abandoned terminal persistence fence but never bypasses a fresh owner', async () => {
+    const job = await create();
+    await GenerationJobManager.claimTerminalJob(
+      job.streamId,
+      'complete',
+      undefined,
+      job.createdAt,
+      { persistencePending: true },
+    );
+    await service.reconcileRetainedJobs();
+    expect(record).not.toHaveBeenCalled();
+    expect((await store.getJob(job.streamId))?.terminalPersistencePending).toBe(true);
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    await service.reconcileRetainedJobs();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+    expect(await store.getJob(job.streamId)).toBeNull();
+  });
+
+  it.each([false, true])(
+    'assembles Mongo-only denial and parks a denied pause across restart=%s',
+    async (restarted) => {
+      const job = await GenerationJobManager.createJob('conversation', 'owner', 'conversation', {
+        initialMetadata: {
+          scheduleId: identity.scheduleId,
+          scheduledFor,
+          agent_id: identity.agentId,
+        },
+      });
+      const provider = job.metadata.providerExecutionId!;
+      await GenerationJobManager.beginProviderExecution(job.streamId, job.createdAt, provider);
+      await store.enqueueSteer(
+        job.streamId,
+        { steerId: 'queued', userId: 'owner', text: 'next', createdAt: Date.now() },
+        job.createdAt,
+      );
+      const action = buildPendingAction(
+        buildToolApprovalPayload([{ name: 'read', arguments: {}, tool_call_id: 'tool' }]),
+        {
+          streamId: job.streamId,
+          conversationId: 'conversation',
+          runId: 'run',
+          responseMessageId: 'response',
+        },
+      );
+      await GenerationJobManager.approvals.pause(job.streamId, action);
+      const error = new ScheduledMCPBearerError('consent_revoked', 'Files');
+      dependencies.methods.recordMCPToolAuthFailure = async () => true;
+      dependencies.methods.getScheduleRunAbortState = async () => ({
+        status: 'started',
+        mcp: error.outcomes,
+      });
+      let writes = 0;
+      const update = store.updateJob.bind(store);
+      jest.spyOn(store, 'updateJob').mockImplementation(async (...args) => {
+        if (args[1].scheduleOutcomeError != null && ++writes <= (restarted ? 1 : 2))
+          throw new Error('job evidence unavailable');
+        return update(...args);
+      });
+      await service.recordMCPToolAuthFailure({
+        error,
+        identity,
+        streamId: job.streamId,
+        jobCreatedAt: job.createdAt,
+        userId: 'owner',
+        serverName: 'Files',
+      });
+      expect((await store.getJob(job.streamId))?.scheduleOutcomeError).toBeUndefined();
+      if (restarted) service = createSchedulesService(dependencies);
+      const outcome = {
+        scheduleId: identity.scheduleId,
+        scheduledFor,
+        streamId: job.streamId,
+        jobCreatedAt: job.createdAt,
+        status: 'requires_action' as const,
+      };
+      expect(await service.recordScheduleOutcome(outcome)).toBe(false);
+      expect(record).not.toHaveBeenCalled();
+      expect(await store.getJob(job.streamId)).toMatchObject({
+        status: 'requires_action',
+        providerDrained: false,
+        preserveForScheduleReconcile: true,
+      });
+      await GenerationJobManager.markProviderExecutionDrained(
+        job.streamId,
+        job.createdAt,
+        provider,
+      );
+      expect(await service.recordScheduleOutcome(outcome)).toBe(true);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'error', mcp: error.outcomes }),
+      );
+      expect(await store.getJob(job.streamId)).toBeNull();
+      expect(JSON.parse((await store.claimParkedSteers(job.streamId, 'owner'))!).steers).toEqual(
+        expect.arrayContaining([expect.objectContaining({ steerId: 'queued' })]),
+      );
+    },
+  );
+
   it('recovers a crashed owner without dropping its denial or accepted steers', async () => {
     const job = await create();
     await store.enqueueSteer(

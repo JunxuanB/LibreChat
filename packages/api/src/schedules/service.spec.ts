@@ -1015,7 +1015,8 @@ describe('scheduled OBO tool failure settlement', () => {
       scheduledFor: occurrence,
       status: 'requires_action',
     });
-    expect(methods.getScheduleRunAbortState).not.toHaveBeenCalled();
+    expect(methods.getScheduleRunAbortState).toHaveBeenCalledTimes(1);
+    expect(methods.recordRunOutcome).not.toHaveBeenCalled();
     await expect(
       service.recordScheduleOutcome({
         scheduleId: 's1',
@@ -1207,16 +1208,26 @@ describe('interactive Stop persistence barrier', () => {
 
   it('does not gate a pause (requires_action) on the Stop barrier', async () => {
     const { service, methods } = outcomeService();
-    methods.getScheduleRunAbortState = jest.fn(async () => null);
+    methods.getScheduleRunAbortState = jest.fn(async () => ({
+      status: 'started',
+      abortSource: 'stop',
+      abortRequestedAt: new Date(),
+      mcp: [],
+    }));
 
-    await service.recordScheduleOutcome({
-      scheduleId: 's1',
-      scheduledFor: '2026-01-01T00:00:00.000Z',
-      status: 'requires_action',
-    });
+    await expect(
+      service.recordScheduleOutcome({
+        scheduleId: 's1',
+        scheduledFor: '2026-01-01T00:00:00.000Z',
+        status: 'requires_action',
+      }),
+    ).resolves.toBe(true);
 
-    // A pause is not a settlement, so the barrier is never consulted.
-    expect(methods.getScheduleRunAbortState).not.toHaveBeenCalled();
+    // Receipt discovery does not poll a fresh Stop for an ordinary pause.
+    expect(methods.getScheduleRunAbortState).toHaveBeenCalledTimes(1);
+    expect(methods.recordRunOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'requires_action' }),
+    );
   });
 });
 

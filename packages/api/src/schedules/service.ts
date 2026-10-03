@@ -1056,7 +1056,20 @@ export function createSchedulesService(
   async function reconcileRetainedJobs(): Promise<void> {
     const store = GenerationJobManager.getJobStore();
     if (!store?.getScheduleReconcileJobs) return;
-    for (const job of await store.getScheduleReconcileJobs(100)) {
+    for (const held of await store.getScheduleReconcileJobs(100)) {
+      let job = held;
+      if (job.terminalPersistencePending === true) {
+        try {
+          // The manager owns the bounded, epoch-fenced stale final-write recovery.
+          await GenerationJobManager.getCleanupJob(job.streamId);
+          const current = await store.getJob(job.streamId);
+          if (current?.createdAt !== held.createdAt) continue;
+          job = current;
+        } catch (error) {
+          logger.warn('[schedules] retained terminal recovery deferred:', error);
+          continue;
+        }
+      }
       if (
         !job.scheduleId ||
         !job.scheduledFor ||
@@ -1108,10 +1121,16 @@ export function createSchedulesService(
   async function waitForStopPersistence(
     scheduleId: string,
     scheduledFor: Date,
+    initialState?: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>>,
   ): Promise<ScheduleMCPOutcome[] | null> {
+    let observed = initialState;
     const deadline = Date.now() + STOP_BARRIER_TIMEOUT_MS;
     for (;;) {
-      const state = await methods.getScheduleRunAbortState(scheduleId, scheduledFor);
+      const state =
+        observed !== undefined
+          ? observed
+          : await methods.getScheduleRunAbortState(scheduleId, scheduledFor);
+      observed = undefined;
       if (
         state == null ||
         state.abortSource !== 'stop' ||
@@ -1170,23 +1189,33 @@ export function createSchedulesService(
           new Date(job.scheduledFor ?? '').getTime() === new Date(scheduledFor).getTime()
         ) {
           mcp = readScheduleMCPReceipts(job.scheduleOutcomeError);
-          if (
-            mcp.length > 0 &&
-            (job.providerDrained === false || job.terminalPersistencePending === true)
-          )
-            return false;
         }
       } catch {
         return false;
       }
     }
 
+    let pauseState: Awaited<ReturnType<ScheduleMethods['getScheduleRunAbortState']>> | undefined;
+    if (!terminal && !pending && mcp.length === 0) {
+      try {
+        // A peer can own the only denial. Ordinary pauses still do not wait on Stop.
+        pauseState = await methods.getScheduleRunAbortState(scheduleId, new Date(scheduledFor));
+        mcp = mergeReceipts(
+          mcp,
+          pauseState?.mcp?.filter(
+            (item) => item.detail === 'unattended_auth_required' && item.status !== 'ready',
+          ) ?? [],
+        );
+      } catch {
+        return false;
+      }
+    }
     if (terminal || pending || mcp.length > 0) {
       // Honor an in-flight interactive Stop's persistence before terminalizing. A deferral
       // is NOT a failure to record — the run is deliberately left active/preserved — but it
       // must report "not settled" so callers with durable retry (the approval-expiry host
       // action, reconciliation) re-drive it rather than assuming the outcome landed.
-      const observed = await waitForStopPersistence(scheduleId, new Date(scheduledFor));
+      const observed = await waitForStopPersistence(scheduleId, new Date(scheduledFor), pauseState);
       if (observed == null) {
         logger.info(
           `[schedules] deferring terminal settlement for ${scheduleId}: interactive Stop persistence is still unacknowledged`,
@@ -1222,6 +1251,32 @@ export function createSchedulesService(
         );
       } catch (err) {
         logger.error('[schedules] failed to retain terminal outcome evidence:', err);
+        return false;
+      }
+    }
+    if (missingAuth && status === 'requires_action' && (!streamId || jobCreatedAt == null))
+      return false;
+    if (missingAuth && streamId && jobCreatedAt != null) {
+      try {
+        const live = await GenerationJobManager.getJobStore()?.getJob(streamId);
+        if (
+          live?.createdAt !== jobCreatedAt ||
+          live.scheduleId !== scheduleId ||
+          new Date(live.scheduledFor ?? '').getTime() !== new Date(scheduledFor).getTime() ||
+          live.providerDrained === false ||
+          live.terminalPersistencePending === true
+        )
+          return false;
+        if (live.status === 'requires_action') {
+          // The abort owner parks accepted steers and re-enters settlement only after drain.
+          return await engineDeps.abortScheduledJob(
+            streamId,
+            { scheduleId, scheduledFor, createdAt: jobCreatedAt },
+            { preserve: true },
+          );
+        }
+      } catch (error) {
+        logger.warn('[schedules] denied generation drain deferred:', error);
         return false;
       }
     }
