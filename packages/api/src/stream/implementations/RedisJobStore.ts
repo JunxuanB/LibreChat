@@ -413,7 +413,7 @@ const JOB_CREATE_LUA =
   'if retainedEpoch and (not previousCreatedAt or retainedEpoch > previousCreatedAt) then ' +
   'previousCreatedAt = retainedEpoch observedCreatedAt = retainedEpochRaw ' +
   'observedStatus = nil observedConversationId = nil observedActive = false end ' +
-  'if observedActive and (replacedTerminalHostActionPending == "1" or replacedDetachedTerminalHostActionPending == "1") then ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" or (observedActive and (replacedTerminalHostActionPending == "1" or replacedDetachedTerminalHostActionPending == "1")) then ' +
   'return { previousUserId or "", previousTenantId or "", "0", "predecessor_mismatch", ' +
   'observedCreatedAt, observedStatus or "", observedConversationId or "", "1", "1" } end ' +
   'if ARGV[13] == "1" and observedActive then ' +
@@ -756,6 +756,7 @@ const JOB_DELETE_LUA =
 const STALE_JOB_DELETE_LUA =
   'if redis.call("HGET", KEYS[1], "status") ~= "running" then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then return 0 end ' +
   'local liveSince = tonumber(redis.call("HGET", KEYS[1], "lastActiveAt")) ' +
   'if not liveSince then liveSince = tonumber(redis.call("HGET", KEYS[1], "createdAt")) end ' +
   'if not liveSince or tonumber(ARGV[2]) - liveSince <= tonumber(ARGV[3]) then return 0 end ' +

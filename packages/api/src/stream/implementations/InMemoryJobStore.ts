@@ -365,6 +365,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
       const currentCreatedAt = current?.createdAt ?? this.getRetainedGenerationEpoch(streamId);
       if (
         current?.terminalHostActionPending === true ||
+        current?.preserveForScheduleReconcile === true ||
         (rejectActivePredecessor === true &&
           (current?.status === 'running' ||
             current?.status === 'requires_action' ||
@@ -1243,7 +1244,11 @@ export class InMemoryJobStore implements IJobStoreV2 {
         job.terminalHostActionPending = true;
         delete job.pendingAction;
         delete job.pendingActionId;
-      } else if (this.staleJobTimeout > 0 && job.status === 'running') {
+      } else if (
+        this.staleJobTimeout > 0 &&
+        job.status === 'running' &&
+        job.preserveForScheduleReconcile !== true
+      ) {
         // Failsafe: reap jobs stuck in "running" with no generation activity for
         // longer than the stale timeout. These are crashed/hung generations that
         // never reached a terminal state; without this they accumulate their

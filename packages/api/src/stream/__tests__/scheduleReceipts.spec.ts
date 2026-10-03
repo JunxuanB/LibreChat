@@ -64,6 +64,12 @@ async function verify(store: IJobStoreV2): Promise<string> {
   expect(readScheduleMCPReceipts((await store.getJob(stream))?.scheduleOutcomeError)).toEqual(
     expect.arrayContaining([denial, other]),
   );
+  await store.updateJob(stream, { preserveForScheduleReconcile: true }, created.createdAt);
+  await expect(store.createJob(stream, 'owner', 'conversation', 'tenant')).rejects.toMatchObject({
+    name: 'JobPredecessorMismatchError',
+  });
+  expect((await store.getJob(stream))?.createdAt).toBe(created.createdAt);
+  await store.updateJob(stream, { preserveForScheduleReconcile: false }, created.createdAt);
   await store.deleteJob(stream, created.createdAt);
   return stream;
 }
