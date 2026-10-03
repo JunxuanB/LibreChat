@@ -703,7 +703,7 @@ const PROVIDER_DRAIN_LUA =
  * the deadline cannot be extended by retry enumeration. */
 const RECOVER_TERMINAL_PROVIDER_DRAIN_LUA =
   'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
-  'if redis.call("HGET", KEYS[1], "terminalHostActionPending") ~= "1" and redis.call("HGET", KEYS[1], "detachedAgentEventTerminalHostActionPending") ~= "1" then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "terminalHostActionPending") ~= "1" and redis.call("HGET", KEYS[1], "detachedAgentEventTerminalHostActionPending") ~= "1" and redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") ~= "1" then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "providerDrained") ~= "0" then return 0 end ' +
   'local completedAt = tonumber(redis.call("HGET", KEYS[1], "completedAt") or "") ' +
   'if not completedAt or completedAt > tonumber(ARGV[2]) then return 0 end ' +
@@ -756,7 +756,6 @@ const JOB_DELETE_LUA =
 const STALE_JOB_DELETE_LUA =
   'if redis.call("HGET", KEYS[1], "status") ~= "running" then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
-  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then return 0 end ' +
   'local liveSince = tonumber(redis.call("HGET", KEYS[1], "lastActiveAt")) ' +
   'if not liveSince then liveSince = tonumber(redis.call("HGET", KEYS[1], "createdAt")) end ' +
   'if not liveSince or tonumber(ARGV[2]) - liveSince <= tonumber(ARGV[3]) then return 0 end ' +
@@ -819,7 +818,10 @@ const STALE_JOB_DELETE_LUA =
   'for i = 8, 9 do local ttl = redis.call("TTL", KEYS[i]) ' +
   'if ttl >= 0 and ttl < tonumber(ARGV[4]) then redis.call("EXPIRE", KEYS[i], ARGV[4]) end end ' +
   'redis.call("SET", KEYS[7], ARGV[1], "EX", tonumber(ARGV[5])) ' +
-  'redis.call("DEL", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]) ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then ' +
+  'redis.call("HSET", KEYS[1], "status", "error", "completedAt", ARGV[2], "error", "Scheduled generation owner became unavailable", "steersClosed", "1") ' +
+  'redis.call("PERSIST", KEYS[1]) redis.call("DEL", KEYS[4], KEYS[5]) ' +
+  'else redis.call("DEL", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]) end ' +
   'return 1';
 
 /**
@@ -1722,6 +1724,8 @@ const KEYS = {
   /** Terminal jobs that still owe a durable host lifecycle hook (global set). Retains
    *  the aborted approval-expiry job for cross-replica / post-restart hook retry. */
   terminalHostActionJobs: 'stream:terminal_host_action',
+  /** Versioned, epoch-bound schedule settlement/release retry hints. */
+  scheduleReconcileJobs: 'stream:schedule_reconcile:v1',
   /** Versioned recovery lane for detached Event Actor completion generations.
    * Pre-detached replicas only scan `terminalHostActionJobs`, so they cannot
    * claim a generation whose host hook requires both invocation identities. */
@@ -1896,6 +1900,8 @@ export class RedisJobStore implements IJobStoreV2 {
 
   /** Cleanup interval in ms (1 minute) */
   private cleanupIntervalMs = 60000;
+  private scheduleReconcileCursor = '0';
+  private scheduleReconcileMembers: string[] = [];
 
   constructor(redis: Redis | Cluster, options?: RedisJobStoreOptions) {
     this.redis = instrumentIORedisClient(redis, RedisUseCases.GENERATION_STREAM);
@@ -2335,6 +2341,8 @@ export class RedisJobStore implements IJobStoreV2 {
     expectedCreatedAt?: number,
   ): Promise<void> {
     const key = KEYS.job(streamId);
+    if (updates.preserveForScheduleReconcile === true)
+      await this.retainScheduleReconcile(streamId, expectedCreatedAt);
     const requestedTerminal =
       updates.status != null && ['complete', 'error', 'aborted'].includes(updates.status);
     if (requestedTerminal) {
@@ -2878,6 +2886,8 @@ export class RedisJobStore implements IJobStoreV2 {
     returnDrainedSteers: boolean,
   ): Promise<true | SteerQueueItem[] | null> {
     const { from, to, patch, clear, expectActionId, expectCreatedAt, notAfterMs } = args;
+    if (patch?.preserveForScheduleReconcile === true)
+      await this.retainScheduleReconcile(streamId, expectCreatedAt);
     const key = KEYS.job(streamId);
     const terminal = this.statusSetKey(to) === null;
     const terminalJob = terminal ? await this.getJob(streamId) : null;
@@ -3187,7 +3197,6 @@ export class RedisJobStore implements IJobStoreV2 {
     }
 
     const currentJob = await this.reconcileJobMembership(streamId, {
-      initialJob: null,
       previousJob: observedJob,
     });
     this.clearLocalStateUnlessActive(streamId, currentJob, observedJob.createdAt);
@@ -3224,6 +3233,62 @@ export class RedisJobStore implements IJobStoreV2 {
     return jobs.filter(
       (job): job is SerializableJobData => job != null && job.status === 'requires_action',
     );
+  }
+
+  private async retainScheduleReconcile(streamId: string, createdAt?: number): Promise<void> {
+    const epoch = createdAt ?? (await this.getJob(streamId))?.createdAt;
+    if (epoch != null)
+      await this.redis.sadd(KEYS.scheduleReconcileJobs, terminalHostActionMember(streamId, epoch));
+  }
+
+  async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {
+    if (this.scheduleReconcileMembers.length === 0) {
+      const [cursor, members] = await this.redis.sscan(
+        KEYS.scheduleReconcileJobs,
+        this.scheduleReconcileCursor,
+        'COUNT',
+        limit,
+      );
+      this.scheduleReconcileCursor = cursor;
+      this.scheduleReconcileMembers = members;
+    }
+    const members = this.scheduleReconcileMembers.splice(0, limit);
+    const cutoff = Date.now() - PROVIDER_DRAIN_TIMEOUT_MS;
+    const held = await Promise.all(
+      members.map(async (member) => {
+        const { streamId, createdAt } = parseTerminalHostActionMember(member);
+        let job = await this.getJob(streamId);
+        if (!job || job.createdAt !== createdAt) {
+          await this.redis.srem(KEYS.scheduleReconcileJobs, member);
+          return null;
+        }
+        // Keep pre-armed same-epoch hints: a writer can still be committing its marker.
+        if (job.preserveForScheduleReconcile !== true) return null;
+        if (job.status === 'running') {
+          if (await this.deleteStaleRunningJob(streamId, job, Date.now()))
+            job = await this.getJob(streamId);
+        }
+        if (
+          job &&
+          job.status !== 'running' &&
+          job.status !== 'requires_action' &&
+          job.providerDrained === false &&
+          job.completedAt != null &&
+          job.completedAt <= cutoff
+        ) {
+          await this.redis.eval(
+            RECOVER_TERMINAL_PROVIDER_DRAIN_LUA,
+            1,
+            KEYS.job(streamId),
+            String(job.createdAt),
+            String(cutoff),
+          );
+          job = await this.getJob(streamId);
+        }
+        return job;
+      }),
+    );
+    return held.filter((job): job is SerializableJobData => job != null);
   }
 
   async getTerminalHostActionJobs(): Promise<SerializableJobData[]> {

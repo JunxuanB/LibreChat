@@ -9285,8 +9285,9 @@ class GenerationJobManagerClass {
       const jobExists = await this.jobStore.hasJob(streamId);
       if (jobExists) {
         const shouldInspectRemoteTerminal =
-          this.ownedJobs.get(streamId) !== observedRuntime.createdAt &&
-          this.eventTransport.getSubscriberCount(streamId) === 0;
+          count > 0 ||
+          (this.ownedJobs.get(streamId) !== observedRuntime.createdAt &&
+            this.eventTransport.getSubscriberCount(streamId) === 0);
         if (!shouldInspectRemoteTerminal) {
           continue;
         }

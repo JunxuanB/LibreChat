@@ -124,6 +124,60 @@ redisDescribe('real Redis receipt retention', () => {
     }
   });
 
+  it('recovers stale owner evidence and indexes post-settlement release across store restarts', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis, { runningTtl: 1 });
+    const stream = 'schedule-outbox-crash';
+    const job = await store.createJob(stream, 'owner', stream);
+    try {
+      await store.enqueueSteer(
+        stream,
+        { steerId: 'queued', userId: 'owner', text: 'next', createdAt: Date.now() },
+        job.createdAt,
+      );
+      await store.updateJob(
+        stream,
+        {
+          preserveForScheduleReconcile: true,
+          scheduleOutcomeError: encoded,
+          providerDrained: false,
+        },
+        job.createdAt,
+      );
+      await redis.hset(`stream:{${stream}}:job`, 'lastActiveAt', String(Date.now() - 5000));
+      const restarted = new RedisJobStore(redis, { runningTtl: 1 });
+      const held = await restarted.getScheduleReconcileJobs(100);
+      expect(held.find((item) => item.streamId === stream)).toMatchObject({
+        status: 'error',
+        createdAt: job.createdAt,
+        preserveForScheduleReconcile: true,
+        providerDrained: false,
+      });
+      expect((await restarted.getJob(stream))?.scheduleOutcomeError).toContain('consent_revoked');
+      expect(JSON.parse((await restarted.claimParkedSteers(stream, 'owner'))!).steers).toEqual(
+        expect.arrayContaining([expect.objectContaining({ steerId: 'queued' })]),
+      );
+      await redis.hset(`stream:{${stream}}:job`, 'completedAt', String(Date.now() - 60_000));
+      expect(
+        (await restarted.getScheduleReconcileJobs(100)).find((item) => item.streamId === stream)
+          ?.providerDrained,
+      ).toBe(true);
+      // Mongo can already be bookkept. The job's obligation is still discoverable.
+      expect(
+        (await new RedisJobStore(redis).getScheduleReconcileJobs(100)).map((item) => item.streamId),
+      ).toContain(stream);
+      await restarted.updateJob(stream, { preserveForScheduleReconcile: false }, job.createdAt);
+      await restarted.deleteJob(stream, job.createdAt);
+      expect(
+        (await restarted.getScheduleReconcileJobs(100)).map((item) => item.streamId),
+      ).not.toContain(stream);
+    } finally {
+      await store.deleteJob(stream, job.createdAt);
+      await redis.quit();
+    }
+  });
+
   it('retains all denial evidence atomically in real Redis without affecting a replaced epoch', async () => {
     const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
     try {

@@ -31,6 +31,7 @@ import {
   DEFAULT_SCHEDULE_LIMITS,
   SCHEDULE_FILE_HOLD,
   hasResumeHandoffInFlight,
+  retainedOutcome,
   hasAbortInFlight,
 } from './types';
 import {
@@ -301,6 +302,7 @@ export interface SchedulesService {
    *  Replays terminal permanent-MCP bookkeeping but never claims, fires, advances, or
    *  infers owner death from a process-local missing job. See startScheduleErasureSweep. */
   initializeScheduleErasureSweep: () => void;
+  reconcileRetainedJobs: () => Promise<void>;
 }
 
 /** A replaced/foreign generation cannot receive an old denial or model-visible result. */
@@ -832,6 +834,7 @@ export function createSchedulesService(
       // finished-job sweep) cannot outlive the run it belonged to.
       clearReconciledJob: engineDeps.clearReconciledJob,
       abortScheduledJob: engineDeps.abortScheduledJob,
+      reconcileRetainedJobs,
       // If topology itself prevented arming, this process's missing job says
       // nothing about peer liveness. If only index creation failed, the topology
       // proof still holds and the existing owner-death backstop remains valid.
@@ -1046,6 +1049,41 @@ export function createSchedulesService(
       return true;
     }
     return false;
+  }
+
+  /** The job outbox survives both owner death and a crash after Mongo bookkeeping. */
+  async function reconcileRetainedJobs(): Promise<void> {
+    const store = GenerationJobManager.getJobStore();
+    if (!store?.getScheduleReconcileJobs) return;
+    for (const job of await store.getScheduleReconcileJobs(100)) {
+      if (
+        !job.scheduleId ||
+        !job.scheduledFor ||
+        job.status === 'running' ||
+        job.status === 'requires_action' ||
+        job.providerDrained === false ||
+        job.terminalPersistencePending === true ||
+        job.terminalHostActionPending === true
+      )
+        continue;
+      const intended =
+        job.status === 'aborted'
+          ? { status: 'interrupted' as const, error: undefined }
+          : retainedOutcome(job, job.status === 'complete' ? 'success' : 'error');
+      try {
+        await recordScheduleOutcome({
+          scheduleId: job.scheduleId,
+          scheduledFor: job.scheduledFor,
+          streamId: job.streamId,
+          jobCreatedAt: job.createdAt,
+          conversationId: job.conversationId,
+          status: intended.status,
+          error: intended.error,
+        });
+      } catch (error) {
+        logger.warn('[schedules] retained outcome recovery deferred:', error);
+      }
+    }
   }
 
   const OUTCOME_RETRY_ATTEMPTS = 3;
@@ -2025,5 +2063,6 @@ export function createSchedulesService(
     restoreUserSchedulesFromDeletion,
     initializeScheduleEngine,
     initializeScheduleErasureSweep,
+    reconcileRetainedJobs,
   };
 }

@@ -949,6 +949,8 @@ export interface IJobStore {
    * retry the host adapter after a restart / on another replica, even though the job is
    * no longer in the requires_action index. */
   getTerminalHostActionJobs?(): Promise<SerializableJobData[]>;
+  /** Generation-scoped schedule settlement outbox, including already-bookkept runs. */
+  getScheduleReconcileJobs?(limit: number): Promise<SerializableJobData[]>;
   /** Enumerates detached Event Actor completion generations from a versioned
    * retry lane known only to capable consumers. Redis keeps this lane separate
    * from `getTerminalHostActionJobs` so a rolling-deployment replica that only

@@ -52,6 +52,29 @@ describe('schedule erasure fallback owner-death evidence', () => {
     jest.restoreAllMocks();
   });
 
+  it('drives held-job acknowledgements even when no Mongo run is active or unbookkept', async () => {
+    const reconcileRetainedJobs = jest.fn(async () => undefined);
+    const methods = {
+      getDeletingSchedules: jest.fn(async () => []),
+      getRunsForReconciliation: jest.fn(async () => []),
+      getUnbookkeptRuns: jest.fn(async () => []),
+      markRunsReconciled: jest.fn(async () => undefined),
+      markEraseAttempted: jest.fn(async () => undefined),
+    };
+    const sweep = startScheduleErasureSweep({
+      methods: methods as unknown as ScheduleMethods,
+      getJobStatus: jest.fn(async () => null),
+      getTriggerDelivery: jest.fn(async () => null),
+      abortScheduledJob: jest.fn(async () => true),
+      clearReconciledJob: jest.fn(async () => undefined),
+      canInferOwnerDeathFromMissingJob: false,
+      reconcileRetainedJobs,
+    });
+    await jest.advanceTimersByTimeAsync(5 * 60_000);
+    sweep.stop();
+    expect(reconcileRetainedJobs).toHaveBeenCalledTimes(1);
+  });
+
   it('does not settle a peer-owned run from process-local job absence', async () => {
     const methods = await sweepOnce({ canInferOwnerDeathFromMissingJob: false });
 

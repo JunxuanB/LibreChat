@@ -1121,6 +1121,30 @@ export class InMemoryJobStore implements IJobStoreV2 {
     return pending;
   }
 
+  async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {
+    const held: SerializableJobData[] = [];
+    const now = Date.now();
+    let remaining = this.jobs.size;
+    for (const [stream, job] of this.jobs) {
+      if (remaining-- <= 0) break;
+      if (job.preserveForScheduleReconcile !== true) continue;
+      if (
+        job.status !== 'running' &&
+        job.status !== 'requires_action' &&
+        job.providerDrained === false &&
+        job.completedAt != null &&
+        now - job.completedAt >= PROVIDER_DRAIN_TIMEOUT_MS
+      )
+        job.providerDrained = true;
+      held.push(job);
+      // Rotate retry attempts so a failed first batch cannot starve later obligations.
+      this.jobs.delete(stream);
+      this.jobs.set(stream, job);
+      if (held.length >= limit) break;
+    }
+    return held;
+  }
+
   async clearTerminalHostAction(streamId: string, expectedCreatedAt?: number): Promise<void> {
     const job = this.jobs.get(streamId);
     // Identity-fenced: a replacement generation at this streamId (a newer createdAt) must
@@ -1135,6 +1159,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
     const now = Date.now();
     const toDelete: Array<{ streamId: string; createdAt: number }> = [];
     let staleRunning = 0;
+    let retainedRecovered = 0;
 
     // Expired parked steers are otherwise only purged by a claim.
     for (const [streamId, parked] of this.parkedSteers) {
@@ -1244,11 +1269,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
         job.terminalHostActionPending = true;
         delete job.pendingAction;
         delete job.pendingActionId;
-      } else if (
-        this.staleJobTimeout > 0 &&
-        job.status === 'running' &&
-        job.preserveForScheduleReconcile !== true
-      ) {
+      } else if (this.staleJobTimeout > 0 && job.status === 'running') {
         // Failsafe: reap jobs stuck in "running" with no generation activity for
         // longer than the stale timeout. These are crashed/hung generations that
         // never reached a terminal state; without this they accumulate their
@@ -1271,7 +1292,13 @@ export class InMemoryJobStore implements IJobStoreV2 {
             continue;
           }
           this.parkQueuedSteers(streamId, job, now);
-          toDelete.push({ streamId, createdAt: job.createdAt });
+          if (job.preserveForScheduleReconcile === true) {
+            job.status = 'error';
+            job.completedAt = now;
+            job.error = 'Scheduled generation owner became unavailable';
+            job.steersClosed = true;
+            retainedRecovered++;
+          } else toDelete.push({ streamId, createdAt: job.createdAt });
           staleRunning++;
         }
       }
@@ -1305,7 +1332,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
       logger.debug(`[InMemoryJobStore] Cleaned up ${toDelete.length} expired jobs`);
     }
 
-    return toDelete.length;
+    return toDelete.length + retainedRecovered;
   }
 
   private async evictOldest(): Promise<void> {

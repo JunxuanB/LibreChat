@@ -20,6 +20,7 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
   let service: ReturnType<typeof createSchedulesService>;
   let record: jest.Mock;
   let mongoAvailable: boolean;
+  let dependencies: SchedulesServiceDeps;
 
   beforeEach(() => {
     store = new InMemoryJobStore({ ttlAfterComplete: 0 });
@@ -34,7 +35,7 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
     record = jest.fn(async () => {
       if (!mongoAvailable) throw new Error('Mongo unavailable');
     });
-    service = createSchedulesService({
+    dependencies = {
       methods: {
         recordRunOutcome: record,
         getScheduleById: async () => null,
@@ -55,7 +56,8 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
       enqueueAgentTrigger: async () => undefined,
       isUserDeleting: async () => false,
       getTriggerDelivery: async () => null,
-    } as unknown as SchedulesServiceDeps);
+    } as unknown as SchedulesServiceDeps;
+    service = createSchedulesService(dependencies);
   });
 
   afterEach(async () => {
@@ -165,6 +167,60 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
       expect(await store.getJob(job.streamId)).toBeNull();
     },
   );
+
+  it('recovers a crashed owner without dropping its denial or accepted steers', async () => {
+    const job = await create();
+    await store.enqueueSteer(
+      job.streamId,
+      { steerId: 'queued', userId: 'owner', text: 'next', createdAt: Date.now() },
+      job.createdAt,
+    );
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    expect(await store.cleanup()).toBe(1);
+    expect((await store.getJob(job.streamId))?.status).toBe('error');
+    expect((await store.getJob(job.streamId))?.scheduleOutcomeError).toContain('consent_revoked');
+    // No original service instance or active/unbookkept run query is required.
+    await createSchedulesService(dependencies).reconcileRetainedJobs();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'error',
+        mcp: expect.arrayContaining([expect.objectContaining({ reason: 'consent_revoked' })]),
+      }),
+    );
+    expect(await store.getJob(job.streamId)).toBeNull();
+    expect(JSON.parse((await store.claimParkedSteers(job.streamId, 'owner'))!).steers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ steerId: 'queued' })]),
+    );
+  });
+
+  it('retries a failed retention acknowledgement after Mongo has already settled and bookkept', async () => {
+    const job = await create();
+    await store.updateJob(
+      job.streamId,
+      { status: 'complete', completedAt: Date.now() },
+      job.createdAt,
+    );
+    const update = store.updateJob.bind(store);
+    const failure = jest.spyOn(store, 'updateJob').mockImplementation(async (...args) => {
+      if (args[1].preserveForScheduleReconcile === false) throw new Error('release unavailable');
+      return update(...args);
+    });
+    await service.recordScheduleOutcome({
+      scheduleId: identity.scheduleId,
+      scheduledFor,
+      streamId: job.streamId,
+      jobCreatedAt: job.createdAt,
+      status: 'success',
+    });
+    expect(record).toHaveBeenCalled();
+    expect((await store.getJob(job.streamId))?.preserveForScheduleReconcile).toBe(true);
+    failure.mockRestore();
+    await createSchedulesService(dependencies).reconcileRetainedJobs();
+    expect(await store.getJob(job.streamId)).toBeNull();
+    await expect(store.createJob(job.streamId, 'owner')).resolves.toMatchObject({
+      status: 'running',
+    });
+  });
 
   it('blocks tool continuation during both-store failure and records the denial after recovery', async () => {
     const job = await GenerationJobManager.createJob('conversation', 'owner', 'conversation', {

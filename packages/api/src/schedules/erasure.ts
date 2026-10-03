@@ -38,6 +38,8 @@ export interface ScheduleErasureSweep {
 
 export interface ScheduleErasureDeps {
   abortScheduledJob: ScheduleEngineDeps['abortScheduledJob'];
+  /** Retries held job outcomes even after the run's Mongo bookkeeping committed. */
+  reconcileRetainedJobs?: () => Promise<void>;
   methods: Pick<
     ScheduleMethods,
     | 'getDeletingSchedules'
@@ -416,6 +418,9 @@ export function startScheduleErasureSweep(deps: ScheduleErasureDeps): ScheduleEr
   async function sweep(): Promise<void> {
     try {
       await runAsSystem(async () => {
+        await deps
+          .reconcileRetainedJobs?.()
+          .catch((error) => logger.warn('[schedules] retained job recovery failed:', error));
         const deleting = await deps.methods.getDeletingSchedules(SWEEP_BATCH);
         for (const schedule of deleting) {
           await settleAbandonedRuns(deps, schedule.id).catch((err) => {
