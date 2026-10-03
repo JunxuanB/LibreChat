@@ -6,6 +6,7 @@ import {
   MAX_SEARCH_TOKENS,
   USER_SEARCH_TOKEN_FIELDS,
   MAX_SEARCH_TOKEN_LENGTH,
+  MAX_SEARCH_QUERY_TOKENS,
 } from './search';
 
 describe('normalizeSearchText', () => {
@@ -156,14 +157,20 @@ describe('buildUserSearchFilter', () => {
     expect(filter.$and[1].$or).not.toContainEqual({ nameTokens: /^john smi/ });
   });
 
-  it('escapes regex metacharacters and requires every query token, however many', () => {
+  it('escapes regex metacharacters and requires every query token up to the cap', () => {
     const filter = buildUserSearchFilter('a.b') as { $and: Array<{ $or: unknown[] }> };
     expect(filter.$and[0].$or).toContainEqual({ emailTokens: /^a\.b/ });
 
-    const many = Array.from({ length: 12 }, (_, i) => `t${i}`).join(' ');
-    const all = buildUserSearchFilter(many) as { $and: Array<{ $or: unknown[] }> };
-    expect(all.$and).toHaveLength(12);
-    expect(all.$and[11].$or).toContainEqual({ nameTokens: /^t11/ });
+    const words = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`).join(' ');
+    const all = buildUserSearchFilter(words(MAX_SEARCH_QUERY_TOKENS)) as {
+      $and: Array<{ $or: unknown[] }>;
+    };
+    expect(all.$and).toHaveLength(MAX_SEARCH_QUERY_TOKENS);
+    expect(all.$and[MAX_SEARCH_QUERY_TOKENS - 1].$or).toContainEqual({
+      nameTokens: new RegExp(`^t${MAX_SEARCH_QUERY_TOKENS - 1}`),
+    });
+    /** Over the cap, nothing matches: extra words are never silently dropped. */
+    expect(buildUserSearchFilter(words(MAX_SEARCH_QUERY_TOKENS + 1))).toBeNull();
   });
 
   it('searches punctuation-only queries on full values only', () => {

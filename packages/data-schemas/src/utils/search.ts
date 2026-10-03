@@ -42,6 +42,12 @@ export const MAX_SEARCH_TOKEN_LENGTH = 64;
 export const MAX_SEARCH_VALUE_LENGTH = 256;
 /** Most tokens stored per field. */
 export const MAX_SEARCH_TOKENS = 32;
+/**
+ * Most distinct query words. Every word must match, so a longer query matches
+ * nothing rather than ignoring its extra words; the cap bounds the filter a
+ * single request can build.
+ */
+export const MAX_SEARCH_QUERY_TOKENS = 16;
 
 const NON_WORD = /[^\p{L}\p{N}]+/u;
 const COMBINING_MARKS = /\p{M}+/gu;
@@ -191,7 +197,11 @@ export function buildSearchTokenFilter(
   const queryTokens = [...new Set(words(normalized))];
   const whole = truncate(normalized, MAX_SEARCH_VALUE_LENGTH);
   const matchWhole = whole.length > 0 && !(queryTokens.length === 1 && queryTokens[0] === whole);
-  if (!trimmed || (queryTokens.length === 0 && !matchWhole)) {
+  if (
+    !trimmed ||
+    queryTokens.length > MAX_SEARCH_QUERY_TOKENS ||
+    (queryTokens.length === 0 && !matchWhole)
+  ) {
     return null;
   }
 
