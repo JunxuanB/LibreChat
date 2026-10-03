@@ -252,6 +252,39 @@ test.describe('Lia mascot', () => {
     expect(end.y + end.height).toBeLessThanOrEqual(composer.y + 4);
   });
 
+  test('a keyboard user can pet Lia and move her along the composer @scenario:lia-keyboard-control', async ({
+    page,
+  }) => {
+    await open(page, { optedIn: true });
+    await expect(lia(page)).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(3500);
+    const control = page.getByRole('button', { name: /^Lia: / });
+    await expect(control).toHaveAccessibleDescription(/arrow keys/);
+    await control.focus();
+    await expect(control).toBeFocused();
+
+    const composer = await page.getByRole('textbox', { name: 'Message input' }).boundingBox();
+    if (!composer) {
+      throw new Error('The composer has no box');
+    }
+    const before = await bodyBox(page);
+    /* Toward the roomier side of the composer. */
+    const key =
+      before.x + before.width / 2 > composer.x + composer.width / 2 ? 'ArrowLeft' : 'ArrowRight';
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press(key);
+    }
+    await expect(control).toHaveAccessibleName('Lia: Lands with a thumbs up');
+    await page.waitForTimeout(2000);
+    const after = await bodyBox(page);
+    const moved = after.x - before.x;
+    expect(key === 'ArrowLeft' ? -moved : moved).toBeGreaterThan(40);
+    expect(after.y + after.height).toBeLessThanOrEqual(composer.y + 4);
+
+    await page.keyboard.press('Enter');
+    await expect(control).toHaveAccessibleName('Lia: Gets petted');
+  });
+
   test('with reduced motion Lia stays where she stands @scenario:lia-reduced-motion-stays-put', async ({
     page,
   }) => {

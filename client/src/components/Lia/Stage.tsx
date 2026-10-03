@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Button } from '@librechat/client';
 import type { RefObject } from 'react';
 import type { Bubble, LabelKey, Platform } from './engine/types';
 import type { TranslationKeys } from '~/hooks';
@@ -21,6 +22,8 @@ const HEIGHT = 50 * SCALE;
  * arms and props and lets clicks pass to the page. */
 const BODY_W = (GRID_W - 2 * BX) * SCALE;
 const BODY_H = HEAD_ROWS * SCALE;
+/** How far one arrow key press carries Lia along the composer. */
+const KEY_STEP = 24 * SCALE;
 
 /** Words that make Lia react while you type them. */
 const KEYWORDS: Readonly<Record<string, string>> = {
@@ -86,7 +89,8 @@ export default function Stage({
   const localize = useLocalize();
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const hitRef = useRef<HTMLDivElement>(null);
+  const hitRef = useRef<HTMLButtonElement>(null);
+  const keysId = useId();
   const bubbleRef = useRef<HTMLDivElement>(null);
   /* Measured when the text changes, so placing the bubble each frame reads no layout. */
   const bubbleWidthRef = useRef(0);
@@ -488,6 +492,17 @@ export default function Stage({
       }
       engine.pet();
     };
+    /* The keyboard's drag: each arrow press picks Lia up and sets her down a step along. */
+    const onStep = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+        return;
+      }
+      e.preventDefault();
+      const { x, y } = engine.position;
+      const to = x + (e.key === 'ArrowLeft' ? -KEY_STEP : KEY_STEP);
+      engine.hold({ x: to, y });
+      engine.release(to);
+    };
     const onHover = () => {
       if (engine.current == null && Math.random() < 0.4) {
         react('r-hover', 10000);
@@ -510,6 +525,7 @@ export default function Stage({
     hit.addEventListener('pointerup', onLetGo);
     hit.addEventListener('pointercancel', onLetGo);
     hit.addEventListener('click', onPet);
+    hit.addEventListener('keydown', onStep);
     hit.addEventListener('pointerenter', onHover);
 
     engine.play(leavingRef.current ? 'r-send' : 'intro', 4);
@@ -531,6 +547,7 @@ export default function Stage({
       hit.removeEventListener('pointerup', onLetGo);
       hit.removeEventListener('pointercancel', onLetGo);
       hit.removeEventListener('click', onPet);
+      hit.removeEventListener('keydown', onStep);
       hit.removeEventListener('pointerenter', onHover);
       motion.removeEventListener('change', onMotion);
       themeObserver.disconnect();
@@ -543,18 +560,19 @@ export default function Stage({
     bubbleText = 'say' in bubble ? localize(SAY[bubble.say]) : bubble.symbol;
   }
 
+  const doing = localize('com_ui_lia_doing', {
+    0: localize((activity ?? 'com_ui_lia_act_idle') as TranslationKeys),
+  });
+
   useLayoutEffect(() => {
     bubbleWidthRef.current = bubbleRef.current?.offsetWidth ?? 0;
   }, [bubbleText]);
 
   return (
-    <div
-      ref={rootRef}
-      className="pointer-events-none absolute inset-0 overflow-hidden"
-      aria-hidden="true"
-    >
+    <div ref={rootRef} className="pointer-events-none absolute inset-0 overflow-hidden">
       <canvas
         ref={canvasRef}
+        aria-hidden="true"
         data-testid="lia"
         className="absolute top-0 left-0 z-[5] [image-rendering:pixelated]"
         style={{
@@ -563,17 +581,26 @@ export default function Stage({
           transformOrigin: `${32 * SCALE}px ${(FOOT_Y - 1) * SCALE}px`,
         }}
       />
-      <div
+      {/* Lia herself: click or Enter to pet her, drag or the arrow keys to move her. */}
+      <Button
         ref={hitRef}
+        type="button"
+        variant={null}
+        size={null}
         data-testid="lia-body"
-        title={localize('com_ui_lia_doing', {
-          0: localize((activity ?? 'com_ui_lia_act_idle') as TranslationKeys),
-        })}
+        title={doing}
+        aria-label={doing}
+        aria-describedby={keysId}
+        aria-keyshortcuts="ArrowLeft ArrowRight"
         className="pointer-events-auto absolute top-0 left-0 z-[6] cursor-grab touch-none active:cursor-grabbing"
         style={{ width: BODY_W, height: BODY_H }}
       />
+      <span id={keysId} className="sr-only">
+        {localize('com_ui_lia_keys')}
+      </span>
       <div
         ref={bubbleRef}
+        aria-hidden="true"
         data-testid="lia-bubble"
         className="absolute top-0 left-0 z-20 w-max max-w-48"
         hidden={bubbleText == null}
