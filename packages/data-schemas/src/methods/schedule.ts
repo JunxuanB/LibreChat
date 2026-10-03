@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { projectScheduleMCPReceipt } from 'librechat-data-provider';
 import { getScheduleMCPDisabledReason } from 'librechat-data-provider';
+import { projectScheduleMCPReceipt, mergeScheduleMCPReceipts } from 'librechat-data-provider';
 import type { ScheduleRunStatus, ScheduleDisabledReason } from 'librechat-data-provider';
 import type { Model, Types, AnyBulkWriteOperation } from 'mongoose';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
@@ -1136,30 +1136,37 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     outcome,
     outcomes,
   }: Parameters<ScheduleMethods['recordMCPToolAuthFailure']>[0]): Promise<boolean> {
+    const binding = {
+      scheduleId,
+      scheduledFor,
+      conversationId,
+      ...(tenantId ? { tenantId } : { tenantId: { $exists: false } }),
+    };
+    const receipts: ScheduleMCPOutcome[] = outcomes ?? [
+      outcome ?? {
+        server,
+        status: 'mcp_configuration_missing',
+        detail: 'unattended_auth_required',
+      },
+    ];
     const updated = await ScheduleRun().updateOne(
-      {
-        scheduleId,
-        scheduledFor,
-        conversationId,
-        ...(tenantId ? { tenantId } : { tenantId: { $exists: false } }),
-        status: { $in: ['started', 'requires_action'] },
-      },
-      {
-        $addToSet: {
-          mcp: {
-            $each: outcomes ?? [
-              outcome ?? {
-                server,
-                status: 'mcp_configuration_missing',
-                detail: 'unattended_auth_required',
-              },
-            ],
-          },
-        },
-      },
+      { ...binding, status: { $in: ['started', 'requires_action'] } },
+      { $addToSet: { mcp: { $each: receipts } } },
       { timestamps: false },
     );
-    return (updated.matchedCount ?? 0) > 0;
+    if ((updated.matchedCount ?? 0) > 0) return true;
+    if (receipts.length === 0) return false;
+    // A durable replay acknowledges existing evidence, never appends a late diagnosis.
+    const terminal = await ScheduleRun()
+      .findOne({
+        ...binding,
+        status: { $in: ['success', 'error', 'interrupted', 'skipped_balance', 'skipped_overlap'] },
+      })
+      .select('mcp')
+      .lean<Pick<IScheduleRun, 'mcp'>>();
+    if (!terminal) return false;
+    const admitted = mergeScheduleMCPReceipts(terminal.mcp ?? []);
+    return mergeScheduleMCPReceipts(admitted, receipts).length === admitted.length;
   }
 
   /** Count of in-flight scheduled runs (across all schedules) for the fire cap. */
@@ -2158,15 +2165,15 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     // released lease reads as drained. Skew margin: a lease reads as live until
     // MARGIN past its expiry, so a clock-ahead erasure worker cannot destroy a row a
     // skew-behind holder still legitimately claims.
-    const leased = await Schedule()
-      .findOne({
-        id,
-        deleting: true,
-        leaseUntil: { $gt: new Date(Date.now() - LEASE_SKEW_MARGIN_MS) },
-      })
-      .select('_id')
-      .lean();
-    if (leased != null) {
+    const deleting = await Schedule()
+      .findOne({ id, deleting: true })
+      .select('_id leaseUntil')
+      .lean<Pick<ISchedule, 'leaseUntil'>>();
+    if (deleting == null) return false;
+    if (
+      deleting.leaseUntil != null &&
+      deleting.leaseUntil.getTime() > Date.now() - LEASE_SKEW_MARGIN_MS
+    ) {
       return false;
     }
     const active = await ScheduleRun()
