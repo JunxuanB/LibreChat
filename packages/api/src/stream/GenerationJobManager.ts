@@ -9285,9 +9285,8 @@ class GenerationJobManagerClass {
       const jobExists = await this.jobStore.hasJob(streamId);
       if (jobExists) {
         const shouldInspectRemoteTerminal =
-          count > 0 ||
-          (this.ownedJobs.get(streamId) !== observedRuntime.createdAt &&
-            this.eventTransport.getSubscriberCount(streamId) === 0);
+          this.ownedJobs.get(streamId) !== observedRuntime.createdAt &&
+          this.eventTransport.getSubscriberCount(streamId) === 0;
         if (!shouldInspectRemoteTerminal) {
           continue;
         }
@@ -9295,10 +9294,11 @@ class GenerationJobManagerClass {
         const currentJob = await this.jobStore.getJob(streamId);
         if (
           currentJob?.createdAt === observedRuntime.createdAt &&
-          currentJob.terminalHostActionPending === true
+          (currentJob.terminalHostActionPending === true ||
+            currentJob.terminalPersistencePending === true ||
+            currentJob.providerDrained === false)
         ) {
-          // The callback retry still owns this generation's evidence. Retain
-          // runtime buffers until it acknowledges and clears the durable marker.
+          // Persistence, provider drain and host acknowledgement still own this evidence.
           continue;
         }
         const isRetainedTerminal =
