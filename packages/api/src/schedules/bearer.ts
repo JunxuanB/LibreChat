@@ -100,14 +100,11 @@ export function createScheduledMCPBearerHost(deps: {
           cached.clear();
         },
         async resolve({ user, serverName, config, signal, selection }) {
-          signal = ownerSignal
-            ? signal
-              ? AbortSignal.any([ownerSignal, signal])
-              : ownerSignal
-            : signal;
+          if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
           signal?.throwIfAborted();
-          if (!usesDirectOpenIDBearerRecovery(applyRequestHeaders(config))) return config;
-          if (!('headers' in config)) return fail('unsupported_mode', serverName);
+          const effective = applyRequestHeaders(config);
+          if (!usesDirectOpenIDBearerRecovery(effective)) return config;
+          if (!('headers' in effective)) return fail('unsupported_mode', serverName);
           try {
             if (user?.id !== captured.ownerId || (user.tenantId ?? null) !== captured.tenantId)
               fail('binding_mismatch', serverName);
@@ -136,7 +133,7 @@ export function createScheduledMCPBearerHost(deps: {
             )
               fail('binding_mismatch', serverName);
             // No resource token in URL, subprocess, OAuth exchange or non-Authorization headers.
-            const authorization = Object.entries(config.headers ?? {}).filter(
+            const authorization = Object.entries(effective.headers ?? {}).filter(
               ([name]) => name.toLowerCase() === 'authorization',
             );
             if (
@@ -146,8 +143,8 @@ export function createScheduledMCPBearerHost(deps: {
               )
             )
               fail('unsupported_mode', serverName);
-            const { [authorization[0][0]]: _authorization, ...headers } = config.headers ?? {};
-            if (/\{\{LIBRECHAT_(?:OPENID_|GRAPH_)/.test(JSON.stringify({ ...config, headers })))
+            const { [authorization[0][0]]: _authorization, ...headers } = effective.headers ?? {};
+            if (/\{\{LIBRECHAT_(?:OPENID_|GRAPH_)/.test(JSON.stringify({ ...effective, headers })))
               fail('unsupported_mode', serverName);
             const selections = selection ? [selection] : target.permittedTools;
             if (!selections.length) fail('tool_policy_denied', serverName);
@@ -224,8 +221,11 @@ export function createScheduledMCPBearerHost(deps: {
             if (rejected.has(serverName)) fail('credential_rejected', serverName);
             if (credential.expiresAtMs <= now()) fail('credential_missing', serverName);
             return {
-              ...config,
-              headers: { ...config.headers, [authorization[0][0]]: `Bearer ${credential.token}` },
+              ...effective,
+              headers: {
+                ...effective.headers,
+                [authorization[0][0]]: `Bearer ${credential.token}`,
+              },
             };
           } catch (error) {
             signal?.throwIfAborted();

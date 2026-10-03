@@ -2,6 +2,11 @@ import { DEFAULT_SCHEDULE_MCP_CONSENT_LIFETIME_HOURS } from 'librechat-data-prov
 import { readScheduleMCPOutcomes, getScheduleMCPDisabledReason } from 'librechat-data-provider';
 import { logger, runAsSystem, tenantStorage, isRuntimeDisabled } from '@librechat/data-schemas';
 import { getRefillEligibilityDate, Permissions, PermissionTypes } from 'librechat-data-provider';
+import {
+  projectScheduleMCPReceipt,
+  readScheduleMCPReceipts,
+  mergeScheduleMCPReceipts,
+} from 'librechat-data-provider';
 import type { ScheduleMethods, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
 import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
@@ -355,13 +360,7 @@ export function createSchedulesService(
       outcome.detail,
       outcome.automaticReplay,
     ]);
-  const mergeReceipts = (
-    left: ScheduleMCPOutcome[],
-    right: ScheduleMCPOutcome[],
-  ): ScheduleMCPOutcome[] => {
-    const unique = new Map([...left, ...right].map((outcome) => [outcomeKey(outcome), outcome]));
-    return [...unique.values()];
-  };
+  const mergeReceipts = mergeScheduleMCPReceipts;
   const encodeReceipts = (outcomes: ScheduleMCPOutcome[]): string =>
     `${getScheduleMCPDisabledReason(outcomes) ?? 'mcp_unavailable'}: ${JSON.stringify(outcomes)}`;
 
@@ -661,12 +660,16 @@ export function createSchedulesService(
         return false;
       }
       if (options?.preserve !== false) {
+        const retained = projectScheduleMCPReceipt(
+          { status: 'interrupted', error: 'Schedule deleted' },
+          readScheduleMCPReceipts(job.scheduleOutcomeError),
+        );
         await GenerationJobManager.updateMetadata(
           conversationId,
           {
             preserveForScheduleReconcile: true,
-            scheduleOutcome: 'interrupted',
-            scheduleOutcomeError: 'Schedule deleted',
+            scheduleOutcome: retained.status,
+            scheduleOutcomeError: retained.error,
           },
           job.createdAt,
         );
@@ -945,7 +948,10 @@ export function createSchedulesService(
     ]);
     const encoded = encodeReceipts(outcomes);
     const writes = await Promise.allSettled([
-      methods.recordMCPToolAuthFailure({ ...payload, outcome: receiptError.outcomes[0] }),
+      methods.recordMCPToolAuthFailure({
+        ...payload,
+        outcomes: mergeReceipts(receiptError.outcomes, error.outcomes),
+      }),
       GenerationJobManager.updateMetadata(
         streamId,
         {
@@ -1081,11 +1087,11 @@ export function createSchedulesService(
     const missingAuth = mcp.length > 0;
     if (missingAuth) terminal = true;
     const effectiveStatus = missingAuth ? 'error' : status;
-    const effectiveError = missingAuth
-      ? mcp.some((item) => item.reason)
+    let effectiveError = error;
+    if (missingAuth)
+      effectiveError = mcp.some((item) => item.reason)
         ? encodeReceipts(mcp)
-        : 'MCP unattended authorization unavailable'
-      : error;
+        : 'MCP unattended authorization unavailable';
     if (terminal && streamId && jobCreatedAt != null) {
       try {
         await GenerationJobManager.updateMetadata(
@@ -1653,9 +1659,15 @@ export function createSchedulesService(
           .recordRunOutcome({
             scheduleId: run.scheduleId,
             scheduledFor: run.scheduledFor,
-            status: settledStatus,
+            ...projectScheduleMCPReceipt(
+              {
+                status: settledStatus,
+                mcp: run.mcp,
+                error: settledStatus === 'interrupted' ? 'Schedule deleted' : undefined,
+              },
+              isThisGeneration ? readScheduleMCPReceipts(live.job?.scheduleOutcomeError) : [],
+            ),
             conversationId: run.conversationId,
-            ...(settledStatus === 'interrupted' ? { error: 'Schedule deleted' } : {}),
             autoDisableAfterFailures: DEFAULT_SCHEDULE_LIMITS.autoDisableAfterFailures,
           })
           .then(
@@ -1839,9 +1851,11 @@ export function createSchedulesService(
           .recordRunOutcome({
             scheduleId: run.scheduleId,
             scheduledFor: run.scheduledFor,
-            status: settledStatus,
+            ...projectScheduleMCPReceipt(
+              { status: settledStatus, mcp: run.mcp, error: settledError },
+              isThisGeneration ? readScheduleMCPReceipts(live.job?.scheduleOutcomeError) : [],
+            ),
             conversationId: run.conversationId,
-            ...(settledError ? { error: settledError } : {}),
             autoDisableAfterFailures: DEFAULT_SCHEDULE_LIMITS.autoDisableAfterFailures,
           })
           .then(() => true)

@@ -484,8 +484,10 @@ export class ScheduledMCPBearerError extends Error {
   readonly outcomes: Array<
     ScheduledMCPFailure & { server: string; detail: 'unattended_auth_required'; agentId?: string }
   >;
+
   readonly code: ScheduledMCPFailure['status'];
   readonly retryable: boolean;
+
   constructor(reason: ScheduledMCPFailure['reason'], server: string, agentId?: string) {
     const failure = failureFixtures[reason];
     super('Scheduled MCP resource credential unavailable.');

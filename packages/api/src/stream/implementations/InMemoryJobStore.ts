@@ -43,6 +43,7 @@ import {
   recoveredSteerPayloadMatches,
   RecoveredSteerPayloadMismatchError,
 } from '~/stream/SteerRecovery';
+import { retainedScheduleReceipt } from '~/stream/internal/scheduleReceipts';
 import { createCheckpointNamespace } from '~/stream/checkpoints';
 import { toPendingSteer } from '~/stream/SteeringLifecycle';
 
@@ -724,7 +725,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
     }
     // Plain field writer. Membership-aware status transitions
     // (running ⇄ requires_action) go solely through transitionStatus.
-    Object.assign(job, updates);
+    Object.assign(job, updates, retainedScheduleReceipt(job, updates));
   }
 
   async markProviderExecutionDrained(
@@ -800,12 +801,10 @@ export class InMemoryJobStore implements IJobStoreV2 {
       this.parkQueuedSteers(streamId, job, Date.now());
     }
     job.status = args.to;
-    if (args.patch) {
-      Object.assign(job, args.patch);
-    }
-    for (const field of args.clear ?? []) {
-      delete job[field];
-    }
+    const receipt = retainedScheduleReceipt(job, args.patch ?? {}, args.clear ?? []);
+    if (args.patch) Object.assign(job, args.patch);
+    for (const field of args.clear ?? []) delete job[field];
+    Object.assign(job, receipt);
     const receiptEntries = this.steerReceipts.get(streamId)?.values() ?? [];
     if (args.to === 'requires_action' && args.patch?.pendingAction?.expiresAt == null) {
       // Unlike Redis, this store has no paused-job backstop eviction. Preserve

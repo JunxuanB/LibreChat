@@ -3364,7 +3364,7 @@ describe('scheduled resource bearer denial receipts', () => {
     automaticReplay: false as const,
     detail: 'unattended_auth_required' as const,
   };
-  it.each(['success', 'interrupted', 'skipped_balance'] as const)(
+  it.each(['success', 'interrupted', 'skipped_balance', 'requires_action'] as const)(
     'retains denial status and recovery instead of %s settlement',
     async (status) => {
       const schedule = await methods.createSchedule(scheduleData());

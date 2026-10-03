@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectScheduleMCPReceipt } from 'librechat-data-provider';
 import { getScheduleMCPDisabledReason } from 'librechat-data-provider';
 import type { ScheduleRunStatus, ScheduleDisabledReason } from 'librechat-data-provider';
 import type { Model, Types, AnyBulkWriteOperation } from 'mongoose';
@@ -277,6 +278,7 @@ export type ScheduleMethods = {
     tenantId?: string;
     server: string;
     outcome?: ScheduleMCPOutcome;
+    outcomes?: ScheduleMCPOutcome[];
   }) => Promise<boolean>;
   markRunResumeClaimed: (
     scheduleId: string,
@@ -1132,6 +1134,7 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     tenantId,
     server,
     outcome,
+    outcomes,
   }: Parameters<ScheduleMethods['recordMCPToolAuthFailure']>[0]): Promise<boolean> {
     const updated = await ScheduleRun().updateOne(
       {
@@ -1143,10 +1146,14 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
       },
       {
         $addToSet: {
-          mcp: outcome ?? {
-            server,
-            status: 'mcp_configuration_missing',
-            detail: 'unattended_auth_required',
+          mcp: {
+            $each: outcomes ?? [
+              outcome ?? {
+                server,
+                status: 'mcp_configuration_missing',
+                detail: 'unattended_auth_required',
+              },
+            ],
           },
         },
       },
@@ -1436,6 +1443,10 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
    */
   async function recordRunOutcome(params: RecordRunOutcomeParams): Promise<void> {
     const firedAt = new Date();
+    params = {
+      ...params,
+      ...projectScheduleMCPReceipt({ status: params.status, error: params.error, mcp: params.mcp }),
+    };
     if (params.status === 'requires_action') {
       // PAUSE (HITL): win the ROW transition first, then project the card. A read-then-
       // write guard let a concurrent resume terminalize the run between the two, after
@@ -1449,6 +1460,7 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
           scheduleId: params.scheduleId,
           scheduledFor: params.scheduledFor,
           status: { $in: ['started', 'requires_action'] },
+          'mcp.detail': { $ne: 'unattended_auth_required' },
           // See resumeClaimStaleBefore: fences a stale-snapshot recovery replay against a
           // resume that claimed the row after the snapshot was taken, while still letting
           // an ABANDONED claim (its worker died mid-hand-off) be recovered.
@@ -1479,6 +1491,21 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
         { new: false },
       );
       if (paused == null) {
+        const denied = await ScheduleRun()
+          .findOne({
+            scheduleId: params.scheduleId,
+            scheduledFor: params.scheduledFor,
+            status: { $in: ['started', 'requires_action'] },
+            'mcp.detail': 'unattended_auth_required',
+          })
+          .lean<IScheduleRun>();
+        if (denied) {
+          const projection = projectScheduleMCPReceipt({
+            status: 'requires_action',
+            mcp: denied.mcp,
+          });
+          if (projection.status === 'error') await recordRunOutcome({ ...params, ...projection });
+        }
         return;
       }
       // Revision-fenced like the terminal path: an owner edit landing between the fire

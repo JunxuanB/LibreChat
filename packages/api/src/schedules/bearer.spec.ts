@@ -307,6 +307,25 @@ it('does not let one cancelled waiter cancel shared minting for a sibling', asyn
   expect(f.resolveBearer).toHaveBeenCalledTimes(1);
 });
 
+it('uses requestHeaders Authorization precedence without losing declared resource binding', async () => {
+  const definition: ParsedServerConfig = {
+    ...config,
+    headers: { Authorization: 'Bearer obsolete-static' },
+    requestHeaders: {
+      authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}',
+      'X-Route': 'effective-route',
+    },
+  };
+  const f = await bearerFixture(definition);
+  const resolved = await f.call();
+  expect(resolved).toMatchObject({
+    headers: { authorization: 'Bearer resource-only', 'X-Route': 'effective-route' },
+  });
+  expect('headers' in resolved ? resolved.headers?.Authorization : undefined).toBeUndefined();
+  expect('requestHeaders' in resolved).toBe(false);
+  expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+});
+
 it('maps adapter outages to retryable safe errors without exposing credential/provider details', async () => {
   const f = await bearerFixture();
   f.resolveBearer.mockRejectedValueOnce(new Error('SECRET provider response'));

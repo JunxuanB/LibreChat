@@ -839,6 +839,39 @@ describe('reconciliation preserves the intended outcome', () => {
 
   // The stamp crosses a serialization boundary, and recordRunOutcome would reject a
   // status outside its union: degrade to success rather than fail the recovery write.
+  it.each(['requires_action', 'aborted', 'complete', 'error'] as const)(
+    'retains job-only bearer denial through %s recovery before clearing evidence',
+    async (status) => {
+      const methods = makeMethods(makeClaimedSchedule());
+      (methods.getRunsForReconciliation as jest.Mock).mockResolvedValue([unsettledRun()]);
+      const denial = {
+        server: 'Files',
+        status: 'mcp_reauth_required',
+        reason: 'consent_revoked',
+        recovery: 'authorize',
+        automaticReplay: false,
+        detail: 'unattended_auth_required',
+      };
+      const clearReconciledJob = jest.fn(async () => undefined);
+      await reconcileOnce(
+        makeDeps(methods, {
+          getJobStatus: retainedComplete({
+            status,
+            scheduleOutcomeError: `mcp_reauth_required: ${JSON.stringify([denial])}`,
+          }),
+          clearReconciledJob,
+        }),
+      );
+      expect(methods.recordRunOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'error', mcp: [denial] }),
+      );
+      expect(clearReconciledJob).toHaveBeenCalled();
+      expect(methods.recordRunOutcome.mock.invocationCallOrder[0]).toBeLessThan(
+        clearReconciledJob.mock.invocationCallOrder[0],
+      );
+    },
+  );
+
   it('degrades an unrecognized stamp to success', async () => {
     const methods = makeMethods(makeClaimedSchedule());
     (methods.getRunsForReconciliation as jest.Mock).mockResolvedValue([unsettledRun()]);

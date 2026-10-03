@@ -1,5 +1,5 @@
 import { logger, runAsSystem } from '@librechat/data-schemas';
-import { readScheduleMCPOutcomes } from 'librechat-data-provider';
+import { projectScheduleMCPReceipt, readScheduleMCPReceipts } from 'librechat-data-provider';
 import type { IScheduleRun } from '@librechat/data-schemas';
 import type { ScheduleEngineDeps, JobState } from './types';
 import { hasAbortInFlight, hasResumeHandoffInFlight, retainedOutcome } from './types';
@@ -86,35 +86,30 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
               : limits;
             // All transitions go through recordRunOutcome so the schedule's lastRun
             // (and the card's status chip) tracks the run, including the pause.
-            const finalize = (
+            const finalize = async (
               status: 'success' | 'interrupted' | 'error' | 'requires_action' | 'skipped_balance',
               error?: string,
               opts?: { omitConversationId?: boolean },
-            ) =>
-              deps.methods.recordRunOutcome({
+            ) => {
+              const projection = projectScheduleMCPReceipt(
+                { status, error, mcp: run.mcp },
+                jobIdentityMatches(jobState, run)
+                  ? readScheduleMCPReceipts(jobState?.scheduleOutcomeError)
+                  : [],
+              );
+              await deps.methods.recordRunOutcome({
                 scheduleId: run.scheduleId,
                 scheduledFor: run.scheduledFor,
-                status,
-                ...(status === 'requires_action' && jobState?.checkpointNamespace != null
+                ...projection,
+                ...(projection.status === 'requires_action' && jobState?.checkpointNamespace != null
                   ? { checkpointNamespace: jobState.checkpointNamespace }
                   : {}),
-                // Pre-start aborts have a reserved id but no conversation was ever
-                // created; projecting it gives the card a link to a missing chat.
                 conversationId: opts?.omitConversationId ? undefined : run.conversationId,
                 clearConversationId: opts?.omitConversationId,
-                error,
-                mcp: [
-                  ...new Map(
-                    [
-                      ...(run.mcp ?? []),
-                      ...readScheduleMCPOutcomes(error).filter(
-                        (outcome) => outcome.detail === 'unattended_auth_required',
-                      ),
-                    ].map((outcome) => [JSON.stringify(outcome), outcome]),
-                  ).values(),
-                ],
                 autoDisableAfterFailures: runLimits.autoDisableAfterFailures,
               });
+              return projection;
+            };
             // Admission-only rows never reached the delivery or generation layers.
             // Their deterministic failure was stored with the reservation, so replay it
             // directly instead of waiting for the generic orphan timeout.
@@ -167,7 +162,8 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
               if (run.status === 'started' && hasResumeHandoffInFlight(run, Date.now())) {
                 continue;
               }
-              await finalize('requires_action');
+              const projection = await finalize('requires_action');
+              if (projection.status === 'error') await clearRetainedJob();
               continue;
             }
             // A retained terminal job whose inline outcome hook failed transiently —

@@ -52,6 +52,7 @@ import {
   resolveCoalesceWindowMs,
 } from '~/stream/internal/coalescing';
 import { instrumentIORedisClient, RedisUseCases } from '~/cache/redisTelemetry';
+import { SCHEDULE_MCP_RECEIPT_LUA } from '~/stream/internal/scheduleReceipts';
 import { RecoveredSteerPayloadMismatchError } from '~/stream/SteerRecovery';
 import { createCheckpointNamespace } from '~/stream/checkpoints';
 import { createToolTimingTracker } from '~/agents/toolTiming';
@@ -134,6 +135,7 @@ function assertCreateIdempotencyArguments(
  *   ]
  */
 const JOB_CAS_LUA =
+  SCHEDULE_MCP_RECEIPT_LUA +
   'if redis.call("HGET", KEYS[1], "status") ~= ARGV[1] then return 0 end ' +
   'if ARGV[2] ~= "" and redis.call("HGET", KEYS[1], "pendingActionId") ~= ARGV[2] then return 0 end ' +
   'if ARGV[3] ~= "" and redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[3] then return 0 end ' +
@@ -179,11 +181,14 @@ const JOB_CAS_LUA =
   'or (item.createdAt and (type(item.createdAt) ~= "number" or item.createdAt < 0)) ' +
   'or (item.recoveringCreatedAt and (type(item.recoveringCreatedAt) ~= "number" or item.recoveringCreatedAt < 0)) then return 0 end ' +
   'validatedPrior[#validatedPrior + 1] = item end end end ' +
-  'local hdelCount = tonumber(ARGV[13]) ' +
+  'local currentReceipt = redis.call("HGET", KEYS[1], "scheduleOutcomeError") ' +
+  'local clearReceipt = false local hdelCount = tonumber(ARGV[13]) ' +
+  'for i = 14, 13 + hdelCount do if ARGV[i] == "scheduleOutcome" or ARGV[i] == "scheduleOutcomeError" then clearReceipt = true end end ' +
   'local idx = 14 ' +
   'for i = 1, hdelCount do redis.call("HDEL", KEYS[1], ARGV[idx]) idx = idx + 1 end ' +
   'local hset = {} ' +
   'for i = idx, #ARGV do hset[#hset + 1] = ARGV[i] end ' +
+  'hset = retainScheduleReceipt(hset, currentReceipt, clearReceipt) ' +
   'if #hset > 0 then redis.call("HSET", KEYS[1], unpack(hset)) end ' +
   'if terminal then redis.call("HSET", KEYS[1], "steersClosed", "1") end ' +
   // A same-status pause-barrier release does not carry pendingAction again.
@@ -610,10 +615,12 @@ const JOB_CREATE_LUA =
  *   ]
  */
 const JOB_UPDATE_LUA =
+  SCHEDULE_MCP_RECEIPT_LUA +
   'if redis.call("EXISTS", KEYS[1]) == 0 then return 0 end ' +
   'if ARGV[1] ~= "" and redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
   'local hset = {} ' +
   'for i = 6, #ARGV do hset[#hset + 1] = ARGV[i] end ' +
+  'hset = retainScheduleReceipt(hset, redis.call("HGET", KEYS[1], "scheduleOutcomeError"), false) ' +
   'if #hset > 0 then redis.call("HSET", KEYS[1], unpack(hset)) end ' +
   'if ARGV[2] == "1" then ' +
   'local completedTtl = tonumber(ARGV[3]) ' +

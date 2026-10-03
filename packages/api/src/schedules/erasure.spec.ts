@@ -211,6 +211,35 @@ describe('topology-safe dead-delivery convergence', () => {
 
   /** Presence of an identity-matched job is positive evidence in EVERY topology, so this
    *  must not depend on the owner-death inference the unsafe fallback refuses. */
+  it.each(['requires_action', 'aborted', 'complete', 'error'] as const)(
+    'preserves job-only bearer diagnosis in clustered %s recovery',
+    async (status) => {
+      const denial = {
+        server: 'Files',
+        status: 'mcp_permission_denied',
+        reason: 'tool_policy_denied',
+        recovery: 'restore_permission',
+        automaticReplay: false,
+        detail: 'unattended_auth_required',
+      };
+      const { methods, clearReconciledJob } = await convergeOnce({
+        job: {
+          status,
+          scheduleId: 'schedule-1',
+          scheduledFor: '2026-08-17T12:00:00.000Z',
+          scheduleOutcomeError: `mcp_permission_denied: ${JSON.stringify([denial])}`,
+        },
+      });
+      expect(methods.recordRunOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'error', mcp: [denial] }),
+      );
+      expect(clearReconciledJob).toHaveBeenCalled();
+      expect(methods.recordRunOutcome.mock.invocationCallOrder[0]).toBeLessThan(
+        clearReconciledJob.mock.invocationCallOrder[0],
+      );
+    },
+  );
+
   it('honors the owner-stamped outcome over the generic terminal status', async () => {
     const { methods } = await convergeOnce({
       job: {
