@@ -118,6 +118,12 @@ redisDescribe('real Redis receipt retention', () => {
         created.createdAt,
       );
       expect(await redis.ttl('stream:{retained-receipt}:job')).toBeGreaterThanOrEqual(0);
+      expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify(['retained-receipt', created.createdAt]),
+        ),
+      ).toBe(0);
     } finally {
       await store.deleteJob('retained-receipt', created.createdAt);
       await redis.quit();
@@ -170,6 +176,12 @@ redisDescribe('real Redis receipt retention', () => {
       await restarted.updateJob(stream, { preserveForScheduleReconcile: false }, job.createdAt);
       await restarted.deleteJob(stream, job.createdAt);
       expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify([stream, job.createdAt]),
+        ),
+      ).toBe(0);
+      expect(
         (await restarted.getScheduleReconcileJobs(100)).map((item) => item.streamId),
       ).not.toContain(stream);
     } finally {
@@ -177,6 +189,102 @@ redisDescribe('real Redis receipt retention', () => {
       await redis.quit();
     }
   });
+
+  it('retires exact deletion and status acknowledgements without removing a successor hint', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis);
+    const stream = 'hint-successor';
+    try {
+      const old = await store.createJob(stream, 'owner');
+      await store.updateJob(stream, { preserveForScheduleReconcile: true }, old.createdAt);
+      await store.deleteJob(stream, old.createdAt);
+      expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify([stream, old.createdAt]),
+        ),
+      ).toBe(0);
+      const successor = await store.createJob(stream, 'owner');
+      const member = JSON.stringify([stream, successor.createdAt]);
+      await store.updateJob(stream, { preserveForScheduleReconcile: true }, successor.createdAt);
+      await store.updateJob(stream, { preserveForScheduleReconcile: false }, old.createdAt);
+      expect(await store.deleteJob(stream, old.createdAt)).toBe(false);
+      expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(1);
+      expect(
+        await store.transitionStatus(stream, {
+          from: 'running',
+          to: 'complete',
+          expectCreatedAt: successor.createdAt,
+          patch: { completedAt: Date.now(), preserveForScheduleReconcile: false },
+        }),
+      ).toBe(true);
+      expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(0);
+      await store.deleteJob(stream, successor.createdAt);
+    } finally {
+      await store.deleteJob(stream);
+      await redis.quit();
+    }
+  });
+
+  it.each(['before hash', 'after hash'] as const)(
+    'keeps a same-epoch retention re-arm racing release %s',
+    async (phase) => {
+      const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+      await redis.connect();
+      const store = new RedisJobStore(redis);
+      const stream = `hint-rearm-${phase}`;
+      const job = await store.createJob(stream, 'owner');
+      await store.updateJob(stream, { preserveForScheduleReconcile: true }, job.createdAt);
+      try {
+        if (phase === 'after hash') {
+          const remove = redis.srem.bind(redis);
+          jest.spyOn(redis, 'srem').mockImplementationOnce(async (...args) => {
+            const result = await remove(...args);
+            await store.updateJob(stream, { preserveForScheduleReconcile: true }, job.createdAt);
+            return result;
+          });
+          await store.updateJob(stream, { preserveForScheduleReconcile: false }, job.createdAt);
+        } else {
+          let arrived!: () => void;
+          const entered = new Promise<void>((resolve) => {
+            arrived = resolve;
+          });
+          let release!: () => void;
+          const gate = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          const evaluate = redis.eval.bind(redis);
+          jest.spyOn(redis, 'eval').mockImplementationOnce(async (...args) => {
+            arrived();
+            await gate;
+            return evaluate(...args);
+          });
+          const retained = store.updateJob(
+            stream,
+            { preserveForScheduleReconcile: true },
+            job.createdAt,
+          );
+          await entered;
+          await store.updateJob(stream, { preserveForScheduleReconcile: false }, job.createdAt);
+          release();
+          await retained;
+        }
+        expect((await store.getJob(stream))?.preserveForScheduleReconcile).toBe(true);
+        expect(
+          await redis.sismember(
+            'stream:schedule_reconcile:v1',
+            JSON.stringify([stream, job.createdAt]),
+          ),
+        ).toBe(1);
+        expect(await redis.ttl(`stream:{${stream}}:job`)).toBe(-1);
+      } finally {
+        jest.restoreAllMocks();
+        await store.deleteJob(stream, job.createdAt);
+        await redis.quit();
+      }
+    },
+  );
 
   it('retains all denial evidence atomically in real Redis without affecting a replaced epoch', async () => {
     const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });

@@ -517,6 +517,8 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
       });
     try {
       const connected = await manager.getConnection(input);
+      expect(input.requestScopedConnections.connections.size).toBe(1);
+      expect(manager.getUserConnections(user.id)).toBeUndefined();
       expect((await connected.fetchToolsSnapshot()).tools.map((tool) => tool.name)).toContain(
         'echo',
       );
@@ -589,6 +591,104 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
       await server.close();
     }
   });
+  it.each([false, true])(
+    'isolates cold and restored scheduled checkout from a warm browser pool, requestHeaders=%s',
+    async (requestHeaders) => {
+      const observed: string[] = [];
+      const server = await createOAuthMCPServer({
+        onResourceRequest: (req) => {
+          if (req.headers.authorization) observed.push(req.headers.authorization);
+        },
+      });
+      const definition: ParsedServerConfig = {
+        ...config,
+        url: server.url,
+        requiresOAuth: false,
+        ...(requestHeaders ? { headers: {}, requestHeaders: config.headers } : {}),
+      };
+      const f = await bearerFixture(definition);
+      for (const token of ['browser-only', 'resource-only']) {
+        server.issuedTokens.add(token);
+        server.tokenIssueTimes.set(token, Date.now());
+      }
+      const manager = new MCPManager();
+      const upstreamTokenProvider = jest.fn(async () => ({ access_token: 'browser-only' }));
+      const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+        isAppServerConfig: async () => false,
+        resolveAllowlists: async () => ({
+          allowedDomains: ['127.0.0.1'],
+          allowedAddresses: [`127.0.0.1:${server.port}`],
+          useSSRFProtection: false,
+        }),
+      } as unknown as MCPServersRegistry);
+      const restored = createMCPRequestContext();
+      const flowManager = new FlowStateManager<MCPOAuthTokens | null>(
+        new MockKeyv() as unknown as Keyv,
+        { ci: true, ttl: 30000 },
+      );
+      try {
+        const browser = await manager.getConnection({
+          user,
+          serverName: 'Files',
+          serverConfig: definition,
+          upstreamTokenProvider,
+        });
+        expect(manager.getUserConnections(user.id)?.get('Files')).toBe(browser);
+        upstreamTokenProvider.mockClear();
+        prepareScheduledMCPBearer({
+          req: { user, _isScheduledFire: true, body: {} },
+          context: restored,
+          host: f.host,
+          restoredContext: restoreScheduledTokenContext(
+            { user },
+            {
+              userId: user.id,
+              tenantId: user.tenantId,
+              scheduleId: identity.scheduleId,
+              agent_id: 'root',
+            },
+          ),
+        });
+        observed.length = 0;
+        const connections: MCPConnection[] = [];
+        for (const context of [f.context, restored]) {
+          await manager.callTool({
+            user,
+            serverName: 'Files',
+            serverConfig: definition,
+            provider: 'openai',
+            toolName: 'echo',
+            toolArguments: { message: 'scoped' },
+            flowManager,
+            requestScopedConnections: context,
+            upstreamTokenProvider,
+            scheduledBearerInvocation: bindScheduledMCPBearerInvocation(context, 'child', 'echo'),
+          });
+          expect(context.connections.size).toBe(1);
+          const connection = [...context.connections.values()][0] as MCPConnection;
+          expect(connection).not.toBe(browser);
+          connections.push(connection);
+        }
+        expect(connections[0]).not.toBe(connections[1]);
+        expect(upstreamTokenProvider).not.toHaveBeenCalled();
+        expect(f.resolveBearer).toHaveBeenCalledTimes(2);
+        expect(observed.length).toBeGreaterThan(0);
+        expect(observed.every((header) => header === 'Bearer resource-only')).toBe(true);
+        expect(manager.getUserConnections(user.id)?.get('Files')).toBe(browser);
+        await cleanupMCPRequestContext(f.context);
+        expect(restored.connections.size).toBe(1);
+        expect(await browser.isConnected()).toBe(true);
+      } finally {
+        await cleanupMCPRequestContext(f.context);
+        await cleanupMCPRequestContext(restored);
+        await manager.disconnectUserConnections(user.id);
+        registry.mockRestore();
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+      }
+    },
+  );
+
   it('retains effective request headers on an unrelated scheduled static sibling', async () => {
     const observed: Array<string | undefined> = [];
     const server = await createOAuthMCPServer({

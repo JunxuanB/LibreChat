@@ -28,6 +28,7 @@ import {
 } from './capabilities';
 import {
   resolveScheduledMCPBearerConfig,
+  requiresScheduledMCPBearerConnection,
   isScheduledMCPBearer,
   ScheduledMCPBearerError,
 } from '~/schedules/bearer';
@@ -477,6 +478,7 @@ export abstract class UserConnectionManager {
     }
     const ephemeralConnection =
       opts.ephemeralConnection === true ||
+      requiresScheduledMCPBearerConnection(opts.requestScopedConnections, config) ||
       (config ? requiresEphemeralUserConnection(config) : false);
     const requestScopedConnections = ephemeralConnection
       ? opts.requestScopedConnections

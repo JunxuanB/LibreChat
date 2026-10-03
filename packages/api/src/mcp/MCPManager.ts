@@ -42,6 +42,7 @@ import {
 } from './capabilities';
 import {
   resolveScheduledMCPBearerConfig,
+  requiresScheduledMCPBearerConnection,
   isScheduledMCPBearer,
   rejectScheduledMCPBearer,
   ScheduledMCPBearerError,
@@ -263,7 +264,15 @@ export class MCPManager extends UserConnectionManager {
       connectionTarget,
     } as t.UserMCPConnectionOptions;
     const userId = opts.user?.id;
-    if (opts.forceNew || opts.ephemeralConnection || !userId) {
+    if (
+      opts.forceNew ||
+      opts.ephemeralConnection ||
+      !userId ||
+      requiresScheduledMCPBearerConnection(
+        opts.requestScopedConnections,
+        connectionTarget.serverConfig,
+      )
+    ) {
       return super.getUserConnection(resolvedOpts);
     }
 

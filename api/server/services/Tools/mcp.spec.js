@@ -59,6 +59,7 @@ jest.mock('~/server/services/GraphTokenService', () => ({
 jest.mock('~/cache', () => ({
   getLogStores: jest.fn(() => ({})),
 }));
+jest.mock('~/cache/getLogStores', () => jest.fn(() => ({})));
 jest.mock('~/server/services/Schedules', () => ({
   recordMCPToolAuthFailure: jest.fn(async () => true),
 }));
@@ -544,6 +545,53 @@ describe('reinitMCPServer — recovery of a server that failed inspection', () =
 describe('scheduled MCP connection initialization', () => {
   beforeEach(() => jest.clearAllMocks());
 
+  it.each(['consent_revoked', 'rbac_denied', 'credential_rejected'])(
+    'retains the bound scheduled identity and %s during catalog initialization',
+    async (reason) => {
+      const {
+        attachScheduledMCPBearer,
+        createMCPRequestContext,
+        ScheduledMCPBearerError,
+      } = require('@librechat/api');
+      const identity = {
+        scheduleId: 'scheduled',
+        ownerId: 'owner',
+        tenantId: 'tenant',
+        agentId: 'root',
+        invocationMode: 'delegated',
+      };
+      const context = createMCPRequestContext();
+      attachScheduledMCPBearer(context, identity);
+      const failure = new ScheduledMCPBearerError(reason, 'Files', 'child');
+      const receipt = require('~/server/services/Schedules').recordMCPToolAuthFailure;
+      mockGetConnection.mockRejectedValueOnce(failure);
+      await expect(
+        reinitMCPServer({
+          user: { id: 'owner', tenantId: 'tenant' },
+          serverName: 'Files',
+          serverConfig: {
+            type: 'streamable-http',
+            url: 'https://mcp.example.com',
+            source: 'yaml',
+            headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+          },
+          requestScopedConnections: context,
+          requestBody: { agent_id: 'untrusted-child' },
+          streamId: 'scheduled-conversation',
+          jobCreatedAt: 42,
+        }),
+      ).rejects.toBe(failure);
+      expect(receipt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identity,
+          error: failure,
+          streamId: 'scheduled-conversation',
+          jobCreatedAt: 42,
+        }),
+      );
+    },
+  );
+
   it('records a typed missing OBO provider before any tool instance exists', async () => {
     const { OboTokenResolutionError } = require('@librechat/api');
     const failure = new OboTokenResolutionError('missing_upstream_provider', 'Provider missing');
@@ -571,6 +619,7 @@ describe('scheduled MCP connection initialization', () => {
       jobCreatedAt: 42,
       userId: 'owner',
       serverName: 'Graph',
+      identity: undefined,
     });
   });
 

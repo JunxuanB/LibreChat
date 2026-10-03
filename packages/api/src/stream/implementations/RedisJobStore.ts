@@ -2342,8 +2342,6 @@ export class RedisJobStore implements IJobStoreV2 {
     expectedCreatedAt?: number,
   ): Promise<void> {
     const key = KEYS.job(streamId);
-    if (updates.preserveForScheduleReconcile === true)
-      await this.retainScheduleReconcile(streamId, expectedCreatedAt);
     const requestedTerminal =
       updates.status != null && ['complete', 'error', 'aborted'].includes(updates.status);
     if (requestedTerminal) {
@@ -2374,7 +2372,15 @@ export class RedisJobStore implements IJobStoreV2 {
     }
 
     const terminal = requestedTerminal;
-    const observedJob = terminal ? await this.getJob(streamId) : null;
+    const observedJob =
+      terminal || (updates.preserveForScheduleReconcile === false && expectedCreatedAt == null)
+        ? await this.getJob(streamId)
+        : null;
+    let reconcileEpoch: number | undefined;
+    if (updates.preserveForScheduleReconcile === true)
+      reconcileEpoch = await this.retainScheduleReconcile(streamId, expectedCreatedAt);
+    else if (updates.preserveForScheduleReconcile === false)
+      reconcileEpoch = expectedCreatedAt ?? observedJob?.createdAt;
     const completedTtl =
       updates.terminalPersistencePending === true ||
       observedJob?.terminalPersistencePending === true
@@ -2388,7 +2394,9 @@ export class RedisJobStore implements IJobStoreV2 {
       KEYS.chunks(streamId),
       KEYS.runSteps(streamId),
       KEYS.steers(streamId),
-      expectedCreatedAt != null ? String(expectedCreatedAt) : '',
+      expectedCreatedAt != null || reconcileEpoch != null
+        ? String(expectedCreatedAt ?? reconcileEpoch)
+        : '',
       terminal ? '1' : '0',
       String(completedTtl),
       String(this.ttl.chunksAfterComplete),
@@ -2399,6 +2407,15 @@ export class RedisJobStore implements IJobStoreV2 {
       return;
     }
 
+    if (reconcileEpoch != null) {
+      if (updates.preserveForScheduleReconcile === false)
+        await this.acknowledgeScheduleReconcile(streamId, reconcileEpoch);
+      else
+        await this.redis.sadd(
+          KEYS.scheduleReconcileJobs,
+          terminalHostActionMember(streamId, reconcileEpoch),
+        );
+    }
     if (terminal) {
       const currentJob = await this.reconcileJobMembership(streamId, {
         previousJob: observedJob,
@@ -2887,11 +2904,15 @@ export class RedisJobStore implements IJobStoreV2 {
     returnDrainedSteers: boolean,
   ): Promise<true | SteerQueueItem[] | null> {
     const { from, to, patch, clear, expectActionId, expectCreatedAt, notAfterMs } = args;
-    if (patch?.preserveForScheduleReconcile === true)
-      await this.retainScheduleReconcile(streamId, expectCreatedAt);
     const key = KEYS.job(streamId);
     const terminal = this.statusSetKey(to) === null;
     const terminalJob = terminal ? await this.getJob(streamId) : null;
+    let reconcileEpoch: number | undefined;
+    if (patch?.preserveForScheduleReconcile === true)
+      reconcileEpoch = await this.retainScheduleReconcile(streamId, expectCreatedAt);
+    else if (patch?.preserveForScheduleReconcile === false)
+      reconcileEpoch =
+        expectCreatedAt ?? terminalJob?.createdAt ?? (await this.getJob(streamId))?.createdAt;
     const detachedTerminalHostActionPending =
       terminal &&
       patch?.terminalHostActionPending === true &&
@@ -2977,7 +2998,9 @@ export class RedisJobStore implements IJobStoreV2 {
       KEYS.steerReceiptOrder(streamId),
       from,
       expectActionId ?? '',
-      expectCreatedAt != null ? String(expectCreatedAt) : '',
+      expectCreatedAt != null || reconcileEpoch != null
+        ? String(expectCreatedAt ?? reconcileEpoch)
+        : '',
       notAfterMs != null ? String(notAfterMs) : '',
       String(ttl),
       terminal ? '1' : '0',
@@ -3004,6 +3027,15 @@ export class RedisJobStore implements IJobStoreV2 {
       return null;
     }
 
+    if (reconcileEpoch != null) {
+      if (patch?.preserveForScheduleReconcile === false)
+        await this.acknowledgeScheduleReconcile(streamId, reconcileEpoch);
+      else
+        await this.redis.sadd(
+          KEYS.scheduleReconcileJobs,
+          terminalHostActionMember(streamId, reconcileEpoch),
+        );
+    }
     // 2) Same-slot TTL/content changes happened atomically in the CAS. Cross-slot
     //    indexes are reconciled last and verified against the durable hash.
     const currentJob = await this.reconcileJobMembership(streamId, {
@@ -3161,6 +3193,11 @@ export class RedisJobStore implements IJobStoreV2 {
       return false;
     }
 
+    if (
+      targetCreatedAt != null &&
+      (observedJob?.scheduleId != null || observedJob?.preserveForScheduleReconcile === true)
+    )
+      await this.acknowledgeScheduleReconcile(streamId, targetCreatedAt);
     const currentJob = await this.reconcileJobMembership(streamId, {
       initialJob: null,
       previousJob: observedJob,
@@ -3236,10 +3273,24 @@ export class RedisJobStore implements IJobStoreV2 {
     );
   }
 
-  private async retainScheduleReconcile(streamId: string, createdAt?: number): Promise<void> {
+  private async retainScheduleReconcile(
+    streamId: string,
+    createdAt?: number,
+  ): Promise<number | undefined> {
     const epoch = createdAt ?? (await this.getJob(streamId))?.createdAt;
     if (epoch != null)
       await this.redis.sadd(KEYS.scheduleReconcileJobs, terminalHostActionMember(streamId, epoch));
+    return epoch;
+  }
+
+  private async acknowledgeScheduleReconcile(streamId: string, createdAt: number): Promise<void> {
+    const member = terminalHostActionMember(streamId, createdAt);
+    await this.redis.srem(KEYS.scheduleReconcileJobs, member);
+    // Global hints and same-slot hashes cannot share a Redis Cluster transaction.
+    // Repair a concurrent re-arm; retain writers also confirm the hint after their CAS.
+    const current = await this.getJob(streamId);
+    if (current?.createdAt === createdAt && current.preserveForScheduleReconcile === true)
+      await this.redis.sadd(KEYS.scheduleReconcileJobs, member);
   }
 
   async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {
@@ -5455,6 +5506,9 @@ export class RedisJobStore implements IJobStoreV2 {
       userSubmittedPaths: data.userSubmittedPaths ? JSON.parse(data.userSubmittedPaths) : undefined,
       userSubmittedMessageFieldPaths: data.userSubmittedMessageFieldPaths
         ? JSON.parse(data.userSubmittedMessageFieldPaths)
+        : undefined,
+      preResumeProvenance: data.preResumeProvenance
+        ? JSON.parse(data.preResumeProvenance)
         : undefined,
       createdEventEmitted: data.createdEventEmitted === '1',
       sender: data.sender || undefined,

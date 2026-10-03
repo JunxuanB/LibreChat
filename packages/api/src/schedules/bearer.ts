@@ -268,6 +268,22 @@ export function attachScheduledMCPBearer(
 export function isScheduledMCPBearer(context?: RequestScopedMCPConnectionStore): boolean {
   return context != null && scopes.has(context);
 }
+
+/** Request identity is captured by the trusted host, never reconstructed from tool input. */
+export function getScheduledMCPBearerIdentity(
+  context?: RequestScopedMCPConnectionStore,
+): ScheduledMCPIdentity | undefined {
+  return context ? scopes.get(context)?.identity : undefined;
+}
+
+export function requiresScheduledMCPBearerConnection(
+  context: RequestScopedMCPConnectionStore | undefined,
+  config: ParsedServerConfig,
+): boolean {
+  return (
+    isScheduledMCPBearer(context) && usesDirectOpenIDBearerRecovery(applyRequestHeaders(config))
+  );
+}
 export async function resolveScheduledMCPBearerConfig(
   input: BearerInput & {
     context?: RequestScopedMCPConnectionStore;

@@ -37,6 +37,8 @@ import { scheduledMCPResourceBindingSchema } from './types/scheduleConsent';
 
 export const AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_DEFAULT = 24 * 1024;
 export const AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_HARD_MAX = 64 * 1024;
+/** Coalesces a conversation's ready background results into one wake-up turn. */
+export const AGENT_BACKGROUND_COMPLETION_RECEIPT_BATCHING_DEFAULT: boolean = true;
 export const AGENT_BACKGROUND_SHUTDOWN_INTERRUPT_GRACE_MS_DEFAULT = 5_000;
 import {
   DEFAULT_MCP_APP_CSP_LIMITS,
@@ -74,6 +76,9 @@ export {
   MAX_CHAT_PROJECT_DESCRIPTION_LENGTH_CEILING,
   MAX_CHAT_PROJECT_INSTRUCTIONS_LENGTH_CEILING,
 } from './limits';
+
+/** Legacy mark-unread writers remove this catch-up watermark too. */
+export const UNSEEN_REPLY_WATERMARK = '1970-01-01T00:00:00.000Z' as const;
 
 export const defaultSocialLogins = ['google', 'facebook', 'openid', 'github', 'discord', 'saml'];
 
@@ -156,6 +161,7 @@ export const excludedKeys = new Set([
   'lastResponseAt',
   'lastResponseMessageId',
   'lastResponseIsManual',
+  'isMarkedUnread',
   'lastSeenAt',
 ]);
 
@@ -1095,6 +1101,23 @@ export const toolApprovalPolicySchema = z
     /** Optional reason template surfaced in the prompt; `{tool}` is interpolated. */
     reason: z.string().optional(),
     /**
+     * Offer "Always allow" on the approval card. Choosing it auto-approves that exact tool
+     * (MCP names include their server) for the rest of the conversation. The server stores
+     * and enforces the choice; `deny` and `ask` rules and programmatic hooks still win, and
+     * stored choices are ignored under `mode: 'dontAsk'` or once this is turned off.
+     * Defaults to `false`: every paused call keeps prompting. Enable it only once every
+     * replica runs a version that supports it: older replicas ignore the choice and keep
+     * prompting, so during a rolling upgrade it may not stick.
+     */
+    allowAlways: z.boolean().optional(),
+    /**
+     * Most tools one conversation may remember with "Always allow". Once reached, the card
+     * stops offering the choice for new tools. Defaults to 64.
+     */
+    allowAlwaysMaxTools: z.number().int().min(1).max(1024).optional(),
+    /** Longest tool name that may be remembered. Defaults to 256. */
+    allowAlwaysMaxToolNameLength: z.number().int().min(1).max(1024).optional(),
+    /**
      * Programmatic policy hooks loaded from modules at startup. They layer on top of the
      * static lists above for dynamic, context-aware decisions the lists can't express
      * (per-args, per-agent, per-user). See {@link toolApprovalHookConfigSchema}.
@@ -1762,8 +1785,12 @@ export const agentsEndpointSchema = baseEndpointSchema
             .max(AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_HARD_MAX)
             .optional()
             .default(AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_DEFAULT),
-          /** Enable only after every replica has compatible receipt/poll consumers. */
-          completionReceiptBatching: z.boolean().optional().default(false),
+          /** Set `false` while replicas older than receipt batching still serve
+           * traffic; those replicas cannot read batched (v3) receipts. */
+          completionReceiptBatching: z
+            .boolean()
+            .optional()
+            .default(AGENT_BACKGROUND_COMPLETION_RECEIPT_BATCHING_DEFAULT),
           /** Maximum compatible sibling results in one continuation. */
           completionResultBatchSize: z.number().int().min(1).max(16).optional().default(8),
           /** Cooperative cancellation for process-local ordinary tools. Off
