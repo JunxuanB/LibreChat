@@ -214,6 +214,44 @@ test.describe('Lia mascot', () => {
     await expect(page.getByTestId('showLia')).toHaveCount(0);
   });
 
+  test('Lia can be picked up, carried and set down on the composer @scenario:lia-drag-to-move', async ({
+    page,
+  }) => {
+    await open(page, { optedIn: true });
+    await expect(lia(page)).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(3500);
+    const start = await bodyBox(page);
+    const composer = await page.getByRole('textbox', { name: 'Message input' }).boundingBox();
+    if (!composer) {
+      throw new Error('The composer has no box');
+    }
+    const from = { x: start.x + start.width / 2, y: start.y + start.height / 2 };
+    /* Toward the other end of the composer from where she stands. */
+    const target =
+      from.x > composer.x + composer.width / 2
+        ? composer.x + composer.width * 0.15
+        : composer.x + composer.width * 0.85;
+    const lift = { x: (from.x + target) / 2, y: from.y - 60 };
+    const centerX = async () => {
+      const box = await bodyBox(page);
+      return box.x + box.width / 2;
+    };
+
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(lift.x, lift.y, { steps: 10 });
+    /* While held she follows the pointer, off the composer. */
+    await expect.poll(async () => Math.abs((await centerX()) - lift.x)).toBeLessThan(start.width);
+    expect((await bodyBox(page)).y).toBeLessThan(start.y - 20);
+
+    await page.mouse.move(target, lift.y, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(2500);
+    const end = await bodyBox(page);
+    expect(Math.abs(end.x + end.width / 2 - target)).toBeLessThan(Math.abs(from.x - target));
+    expect(end.y + end.height).toBeLessThanOrEqual(composer.y + 4);
+  });
+
   test('with reduced motion Lia stays where she stands @scenario:lia-reduced-motion-stays-put', async ({
     page,
   }) => {
