@@ -32,6 +32,7 @@ async function sweepOnce(options: {
     methods: methods as unknown as ScheduleMethods,
     getJobStatus: jest.fn(async () => options.job ?? null),
     getTriggerDelivery: jest.fn(async () => null),
+    abortScheduledJob: jest.fn(async () => true),
     clearReconciledJob: jest.fn(async () => undefined),
     canInferOwnerDeathFromMissingJob: options.canInferOwnerDeathFromMissingJob,
   });
@@ -132,6 +133,7 @@ describe('topology-safe dead-delivery convergence', () => {
       getJobStatus: jest.fn(async () => options.job ?? null),
       getTriggerDelivery: getTriggerDelivery as never,
       clearReconciledJob,
+      abortScheduledJob: jest.fn(async () => true),
       // Defaults to the UNSAFE topology to prove this path never depends on it.
       canInferOwnerDeathFromMissingJob: options.canInferOwnerDeathFromMissingJob ?? false,
     });
@@ -237,6 +239,24 @@ describe('topology-safe dead-delivery convergence', () => {
       expect(methods.recordRunOutcome.mock.invocationCallOrder[0]).toBeLessThan(
         clearReconciledJob.mock.invocationCallOrder[0],
       );
+    },
+  );
+
+  it.each(['terminalPersistencePending', 'providerDrained', 'terminalHostActionPending'] as const)(
+    'defers clustered denial settlement behind %s',
+    async (fence) => {
+      const { methods, clearReconciledJob } = await convergeOnce({
+        job: {
+          status: 'requires_action',
+          scheduleId: 'schedule-1',
+          scheduledFor: '2026-08-17T12:00:00.000Z',
+          [fence]: fence !== 'providerDrained',
+          scheduleOutcomeError:
+            'mcp_permission_denied: [{"server":"Files","status":"mcp_permission_denied","reason":"tool_policy_denied","detail":"unattended_auth_required"}]',
+        },
+      });
+      expect(methods.recordRunOutcome).not.toHaveBeenCalled();
+      expect(clearReconciledJob).not.toHaveBeenCalled();
     },
   );
 
@@ -403,6 +423,7 @@ describe('permanent MCP bookkeeping recovery without an armed scheduler', () => 
       methods: methods as unknown as ScheduleMethods,
       getJobStatus: jest.fn(async () => null),
       getTriggerDelivery: jest.fn(async () => null),
+      abortScheduledJob: jest.fn(async () => true),
       clearReconciledJob: jest.fn(async () => undefined),
       canInferOwnerDeathFromMissingJob: false,
     });
@@ -454,6 +475,7 @@ describe('dead-delivery certainty fence', () => {
         status: 'dead',
         lastError: { code: 'x', message: 'timed out', certainty: options.certainty },
       })) as never,
+      abortScheduledJob: jest.fn(async () => true),
       clearReconciledJob: jest.fn(async () => undefined),
       canInferOwnerDeathFromMissingJob: options.canInferOwnerDeathFromMissingJob,
     });

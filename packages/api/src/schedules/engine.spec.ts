@@ -89,7 +89,7 @@ function makeDeps(
     getTriggerDelivery: async () => null,
     runInTenantContext: (_user, fn) => fn(),
     getJobStatus: async () => null,
-    abortScheduledJob: async () => undefined,
+    abortScheduledJob: async () => true,
     clearReconciledJob: async () => undefined,
     isOwnerDeleting: async () => false,
     isGloballyDisabled: async () => false,
@@ -732,7 +732,7 @@ describe('reconciliation preserves the intended outcome', () => {
     firedAt: new Date(Date.now() - 60 * 60_000),
   });
   const retainedComplete =
-    (extra: Record<string, string> = {}) =>
+    (extra: Partial<import('./types').JobState> = {}) =>
     async () => ({
       status: 'complete',
       scheduleId: 'sched-1',
@@ -869,6 +869,28 @@ describe('reconciliation preserves the intended outcome', () => {
       expect(methods.recordRunOutcome.mock.invocationCallOrder[0]).toBeLessThan(
         clearReconciledJob.mock.invocationCallOrder[0],
       );
+    },
+  );
+
+  it.each(['terminalPersistencePending', 'providerDrained'] as const)(
+    'defers denial settlement while %s blocks pause cleanup',
+    async (fence) => {
+      const methods = makeMethods(makeClaimedSchedule());
+      (methods.getRunsForReconciliation as jest.Mock).mockResolvedValue([unsettledRun()]);
+      const clearReconciledJob = jest.fn(async () => undefined);
+      await reconcileOnce(
+        makeDeps(methods, {
+          getJobStatus: retainedComplete({
+            status: 'requires_action',
+            [fence]: fence === 'terminalPersistencePending',
+            scheduleOutcomeError:
+              'mcp_reauth_required: [{"server":"Files","status":"mcp_reauth_required","detail":"unattended_auth_required","reason":"consent_revoked"}]',
+          }),
+          clearReconciledJob,
+        }),
+      );
+      expect(methods.recordRunOutcome).not.toHaveBeenCalled();
+      expect(clearReconciledJob).not.toHaveBeenCalled();
     },
   );
 

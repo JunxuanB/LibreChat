@@ -51,8 +51,11 @@ import {
   MAX_COALESCED_EVENTS,
   resolveCoalesceWindowMs,
 } from '~/stream/internal/coalescing';
+import {
+  SCHEDULE_MCP_RECEIPT_LUA,
+  SCHEDULE_RETENTION_LUA,
+} from '~/stream/internal/scheduleReceipts';
 import { instrumentIORedisClient, RedisUseCases } from '~/cache/redisTelemetry';
-import { SCHEDULE_MCP_RECEIPT_LUA } from '~/stream/internal/scheduleReceipts';
 import { RecoveredSteerPayloadMismatchError } from '~/stream/SteerRecovery';
 import { createCheckpointNamespace } from '~/stream/checkpoints';
 import { createToolTimingTracker } from '~/agents/toolTiming';
@@ -197,7 +200,7 @@ const JOB_CAS_LUA =
   'if not terminal and redis.call("HGET", KEYS[1], "status") == "requires_action" then ' +
   'local currentTtl = redis.call("TTL", KEYS[1]) ' +
   'if currentTtl > ttl then ttl = currentTtl end end ' +
-  'redis.call("EXPIRE", KEYS[1], ttl) ' +
+  'expireScheduleJob(KEYS[1], ttl) ' +
   'local effectiveReceiptTtl = receiptTtl ' +
   'if not terminal and ttl > effectiveReceiptTtl then effectiveReceiptTtl = ttl end ' +
   'if terminal and parkedTtl > effectiveReceiptTtl then effectiveReceiptTtl = parkedTtl end ' +
@@ -618,19 +621,23 @@ const JOB_UPDATE_LUA =
   SCHEDULE_MCP_RECEIPT_LUA +
   'if redis.call("EXISTS", KEYS[1]) == 0 then return 0 end ' +
   'if ARGV[1] ~= "" and redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
-  'local hset = {} ' +
+  'local hset = {} local releaseRetention = false ' +
   'for i = 6, #ARGV do hset[#hset + 1] = ARGV[i] end ' +
+  'for i = 6, #ARGV, 2 do if ARGV[i] == "preserveForScheduleReconcile" and ARGV[i+1] == "0" then releaseRetention = true end end ' +
   'hset = retainScheduleReceipt(hset, redis.call("HGET", KEYS[1], "scheduleOutcomeError"), false) ' +
   'if #hset > 0 then redis.call("HSET", KEYS[1], unpack(hset)) end ' +
   'if ARGV[2] == "1" then ' +
   'local completedTtl = tonumber(ARGV[3]) ' +
   'local chunksTtl = tonumber(ARGV[4]) ' +
   'local runStepsTtl = tonumber(ARGV[5]) ' +
-  'redis.call("EXPIRE", KEYS[1], completedTtl) ' +
+  'expireScheduleJob(KEYS[1], completedTtl) ' +
   'redis.call("DEL", KEYS[4]) ' +
   'if chunksTtl == 0 then redis.call("DEL", KEYS[2]) else redis.call("EXPIRE", KEYS[2], chunksTtl) end ' +
   'if runStepsTtl == 0 then redis.call("DEL", KEYS[3]) else redis.call("EXPIRE", KEYS[3], runStepsTtl) end ' +
   'end ' +
+  'if ARGV[2] ~= "1" then local terminal = redis.call("HGET", KEYS[1], "status") ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then redis.call("PERSIST", KEYS[1]) ' +
+  'elseif releaseRetention and (terminal == "complete" or terminal == "error" or terminal == "aborted") then expireScheduleJob(KEYS[1], tonumber(ARGV[3])) end end ' +
   'return 1';
 
 /** Owner membership must outlive every paused job and must never shorten a peer's TTL. */
@@ -847,6 +854,7 @@ const STALE_JOB_DELETE_LUA =
  *          parkedSteersTtl, generationEpochGraceTtl]
  */
 const CHUNK_APPEND_LUA =
+  SCHEDULE_RETENTION_LUA +
   'local currentCreatedAt = redis.call("HGET", KEYS[2], "createdAt") ' +
   'if not currentCreatedAt then return 0 end ' +
   'if ARGV[3] ~= "" and currentCreatedAt ~= ARGV[3] then return 0 end ' +
@@ -886,7 +894,7 @@ const CHUNK_APPEND_LUA =
   'local run = tonumber(ARGV[2]) ' +
   'local target = run ' +
   'local jobTtl = redis.call("TTL", KEYS[2]) ' +
-  'if jobTtl < target then redis.call("EXPIRE", KEYS[2], target) ' +
+  'if jobTtl < target then expireScheduleJob(KEYS[2], target) ' +
   'elseif jobTtl > target then target = jobTtl end ' +
   'local recoveryTarget = target ' +
   'if redis.call("HGET", KEYS[2], "recoveredSteerId") then ' +
@@ -929,6 +937,7 @@ const CHUNK_APPEND_LUA =
  *          generationEpochGraceTtl, eventJson...]
  */
 const CHUNK_APPEND_BATCH_LUA =
+  SCHEDULE_RETENTION_LUA +
   'local currentCreatedAt = redis.call("HGET", KEYS[2], "createdAt") ' +
   'if not currentCreatedAt then return 0 end ' +
   'if ARGV[2] ~= "" and currentCreatedAt ~= ARGV[2] then return 0 end ' +
@@ -939,7 +948,7 @@ const CHUNK_APPEND_BATCH_LUA =
   'local run = tonumber(ARGV[1]) ' +
   'local target = run ' +
   'local jobTtl = redis.call("TTL", KEYS[2]) ' +
-  'if jobTtl < target then redis.call("EXPIRE", KEYS[2], target) ' +
+  'if jobTtl < target then expireScheduleJob(KEYS[2], target) ' +
   'elseif jobTtl > target then target = jobTtl end ' +
   'local recoveryTarget = target ' +
   'if redis.call("HGET", KEYS[2], "recoveredSteerId") then ' +
@@ -3346,11 +3355,21 @@ export class RedisJobStore implements IJobStoreV2 {
     const held = [...heldByGeneration.values()];
     if (held.length > 0 && this.ttl.requiresAction > 0) {
       await Promise.all(
-        held.flatMap((job) =>
-          [KEYS.job(job.streamId), KEYS.chunks(job.streamId), KEYS.runSteps(job.streamId)].map(
-            (key) => this.redis.expire(key, this.ttl.requiresAction).catch(() => undefined),
+        held.flatMap((job) => [
+          this.redis
+            .eval(
+              SCHEDULE_RETENTION_LUA +
+                'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end expireScheduleJob(KEYS[1], tonumber(ARGV[2])) return 1',
+              1,
+              KEYS.job(job.streamId),
+              String(job.createdAt),
+              String(this.ttl.requiresAction),
+            )
+            .catch(() => undefined),
+          ...[KEYS.chunks(job.streamId), KEYS.runSteps(job.streamId)].map((key) =>
+            this.redis.expire(key, this.ttl.requiresAction).catch(() => undefined),
           ),
-        ),
+        ]),
       );
     }
     return [...readyByGeneration.values()];
@@ -3363,12 +3382,13 @@ export class RedisJobStore implements IJobStoreV2 {
     // and configured evidence-TTL reset happen atomically. The global retry
     // member includes this generation, so removing it cannot affect a successor.
     const cleared = (await this.redis.eval(
-      'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
+      SCHEDULE_RETENTION_LUA +
+        'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
         'local detachedStatus = redis.call("HGET", KEYS[1], "detachedAgentEventTerminalStatus") ' +
         'if detachedStatus then redis.call("HSET", KEYS[1], "status", detachedStatus) end ' +
         'redis.call("HDEL", KEYS[1], "terminalHostActionPending", "detachedAgentEventTerminalHostActionPending", "detachedAgentEventTerminalStatus") ' +
         'if detachedStatus then redis.call("HDEL", KEYS[1], "lastActiveAt") end ' +
-        'if tonumber(ARGV[2]) > 0 then redis.call("EXPIRE", KEYS[1], ARGV[2]) else redis.call("DEL", KEYS[1]) end ' +
+        'expireScheduleJob(KEYS[1], tonumber(ARGV[2])) ' +
         'if tonumber(ARGV[3]) > 0 then redis.call("EXPIRE", KEYS[2], ARGV[3]) else redis.call("DEL", KEYS[2]) end ' +
         'if tonumber(ARGV[4]) > 0 then redis.call("EXPIRE", KEYS[3], ARGV[4]) else redis.call("DEL", KEYS[3]) end ' +
         'return 1',

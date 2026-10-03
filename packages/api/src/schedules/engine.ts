@@ -146,6 +146,14 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
             if (jobStatus === 'running') {
               continue;
             }
+            if (
+              jobStatus != null &&
+              (jobState?.terminalPersistencePending === true ||
+                jobState?.providerDrained === false ||
+                jobState?.terminalHostActionPending === true)
+            )
+              continue;
+
             // Surface a pause on the card (lastRun → requires_action). Also re-invoked for
             // a row ALREADY `requires_action`: recordRunOutcome flips the row before
             // projecting the card, so a crash between the two leaves the pause invisible
@@ -162,6 +170,24 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
               if (run.status === 'started' && hasResumeHandoffInFlight(run, Date.now())) {
                 continue;
               }
+              const denied =
+                projectScheduleMCPReceipt(
+                  { status: 'requires_action', mcp: run.mcp },
+                  readScheduleMCPReceipts(jobState?.scheduleOutcomeError),
+                ).status === 'error';
+              if (
+                denied &&
+                !(await deps.abortScheduledJob(
+                  run.conversationId as string,
+                  {
+                    scheduleId: run.scheduleId,
+                    scheduledFor: run.scheduledFor,
+                    createdAt: jobState?.createdAt,
+                  },
+                  { preserve: true },
+                ))
+              )
+                continue;
               const projection = await finalize('requires_action');
               if (projection.status === 'error') await clearRetainedJob();
               continue;

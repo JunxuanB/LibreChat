@@ -75,6 +75,49 @@ it('retains all denial evidence under memory metadata/status writes and clears',
 });
 const redisDescribe = process.env.B2_REDIS_SOCKET ? describe : describe.skip;
 redisDescribe('real Redis receipt retention', () => {
+  it('retains a Redis-only receipt beyond terminal TTL until epoch-fenced acknowledgement', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis, { completedTtl: 1 });
+    const created = await store.createJob('retained-receipt', 'owner');
+    try {
+      await store.updateJob(
+        'retained-receipt',
+        { preserveForScheduleReconcile: true, scheduleOutcomeError: encoded },
+        created.createdAt,
+      );
+      await store.transitionStatus('retained-receipt', {
+        from: 'running',
+        to: 'complete',
+        expectCreatedAt: created.createdAt,
+        patch: { completedAt: Date.now() },
+      });
+      expect(await redis.ttl('stream:{retained-receipt}:job')).toBe(-1);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect((await store.getJob('retained-receipt'))?.scheduleOutcomeError).toContain(
+        'consent_revoked',
+      );
+      await store.updateJob('retained-receipt', { status: 'complete' }, created.createdAt);
+      await store.clearTerminalHostAction('retained-receipt', created.createdAt);
+      expect(await redis.ttl('stream:{retained-receipt}:job')).toBe(-1);
+      await store.updateJob(
+        'retained-receipt',
+        { preserveForScheduleReconcile: false },
+        created.createdAt - 1,
+      );
+      expect(await redis.ttl('stream:{retained-receipt}:job')).toBe(-1);
+      await store.updateJob(
+        'retained-receipt',
+        { preserveForScheduleReconcile: false },
+        created.createdAt,
+      );
+      expect(await redis.ttl('stream:{retained-receipt}:job')).toBeGreaterThanOrEqual(0);
+    } finally {
+      await store.deleteJob('retained-receipt', created.createdAt);
+      await redis.quit();
+    }
+  });
+
   it('retains all denial evidence atomically in real Redis without affecting a replaced epoch', async () => {
     const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
     try {

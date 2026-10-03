@@ -1,8 +1,20 @@
 import { scheduledMCPFailureReasonSchema } from 'librechat-data-provider';
 import { readScheduleMCPReceipts, projectScheduleMCPReceipt } from 'librechat-data-provider';
 
+/** Only settlement acknowledgement releases the receipt's hash lifetime. */
+export const SCHEDULE_RETENTION_LUA: string = `
+local function expireScheduleJob(key, seconds)
+  if redis.call('HGET', key, 'preserveForScheduleReconcile') == '1' then
+    redis.call('PERSIST', key)
+  elseif seconds > 0 then redis.call('EXPIRE', key, seconds)
+  else redis.call('DEL', key) end
+end
+`;
+
 /** Embedded after epoch/status guards in both same-slot job writers. */
-export const SCHEDULE_MCP_RECEIPT_LUA: string = `
+export const SCHEDULE_MCP_RECEIPT_LUA: string =
+  SCHEDULE_RETENTION_LUA +
+  `
 local function retainScheduleReceipt(hset, current, force)
   local allowed = cjson.decode('${JSON.stringify(Object.fromEntries(scheduledMCPFailureReasonSchema.options.map((reason) => [reason, true])))}')
   local incoming = nil

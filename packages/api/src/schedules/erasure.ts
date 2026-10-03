@@ -37,6 +37,7 @@ export interface ScheduleErasureSweep {
 }
 
 export interface ScheduleErasureDeps {
+  abortScheduledJob: ScheduleEngineDeps['abortScheduledJob'];
   methods: Pick<
     ScheduleMethods,
     | 'getDeletingSchedules'
@@ -98,6 +99,13 @@ async function settleAbandonedRuns(deps: ScheduleErasureDeps, scheduleId: string
         continue;
       }
       const identity = jobMatchesRun(job.state, run);
+      if (
+        identity &&
+        (job.state?.providerDrained === false ||
+          job.state?.terminalPersistencePending === true ||
+          job.state?.terminalHostActionPending === true)
+      )
+        continue;
       if (identity && job.state!.status === 'running') {
         continue;
       }
@@ -128,6 +136,19 @@ async function settleAbandonedRuns(deps: ScheduleErasureDeps, scheduleId: string
           continue;
         }
       }
+      if (
+        settledPause &&
+        !(await deps.abortScheduledJob(
+          run.conversationId as string,
+          {
+            scheduleId: run.scheduleId,
+            scheduledFor: run.scheduledFor,
+            createdAt: job.state?.createdAt,
+          },
+          { preserve: true },
+        ))
+      )
+        continue;
       await deps.methods.recordRunOutcome({
         scheduleId: run.scheduleId,
         scheduledFor: run.scheduledFor,
@@ -158,6 +179,12 @@ async function settleFromObservedJob(
   job: JobState,
   now: number,
 ): Promise<void> {
+  if (
+    job.providerDrained === false ||
+    job.terminalPersistencePending === true ||
+    job.terminalHostActionPending === true
+  )
+    return;
   // A PAUSE the owner never managed to project. `recordRunOutcome('requires_action')`
   // moves the row off `started`, which is what frees its global capacity slot; the job
   // itself stays live awaiting approval, so its evidence is NOT released here. Without
@@ -169,6 +196,19 @@ async function settleFromObservedJob(
       readScheduleMCPReceipts(job.scheduleOutcomeError),
     );
     if (run.status !== 'started' && projection.status !== 'error') return;
+    if (
+      projection.status === 'error' &&
+      !(await deps.abortScheduledJob(
+        run.conversationId as string,
+        {
+          scheduleId: run.scheduleId,
+          scheduledFor: run.scheduledFor,
+          createdAt: job.createdAt,
+        },
+        { preserve: true },
+      ))
+    )
+      return;
     await deps.methods.recordRunOutcome({
       scheduleId: run.scheduleId,
       scheduledFor: run.scheduledFor,

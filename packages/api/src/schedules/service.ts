@@ -92,10 +92,14 @@ function isTopologySafeToArm(): boolean {
 
 /** Whether a persisted job still carries a given scheduled occurrence's identity. */
 function jobMatchesIdentity(
-  job: Pick<SerializableJobData, 'scheduleId' | 'scheduledFor'>,
+  job: Pick<SerializableJobData, 'scheduleId' | 'scheduledFor'> & { createdAt?: number },
   identity: JobIdentity,
 ): boolean {
-  if (job.scheduleId !== identity.scheduleId || job.scheduledFor == null) {
+  if (
+    job.scheduleId !== identity.scheduleId ||
+    job.scheduledFor == null ||
+    (identity.createdAt != null && identity.createdAt !== job.createdAt)
+  ) {
     return false;
   }
   return new Date(job.scheduledFor).getTime() === new Date(identity.scheduledFor).getTime();
@@ -299,29 +303,48 @@ export interface SchedulesService {
   initializeScheduleErasureSweep: () => void;
 }
 
-/** Screening happens before the CJS facade constructs any schedule dependencies. */
+/** A replaced/foreign generation cannot receive an old denial or model-visible result. */
+export class ScheduledMCPReceiptFencedError extends Error {
+  constructor() {
+    super('Scheduled generation is no longer current.');
+    this.name = 'AbortError';
+  }
+}
+
+/** Bearer failures do not become model tool errors until durable evidence exists. */
 export async function recordScheduledMCPToolAuthFailure(
   input: Parameters<SchedulesService['recordMCPToolAuthFailure']>[0],
   getRecorder: () => SchedulesService['recordMCPToolAuthFailure'],
 ): Promise<boolean> {
+  const bearer = input.error instanceof ScheduledMCPBearerError;
   const cause = input.error instanceof Error ? input.error.cause : undefined;
   const missing = input.error instanceof OboTokenResolutionError ? input.error : cause;
   if (
-    (input.error instanceof ScheduledMCPBearerError && !input.identity) ||
-    (!(input.error instanceof ScheduledMCPBearerError) &&
+    (!bearer &&
       (!(missing instanceof OboTokenResolutionError) ||
         missing.reason !== 'missing_upstream_provider')) ||
     !input.streamId ||
     input.jobCreatedAt == null ||
-    !input.userId
+    !input.userId ||
+    (bearer && !input.identity)
   ) {
+    if (bearer) throw new ScheduledMCPReceiptFencedError();
     return false;
   }
-  try {
-    return await getRecorder()(input);
-  } catch (error) {
-    logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
-    return false;
+  for (;;) {
+    try {
+      if (await getRecorder()(input)) return true;
+    } catch (error) {
+      if (error instanceof ScheduledMCPReceiptFencedError) throw error;
+      if (!bearer) {
+        logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
+        return false;
+      }
+    }
+    if (!bearer) return false;
+    // The owning provider remains busy, so no model completion can publish peer success.
+    // No caller cancellation may turn an unrecorded denial into an ordinary tool error.
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
 
@@ -640,6 +663,9 @@ export function createSchedulesService(
         scheduleId: job.scheduleId,
         scheduledFor: job.scheduledFor,
         createdEventEmitted: job.createdEventEmitted === true,
+        providerDrained: job.providerDrained,
+        terminalPersistencePending: job.terminalPersistencePending,
+        terminalHostActionPending: job.terminalHostActionPending,
         preserveForScheduleReconcile: job.preserveForScheduleReconcile === true,
         ...(job.scheduleOutcome != null && { scheduleOutcome: job.scheduleOutcome }),
         ...(job.scheduleOutcomeError != null && {
@@ -659,7 +685,7 @@ export function createSchedulesService(
       if (job == null || !jobMatchesIdentity(job, identity)) {
         return false;
       }
-      if (options?.preserve !== false) {
+      {
         const retained = projectScheduleMCPReceipt(
           { status: 'interrupted', error: 'Schedule deleted' },
           readScheduleMCPReceipts(job.scheduleOutcomeError),
@@ -689,9 +715,35 @@ export function createSchedulesService(
       if (!isStopConfirmed(aborted)) {
         return false;
       }
-      if (options?.preserve === false) {
-        await store.deleteJob(conversationId, job.createdAt);
+      // Read again after the exact provider/pause drain; evidence may have arrived during it.
+      const current = await store.getJob(conversationId);
+      if (
+        current?.createdAt !== job.createdAt ||
+        !jobMatchesIdentity(current, identity) ||
+        current.providerDrained === false ||
+        current.terminalPersistencePending === true
+      )
+        return false;
+      if (
+        readScheduleMCPReceipts(current.scheduleOutcomeError).length > 0 ||
+        pendingBearerFailures.has(receiptKey(conversationId, job.createdAt))
+      ) {
+        const settled = await recordScheduleOutcome({
+          scheduleId: job.scheduleId!,
+          scheduledFor: job.scheduledFor!,
+          streamId: conversationId,
+          jobCreatedAt: job.createdAt,
+          conversationId: job.conversationId,
+          status: 'interrupted',
+          error: 'Schedule deleted while the run was active',
+        });
+        if (!settled) return false;
       }
+      if (options?.preserve === false)
+        await engineDeps.clearReconciledJob(conversationId, {
+          ...identity,
+          createdAt: job.createdAt,
+        });
       return true;
     },
     clearReconciledJob: async (conversationId, identity) => {
@@ -705,6 +757,20 @@ export function createSchedulesService(
       if (job == null || !jobMatchesIdentity(job, identity)) {
         return;
       }
+      if (
+        job.providerDrained === false ||
+        job.terminalPersistencePending === true ||
+        job.terminalHostActionPending === true ||
+        job.status === 'running' ||
+        job.status === 'requires_action'
+      )
+        return;
+      if (job.preserveForScheduleReconcile === true)
+        await GenerationJobManager.updateMetadata(
+          conversationId,
+          { preserveForScheduleReconcile: false },
+          job.createdAt,
+        );
       // CAS, not read-then-delete: the identity check above is a READ, and a replacement
       // generation can land between it and the delete. Passing the observed createdAt
       // makes the delete conditional on the job still being that exact generation, so
@@ -765,6 +831,7 @@ export function createSchedulesService(
       // evidence (kept without `completedAt`, and therefore invisible to the store's
       // finished-job sweep) cannot outlive the run it belonged to.
       clearReconciledJob: engineDeps.clearReconciledJob,
+      abortScheduledJob: engineDeps.abortScheduledJob,
       // If topology itself prevented arming, this process's missing job says
       // nothing about peer liveness. If only index creation failed, the topology
       // proof still holds and the existing owner-death backstop remains valid.
@@ -930,6 +997,7 @@ export function createSchedulesService(
           identity.agentId !== job.agent_id))
     ) {
       pendingBearerFailures.delete(key);
+      if (bearer) throw new ScheduledMCPReceiptFencedError();
       return false;
     }
     const payload = {
@@ -1061,10 +1129,14 @@ export function createSchedulesService(
           job?.createdAt === jobCreatedAt &&
           job.scheduleId === scheduleId &&
           new Date(job.scheduledFor ?? '').getTime() === new Date(scheduledFor).getTime()
-        )
-          mcp = readScheduleMCPOutcomes(job.scheduleOutcomeError).filter(
-            (item) => item.detail === 'unattended_auth_required',
-          );
+        ) {
+          mcp = readScheduleMCPReceipts(job.scheduleOutcomeError);
+          if (
+            mcp.length > 0 &&
+            (job.providerDrained === false || job.terminalPersistencePending === true)
+          )
+            return false;
+        }
       } catch {
         return false;
       }
@@ -1165,6 +1237,7 @@ export function createSchedulesService(
             job?.createdAt === jobCreatedAt &&
             job.providerDrained !== false &&
             job.terminalPersistencePending !== true &&
+            job.terminalHostActionPending !== true &&
             job.status !== 'running' &&
             job.status !== 'requires_action' &&
             job.preserveForScheduleReconcile !== true
@@ -1488,10 +1561,12 @@ export function createSchedulesService(
         return false;
       }
     }
+    const before = await engineDeps.getJobStatus(run.conversationId).catch(() => null);
+    const generation = before && jobMatchesIdentity(before, run) ? before.createdAt : undefined;
     const stopped = await engineDeps
       .abortScheduledJob(
         run.conversationId,
-        { scheduleId: run.scheduleId, scheduledFor: run.scheduledFor },
+        { scheduleId: run.scheduleId, scheduledFor: run.scheduledFor, createdAt: generation },
         { preserve },
       )
       .catch((err) => {
@@ -1509,6 +1584,8 @@ export function createSchedulesService(
       scheduleId: run.scheduleId,
       scheduledFor: run.scheduledFor,
       status: 'interrupted',
+      streamId: run.conversationId,
+      jobCreatedAt: generation,
       conversationId: run.conversationId,
       error: 'Schedule deleted while the run was active',
     });

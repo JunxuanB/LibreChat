@@ -889,8 +889,38 @@ describe('scheduled OBO tool failure settlement', () => {
       { ...source, identity: { ...source.identity, tenantId: 'other' } },
       { ...source, identity: { ...source.identity, agentId: 'child' } },
     ])
-      await expect(service.recordMCPToolAuthFailure(input)).resolves.toBe(false);
+      await expect(service.recordMCPToolAuthFailure(input)).rejects.toMatchObject({
+        name: 'AbortError',
+      });
     expect(methods.recordMCPToolAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not return a model-visible bearer error while durable writes are unavailable', async () => {
+    const input = {
+      error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+      streamId: 'c1',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: 'tenant-1',
+        agentId: 'root',
+        invocationMode: 'delegated' as const,
+      },
+    };
+    let durable = false;
+    let returned = false;
+    const persist = jest.fn(async () => durable);
+    const pending = recordScheduledMCPToolAuthFailure(input, () => persist).then(() => {
+      returned = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(returned).toBe(false);
+    durable = true;
+    await pending;
+    expect(returned).toBe(true);
   });
 
   it('does not initialize the schedule service for unrelated MCP errors', async () => {
