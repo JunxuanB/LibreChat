@@ -394,6 +394,8 @@ export function createScheduleMCPPreflight(deps: ScheduleMCPDeps): ScheduleMCPPr
                     invocationMode: 'delegated',
                   },
                   deps.scheduledBearerHost,
+                  'invoke',
+                  options.signal,
                 );
               try {
                 throwIfAborted();

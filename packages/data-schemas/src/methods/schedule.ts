@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getScheduleMCPDisabledReason } from 'librechat-data-provider';
 import type { ScheduleRunStatus, ScheduleDisabledReason } from 'librechat-data-provider';
 import type { Model, Types, AnyBulkWriteOperation } from 'mongoose';
+import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type {
   ISchedule,
   IScheduleDocument,
@@ -275,6 +276,7 @@ export type ScheduleMethods = {
     conversationId: string;
     tenantId?: string;
     server: string;
+    outcome?: ScheduleMCPOutcome;
   }) => Promise<boolean>;
   markRunResumeClaimed: (
     scheduleId: string,
@@ -1129,6 +1131,7 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     conversationId,
     tenantId,
     server,
+    outcome,
   }: Parameters<ScheduleMethods['recordMCPToolAuthFailure']>[0]): Promise<boolean> {
     const updated = await ScheduleRun().updateOne(
       {
@@ -1140,7 +1143,11 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
       },
       {
         $addToSet: {
-          mcp: { server, status: 'mcp_configuration_missing', detail: 'unattended_auth_required' },
+          mcp: outcome ?? {
+            server,
+            status: 'mcp_configuration_missing',
+            detail: 'unattended_auth_required',
+          },
         },
       },
       { timestamps: false },
@@ -1504,7 +1511,8 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     const canOverride =
       params.status === 'success' ||
       params.status === 'error' ||
-      params.status === 'skipped_balance';
+      params.status === 'skipped_balance' ||
+      params.status === 'interrupted';
     const incomingFailure =
       canOverride && params.mcp?.some((item) => item.detail === 'unattended_auth_required');
     const authError =
@@ -1514,7 +1522,6 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     const terminalUpdate = (
       status: RecordRunOutcomeParams['status'],
       error: string | undefined,
-      includeInputMcp: boolean,
     ) => ({
       $set: {
         status,
@@ -1524,9 +1531,10 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
           ? { conversationId: params.conversationId }
           : {}),
         ...(error ? { error } : {}),
-        ...(includeInputMcp && params.mcp ? { mcp: params.mcp } : {}),
+
         ...(params.durationMs != null ? { durationMs: params.durationMs } : {}),
       },
+      ...(params.mcp?.length && { $addToSet: { mcp: { $each: params.mcp } } }),
       // Only terminal settlement releases the global capacity slot, not an abort request.
       $unset: {
         capacitySlot: 1,
@@ -1546,9 +1554,8 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
         terminalUpdate(
           incomingFailure ? 'error' : params.status,
           incomingFailure ? authError : params.error,
-          true,
         ),
-        { new: false },
+        { new: true },
       )
       .lean<IScheduleRun>();
     let effectiveParams = incomingFailure
@@ -1558,8 +1565,8 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
       settled = await ScheduleRun()
         .findOneAndUpdate(
           { ...runFilter, 'mcp.detail': 'unattended_auth_required' },
-          terminalUpdate('error', authError, false),
-          { new: false },
+          terminalUpdate('error', authError),
+          { new: true },
         )
         .lean<IScheduleRun>();
       if (settled != null) {
@@ -1570,6 +1577,7 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     if (settled == null) {
       return;
     }
+    effectiveParams = { ...effectiveParams, mcp: settled.mcp };
     // SINGLE SEAM: the config fence is DERIVED here from the row being settled, not
     // passed in by each caller. Callers only say "this occurrence reached status X" and
     // structurally cannot forget a token — which is exactly how the reconcile and

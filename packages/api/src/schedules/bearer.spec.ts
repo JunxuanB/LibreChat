@@ -13,6 +13,7 @@ import type { MCPOAuthTokens } from '~/mcp/oauth/types';
 import type { ParsedServerConfig } from '~/mcp/types';
 import {
   createScheduledMCPBearerHost,
+  createMCPPermissionDeniedError,
   attachScheduledMCPBearer,
   resolveScheduledMCPBearerConfig,
   prepareScheduledMCPBearer,
@@ -263,6 +264,49 @@ it('cancels a stalled adapter, does not disclose provider errors, and permits a 
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 });
+it('withholds provider completion when request cleanup closes the occurrence during minting', async () => {
+  const f = await bearerFixture();
+  f.resolveBearer.mockImplementationOnce(async () => {
+    f.context.cleanupStarted = true;
+    return {
+      state: 'ready',
+      accessToken: 'resource-only',
+      expiresAtMs: Date.now() + 60_000,
+      issuer: f.target.resource.issuer!,
+      audience: f.target.resource.audience!,
+      resourceUrl: config.url!,
+    };
+  });
+  await expect(f.call()).rejects.toMatchObject({ failure: { reason: 'binding_mismatch' } });
+});
+
+it('does not let one cancelled waiter cancel shared minting for a sibling', async () => {
+  const f = await bearerFixture();
+  let resolve!: (result: ScheduledMCPBearerResult) => void;
+  const grant = new Promise<ScheduledMCPBearerResult>((done) => {
+    resolve = done;
+  });
+  f.resolveBearer.mockImplementationOnce(() => grant);
+  const controller = new AbortController();
+  const first = resolveScheduledMCPBearerConfig({ ...f.input, signal: controller.signal });
+  const second = resolveScheduledMCPBearerConfig(f.input);
+  await new Promise((done) => setTimeout(done, 15));
+  controller.abort();
+  await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+  resolve({
+    state: 'ready',
+    accessToken: 'resource-only',
+    expiresAtMs: Date.now() + 60_000,
+    issuer: f.target.resource.issuer!,
+    audience: f.target.resource.audience!,
+    resourceUrl: config.url!,
+  });
+  await expect(second).resolves.toMatchObject({
+    headers: { Authorization: 'Bearer resource-only' },
+  });
+  expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+});
+
 it('maps adapter outages to retryable safe errors without exposing credential/provider details', async () => {
   const f = await bearerFixture();
   f.resolveBearer.mockRejectedValueOnce(new Error('SECRET provider response'));
@@ -526,6 +570,91 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
       await server.close();
     }
   });
+  it('retains effective request headers on an unrelated scheduled static sibling', async () => {
+    const observed: Array<string | undefined> = [];
+    const server = await createOAuthMCPServer({
+      onResourceRequest: (req) => observed.push(req.headers['x-route'] as string | undefined),
+    });
+    server.issuedTokens.add('static-key');
+    server.tokenIssueTimes.set('static-key', Date.now());
+    const context = createMCPRequestContext();
+    attachScheduledMCPBearer(context, identity);
+    let connection: MCPConnection | undefined;
+    try {
+      connection = await MCPConnectionFactory.create(
+        {
+          serverName: 'Static',
+          useSSRFProtection: false,
+          serverConfig: {
+            type: 'streamable-http',
+            url: server.url,
+            headers: { Authorization: 'Bearer static-key' },
+            requestHeaders: { 'X-Route': 'sibling-route' },
+            requiresOAuth: false,
+          },
+        },
+        { user, requestScopedConnections: context },
+      );
+      await connection.fetchToolsSnapshot();
+      expect(observed.filter(Boolean)).toEqual(expect.arrayContaining(['sibling-route']));
+      expect(observed.every((value) => value === 'sibling-route')).toBe(true);
+    } finally {
+      await connection?.dispose();
+      await cleanupMCPRequestContext(context);
+      await server.close();
+    }
+  });
+
+  it('changes only Authorization at invocation, preserving expanded routing headers', async () => {
+    process.env.B2_ROUTE = 'resolved-route';
+    const observed: Array<string | undefined> = [];
+    const server = await createOAuthMCPServer({
+      onResourceRequest: (req) => observed.push(req.headers['x-route'] as string | undefined),
+    });
+    const definition: ParsedServerConfig = {
+      ...config,
+      url: server.url,
+      requiresOAuth: false,
+      headers: { ...config.headers, 'X-Route': '${B2_ROUTE}' },
+    };
+    const f = await bearerFixture(definition);
+    server.issuedTokens.add('resource-only');
+    server.tokenIssueTimes.set('resource-only', Date.now());
+    const manager = new MCPManager();
+    const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+      isAppServerConfig: async () => false,
+      resolveAllowlists: async () => ({
+        allowedDomains: ['127.0.0.1'],
+        allowedAddresses: [`127.0.0.1:${server.port}`],
+        useSSRFProtection: false,
+      }),
+    } as unknown as MCPServersRegistry);
+    try {
+      await manager.callTool({
+        user,
+        serverName: 'Files',
+        serverConfig: definition,
+        provider: 'openai',
+        toolName: 'echo',
+        toolArguments: { message: 'routing' },
+        requestScopedConnections: f.context,
+        scheduledBearerInvocation: bindScheduledMCPBearerInvocation(f.context, 'root', 'echo'),
+        flowManager: new FlowStateManager<MCPOAuthTokens | null>(
+          new MockKeyv() as unknown as Keyv,
+          { ttl: 30000, ci: true },
+        ),
+      });
+      expect(observed.length).toBeGreaterThan(0);
+      expect(observed.every((route) => route === 'resolved-route')).toBe(true);
+    } finally {
+      registry.mockRestore();
+      await cleanupMCPRequestContext(f.context);
+      MCPConnection.clearCooldown('Files');
+      await server.close();
+      delete process.env.B2_ROUTE;
+    }
+  });
+
   it('preflights a real protected resource without browser auth and preserves bearer rejection', async () => {
     const server = await createOAuthMCPServer();
     const definition: ParsedServerConfig = {
@@ -613,4 +742,15 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
       await server.close();
     }
   });
+});
+
+it('classifies a pre-transport RBAC denial without altering ordinary permission errors', async () => {
+  const f = await bearerFixture();
+  const invocation = bindScheduledMCPBearerInvocation(f.context, 'child', 'echo');
+  expect(createMCPPermissionDeniedError(invocation, 'Files', config)).toMatchObject({
+    failure: { reason: 'rbac_denied' },
+  });
+  expect(createMCPPermissionDeniedError(undefined, 'Files', config).message).toBe(
+    'Forbidden: Insufficient MCP server permissions',
+  );
 });

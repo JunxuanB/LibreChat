@@ -334,9 +334,10 @@ export class MCPConnectionFactory {
       signal: options?.signal,
     });
     const bearerConfig = await resolveDirectOpenIDBearerConfig({
-      config: isScheduledMCPBearer(options?.requestScopedConnections)
-        ? scheduledConfig
-        : basic.serverConfig,
+      config:
+        scheduledConfig === (basic.serverDefinition ?? basic.serverConfig)
+          ? basic.serverConfig
+          : applyRequestHeaders(scheduledConfig),
       upstreamTokenProvider: options?.upstreamTokenProvider,
       signal: options?.signal,
     });

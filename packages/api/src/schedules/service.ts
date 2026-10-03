@@ -1,7 +1,9 @@
 import { DEFAULT_SCHEDULE_MCP_CONSENT_LIFETIME_HOURS } from 'librechat-data-provider';
+import { readScheduleMCPOutcomes, getScheduleMCPDisabledReason } from 'librechat-data-provider';
 import { logger, runAsSystem, tenantStorage, isRuntimeDisabled } from '@librechat/data-schemas';
 import { getRefillEligibilityDate, Permissions, PermissionTypes } from 'librechat-data-provider';
 import type { ScheduleMethods, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
+import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
@@ -37,6 +39,7 @@ import { isStopConfirmed } from '../stream/interfaces/IJobStore';
 import { buildBalanceUpdateFields } from '../middleware/balance';
 import { getAppConfigOptionsFromUser } from '../app/service';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
+import { ScheduledMCPBearerError } from '../mcp/errors';
 import { isShutdownInProgress } from '../app/shutdown';
 import { startScheduleErasureSweep } from './erasure';
 import { getBalanceConfig } from '../app/config';
@@ -202,6 +205,7 @@ export interface SchedulesService {
     jobCreatedAt?: number;
     userId?: string;
     serverName: string;
+    identity?: ScheduledMCPIdentity;
   }) => Promise<boolean>;
   /**
    * Stamps a scheduled run's interactive Stop BEFORE the abort is signalled, so the owner
@@ -298,8 +302,10 @@ export async function recordScheduledMCPToolAuthFailure(
   const cause = input.error instanceof Error ? input.error.cause : undefined;
   const missing = input.error instanceof OboTokenResolutionError ? input.error : cause;
   if (
-    !(missing instanceof OboTokenResolutionError) ||
-    missing.reason !== 'missing_upstream_provider' ||
+    (input.error instanceof ScheduledMCPBearerError && !input.identity) ||
+    (!(input.error instanceof ScheduledMCPBearerError) &&
+      (!(missing instanceof OboTokenResolutionError) ||
+        missing.reason !== 'missing_upstream_provider')) ||
     !input.streamId ||
     input.jobCreatedAt == null ||
     !input.userId
@@ -332,6 +338,32 @@ export function createSchedulesService(
   timings?: ScheduleServiceTimings,
 ): SchedulesService {
   const { methods } = deps;
+
+  // Recovery evidence only: no authorization or bearer is cached here.
+  const pendingBearerFailures = new Map<
+    string,
+    Parameters<SchedulesService['recordMCPToolAuthFailure']>[0]
+  >();
+  const receiptKey = (stream: string, epoch: number): string => JSON.stringify([stream, epoch]);
+  const outcomeKey = (outcome: ScheduleMCPOutcome): string =>
+    JSON.stringify([
+      outcome.server,
+      outcome.agentId,
+      outcome.status,
+      outcome.reason,
+      outcome.recovery,
+      outcome.detail,
+      outcome.automaticReplay,
+    ]);
+  const mergeReceipts = (
+    left: ScheduleMCPOutcome[],
+    right: ScheduleMCPOutcome[],
+  ): ScheduleMCPOutcome[] => {
+    const unique = new Map([...left, ...right].map((outcome) => [outcomeKey(outcome), outcome]));
+    return [...unique.values()];
+  };
+  const encodeReceipts = (outcomes: ScheduleMCPOutcome[]): string =>
+    `${getScheduleMCPDisabledReason(outcomes) ?? 'mcp_unavailable'}: ${JSON.stringify(outcomes)}`;
 
   // Fail LOUDLY at construction, not per-fire. The JS adapter (api/server/services/
   // Schedules) is not typechecked against SchedulesServiceDeps, so a missing dep would
@@ -849,41 +881,97 @@ export function createSchedulesService(
     }
   }
 
-  async function recordMCPToolAuthFailure({
-    error,
-    streamId,
-    jobCreatedAt,
-    userId,
-    serverName,
-  }: Parameters<SchedulesService['recordMCPToolAuthFailure']>[0]): Promise<boolean> {
+  async function recordMCPToolAuthFailure(
+    input: Parameters<SchedulesService['recordMCPToolAuthFailure']>[0],
+  ): Promise<boolean> {
+    const { error, streamId, jobCreatedAt, userId, serverName, identity } = input;
     const cause = error instanceof Error ? error.cause : undefined;
     const missing = error instanceof OboTokenResolutionError ? error : cause;
+    const bearer = error instanceof ScheduledMCPBearerError;
     if (
-      !(missing instanceof OboTokenResolutionError) ||
-      missing.reason !== 'missing_upstream_provider' ||
+      (!bearer &&
+        (!(missing instanceof OboTokenResolutionError) ||
+          missing.reason !== 'missing_upstream_provider')) ||
       !streamId ||
       jobCreatedAt == null ||
       !userId
-    ) {
+    )
       return false;
+    const key = receiptKey(streamId, jobCreatedAt);
+    if (bearer && identity && identity.ownerId === userId) {
+      const previous = pendingBearerFailures.get(key);
+      const priority = (value: unknown): number =>
+        value instanceof ScheduledMCPBearerError
+          ? {
+              mcp_unavailable: 1,
+              mcp_reauth_required: 2,
+              mcp_configuration_missing: 3,
+              mcp_permission_denied: 4,
+            }[value.code]
+          : 0;
+      if (!previous || priority(error) >= priority(previous.error))
+        pendingBearerFailures.set(key, { ...input, identity: Object.freeze({ ...identity }) });
     }
-    const job = await GenerationJobManager.getJobStore()?.getJob(streamId);
+    const store = GenerationJobManager.getJobStore();
+    const job = await store?.getJob(streamId);
     if (
       job?.createdAt !== jobCreatedAt ||
       job.userId !== userId ||
       !job.scheduleId ||
       !job.scheduledFor ||
-      !job.conversationId
+      !job.conversationId ||
+      (bearer &&
+        (!identity ||
+          identity.scheduleId !== job.scheduleId ||
+          identity.tenantId !== (job.tenantId ?? null) ||
+          identity.agentId !== job.agent_id))
     ) {
+      pendingBearerFailures.delete(key);
       return false;
     }
-    return methods.recordMCPToolAuthFailure({
+    const payload = {
       scheduleId: job.scheduleId,
       scheduledFor: new Date(job.scheduledFor),
       conversationId: job.conversationId,
-      ...(job.tenantId ? { tenantId: job.tenantId } : {}),
+      ...(job.tenantId && { tenantId: job.tenantId }),
       server: serverName,
-    });
+    };
+    if (!bearer) return methods.recordMCPToolAuthFailure(payload);
+    const pendingError = pendingBearerFailures.get(key)?.error;
+    const receiptError = pendingError instanceof ScheduledMCPBearerError ? pendingError : error;
+    const outcomes = mergeReceipts(readScheduleMCPOutcomes(job.scheduleOutcomeError), [
+      ...receiptError.outcomes,
+      ...error.outcomes,
+    ]);
+    const encoded = encodeReceipts(outcomes);
+    const writes = await Promise.allSettled([
+      methods.recordMCPToolAuthFailure({ ...payload, outcome: receiptError.outcomes[0] }),
+      GenerationJobManager.updateMetadata(
+        streamId,
+        {
+          preserveForScheduleReconcile: true,
+          scheduleOutcome: 'error',
+          scheduleOutcomeError: encoded,
+        },
+        jobCreatedAt,
+      ),
+    ]);
+    const latest = await store?.getJob(streamId).catch(() => null);
+    const retained =
+      latest?.createdAt === jobCreatedAt &&
+      latest.scheduleId === job.scheduleId &&
+      latest.userId === userId &&
+      latest.scheduledFor === job.scheduledFor &&
+      readScheduleMCPOutcomes(latest.scheduleOutcomeError).some(
+        (item) => outcomeKey(item) === outcomeKey(receiptError.outcomes[0]),
+      );
+    if (
+      (writes[0].status === 'fulfilled' && writes[0].value) ||
+      (writes[1].status === 'fulfilled' && retained)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   const OUTCOME_RETRY_ATTEMPTS = 3;
@@ -948,9 +1036,35 @@ export function createSchedulesService(
     if (!scheduleId || !scheduledFor) {
       return true;
     }
-    const terminal = status !== 'requires_action';
+    let terminal = status !== 'requires_action';
     let mcp: ScheduleMCPOutcome[] = [];
-    if (terminal) {
+    const receipt =
+      streamId && jobCreatedAt != null ? receiptKey(streamId, jobCreatedAt) : undefined;
+    const pending = receipt && pendingBearerFailures.get(receipt);
+    if (pending && pending.identity?.scheduleId === scheduleId) {
+      try {
+        if (!(await recordMCPToolAuthFailure(pending))) return false;
+      } catch {
+        return false;
+      }
+    }
+    if (streamId && jobCreatedAt != null) {
+      try {
+        const job = await GenerationJobManager.getJobStore()?.getJob(streamId);
+        if (
+          job?.createdAt === jobCreatedAt &&
+          job.scheduleId === scheduleId &&
+          new Date(job.scheduledFor ?? '').getTime() === new Date(scheduledFor).getTime()
+        )
+          mcp = readScheduleMCPOutcomes(job.scheduleOutcomeError).filter(
+            (item) => item.detail === 'unattended_auth_required',
+          );
+      } catch {
+        return false;
+      }
+    }
+
+    if (terminal || pending || mcp.length > 0) {
       // Honor an in-flight interactive Stop's persistence before terminalizing. A deferral
       // is NOT a failure to record — the run is deliberately left active/preserved — but it
       // must report "not settled" so callers with durable retry (the approval-expiry host
@@ -962,13 +1076,16 @@ export function createSchedulesService(
         );
         return false;
       }
-      mcp = observed;
+      mcp = mergeReceipts(mcp, observed);
     }
-    const missingAuth =
-      mcp.length > 0 &&
-      (status === 'success' || status === 'error' || status === 'skipped_balance');
+    const missingAuth = mcp.length > 0;
+    if (missingAuth) terminal = true;
     const effectiveStatus = missingAuth ? 'error' : status;
-    const effectiveError = missingAuth ? 'MCP unattended authorization unavailable' : error;
+    const effectiveError = missingAuth
+      ? mcp.some((item) => item.reason)
+        ? encodeReceipts(mcp)
+        : 'MCP unattended authorization unavailable'
+      : error;
     if (terminal && streamId && jobCreatedAt != null) {
       try {
         await GenerationJobManager.updateMetadata(
@@ -1012,13 +1129,14 @@ export function createSchedulesService(
           autoDisableAfterFailures: limits.autoDisableAfterFailures,
           balanceSkipDisableThreshold: BALANCE_SKIP_DISABLE_THRESHOLD,
         });
+        if (terminal && receipt) pendingBearerFailures.delete(receipt);
         // ERASE-ON-SETTLE: whichever process records a run's terminal outcome also
         // attempts the deferred erase of a deleting schedule. This is what makes a
         // delete's `draining` state converge in EVERY topology — the clustered
         // entrypoint runs no reconciler, so without this the hidden schedule (and its
         // prompt, which has no TTL) survived its last run indefinitely there. A cheap
         // guarded no-op for live schedules (the erase filters on `deleting: true`).
-        if (status !== 'requires_action') {
+        if (terminal) {
           await methods.eraseScheduleIfDrained(scheduleId).catch((err) => {
             logger.warn(`[schedules] erase-on-settle failed for ${scheduleId}:`, err);
           });

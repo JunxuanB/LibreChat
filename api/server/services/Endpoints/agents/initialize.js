@@ -1923,6 +1923,7 @@ function createInitializeClient(dependencies = {}) {
       req: params.req,
       restoredContext: params.scheduledTokenContext,
       host: dependencies.scheduledBearerHost,
+      signal: params.signal,
     });
     const upstreamTokenProviderResolver = createScheduleUpstreamTokenProviderResolver(
       params.req,

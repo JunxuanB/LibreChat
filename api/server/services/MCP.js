@@ -43,6 +43,7 @@ const {
   isAbortError,
   isDirectOpenIDBearerRecoveryEnabled,
   bindScheduledMCPBearerInvocation,
+  createMCPPermissionDeniedError,
   createMCPStructuredTool,
   buildMCPDomainValidationConfig,
   OpenIDReauthRequiredError,
@@ -1221,7 +1222,7 @@ async function createMCPTool({
     scheduledBearerInvocation: bindScheduledMCPBearerInvocation(
       requestScopedConnections,
       agentId,
-      strippedToolName,
+      toolName,
     ),
     res,
     mcpPermissionContext,
@@ -1318,7 +1319,11 @@ function createToolInstance({
         ? await mcpPermissionContext.canUseServers(permissionUser)
         : await userCanUseMCPServers(permissionUser);
       if (!canUseMCP) {
-        throw new Error('Forbidden: Insufficient MCP server permissions');
+        throw createMCPPermissionDeniedError(
+          scheduledBearerInvocation,
+          serverName,
+          capturedServerConfig,
+        );
       }
       const flowsCache = getLogStores(CacheKeys.FLOWS);
       const flowManager = getFlowStateManager(flowsCache);
@@ -1431,6 +1436,7 @@ function createToolInstance({
       // recording a durable tool failure; other tool errors are a cheap no-op.
       await require('~/server/services/Schedules').recordMCPToolAuthFailure({
         error,
+        ...(scheduledBearerInvocation && { identity: scheduledBearerInvocation.identity }),
         streamId,
         jobCreatedAt,
         userId,

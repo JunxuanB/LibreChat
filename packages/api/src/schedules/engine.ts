@@ -1,4 +1,5 @@
 import { logger, runAsSystem } from '@librechat/data-schemas';
+import { readScheduleMCPOutcomes } from 'librechat-data-provider';
 import type { IScheduleRun } from '@librechat/data-schemas';
 import type { ScheduleEngineDeps, JobState } from './types';
 import { hasAbortInFlight, hasResumeHandoffInFlight, retainedOutcome } from './types';
@@ -102,7 +103,16 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
                 conversationId: opts?.omitConversationId ? undefined : run.conversationId,
                 clearConversationId: opts?.omitConversationId,
                 error,
-                ...(run.mcp ? { mcp: run.mcp } : {}),
+                mcp: [
+                  ...new Map(
+                    [
+                      ...(run.mcp ?? []),
+                      ...readScheduleMCPOutcomes(error).filter(
+                        (outcome) => outcome.detail === 'unattended_auth_required',
+                      ),
+                    ].map((outcome) => [JSON.stringify(outcome), outcome]),
+                  ).values(),
+                ],
                 autoDisableAfterFailures: runLimits.autoDisableAfterFailures,
               });
             // Admission-only rows never reached the delivery or generation layers.

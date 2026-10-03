@@ -1612,9 +1612,10 @@ Please follow these instructions when using tools from the respective MCP server
           signal: options?.signal,
         });
         const bearerConfig = await resolveDirectOpenIDBearerConfig({
-          config: isScheduledMCPBearer(requestScopedConnections)
-            ? applyRequestHeaders(scheduledConfig)
-            : graphProcessedConfig,
+          config:
+            scheduledConfig === declaredConfig
+              ? graphProcessedConfig
+              : applyRequestHeaders(scheduledConfig),
           upstreamTokenProvider,
           resolvedConfig: directBearerRecoveryState.resolvedConfig,
           signal: options?.signal,
@@ -1797,7 +1798,11 @@ Please follow these instructions when using tools from the respective MCP server
             throw new MCPAuthenticationRejectedError(serverName, false, connectionCheckError);
           }
           if (isScheduledMCPBearer(requestScopedConnections))
-            throw new ScheduledMCPBearerError('credential_rejected', serverName);
+            throw new ScheduledMCPBearerError(
+              'credential_rejected',
+              serverName,
+              scheduledBearerInvocation?.agentId,
+            );
           directBearerRecoveryState.attempted = true;
           const recovery = this.recoverDirectOpenIDBearerConnection({
             connection,
@@ -1877,9 +1882,13 @@ Please follow these instructions when using tools from the respective MCP server
               config: declaredConfig,
               signal: options?.signal,
             });
+            const bearerHeader = Object.entries(
+              'headers' in current ? (current.headers ?? {}) : {},
+            ).find(([name]) => name.toLowerCase() === 'authorization');
+            if (!bearerHeader) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
             connection!.setRequestHeaders({
               ...resolvedHeaders,
-              ...('headers' in current ? current.headers : {}),
+              [bearerHeader[0]]: bearerHeader[1],
             });
           }
           options?.signal?.throwIfAborted();
@@ -1913,7 +1922,11 @@ Please follow these instructions when using tools from the respective MCP server
           if (isScheduledMCPBearer(requestScopedConnections) && directBearerRecovery) {
             if (isMCPTransportAuthenticationError(error)) {
               rejectScheduledMCPBearer(requestScopedConnections, serverName);
-              throw new ScheduledMCPBearerError('credential_rejected', serverName);
+              throw new ScheduledMCPBearerError(
+                'credential_rejected',
+                serverName,
+                scheduledBearerInvocation?.agentId,
+              );
             }
             throw error;
           }

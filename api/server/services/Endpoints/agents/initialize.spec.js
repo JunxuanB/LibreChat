@@ -240,7 +240,7 @@ describe('initializeClient — processAgent ACL gate', () => {
     async (restored) => {
       const { getMCPRequestContext, bindScheduledMCPBearerInvocation } = require('@librechat/api');
       const resolve = jest.fn(async (input) => input.config);
-      const bind = jest.fn(() => ({ resolve, reject: jest.fn() }));
+      const bind = jest.fn((identity) => ({ identity, resolve, reject: jest.fn() }));
       const host = createInitializeClient({ scheduledBearerHost: { bind } });
       const req = makeReq();
       req._isScheduledFire = true;
@@ -278,6 +278,7 @@ describe('initializeClient — processAgent ACL gate', () => {
           invocationMode: 'delegated',
         },
         restored ? 'resume' : 'invoke',
+        expect.any(AbortSignal),
       );
       const invocation = bindScheduledMCPBearerInvocation(
         getMCPRequestContext(req),
@@ -1927,6 +1928,7 @@ describe('initializeClient — subagent loading', () => {
   );
 
   it('omits a descriptor when its metadata lookup fails without aborting the primary run', async () => {
+    jest.spyOn(logger, 'error').mockImplementation(() => {});
     const primaryConfig = makePrimaryConfig({
       subagents: { enabled: true, allowSelf: false, agent_ids: [SUBAGENT_ID] },
     });

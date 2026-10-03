@@ -31,6 +31,7 @@ export interface ScheduledMCPBearerHost {
   bind: (
     identity: ScheduledMCPIdentity,
     stage: 'activation' | 'invoke' | 'resume',
+    signal?: AbortSignal,
   ) => ScheduledBearerScope;
 }
 interface BearerInput {
@@ -41,6 +42,7 @@ interface BearerInput {
   selection?: ScheduledMCPToolSelection;
 }
 interface ScheduledBearerScope {
+  readonly identity: ScheduledMCPIdentity;
   resolve: (input: BearerInput) => Promise<ParsedServerConfig>;
   reject: (serverName: string) => void;
 }
@@ -55,7 +57,7 @@ export function createScheduledMCPBearerHost(deps: {
 }): ScheduledMCPBearerHost {
   const now = deps.now ?? Date.now;
   return {
-    bind(identity, stage) {
+    bind(identity, stage, ownerSignal) {
       const captured = Object.freeze(scheduledMCPIdentitySchema.parse(identity));
       const cached = new Map<string, { token: string; expiresAtMs: number }>();
       const flights = new Map<string, Promise<{ token: string; expiresAtMs: number }>>();
@@ -92,11 +94,17 @@ export function createScheduledMCPBearerHost(deps: {
         return result;
       };
       return {
+        identity: captured,
         reject(server) {
           rejected.add(server);
           cached.clear();
         },
         async resolve({ user, serverName, config, signal, selection }) {
+          signal = ownerSignal
+            ? signal
+              ? AbortSignal.any([ownerSignal, signal])
+              : ownerSignal
+            : signal;
           signal?.throwIfAborted();
           if (!usesDirectOpenIDBearerRecovery(applyRequestHeaders(config))) return config;
           if (!('headers' in config)) return fail('unsupported_mode', serverName);
@@ -165,7 +173,7 @@ export function createScheduledMCPBearerHost(deps: {
               let pending = flights.get(key);
               if (!pending) {
                 pending = (async () => {
-                  for (const item of selections) await authorize(target, item, 'mint', signal);
+                  for (const item of selections) await authorize(target, item, 'mint', ownerSignal);
                   const result = await awaitOboOperation(
                     deps.resolveBearer(
                       {
@@ -174,9 +182,9 @@ export function createScheduledMCPBearerHost(deps: {
                         selection: selections[0],
                         stage: 'mint',
                       },
-                      { signal },
+                      { signal: ownerSignal },
                     ),
-                    signal,
+                    ownerSignal,
                   );
                   if (result.state === 'denied') fail(result.failure.reason, serverName);
                   if (result.state !== 'ready') fail('dependency_unavailable', serverName);
@@ -238,13 +246,15 @@ export function attachScheduledMCPBearer(
   identity: ScheduledMCPIdentity,
   host?: ScheduledMCPBearerHost,
   stage: 'activation' | 'invoke' | 'resume' = 'invoke',
+  signal?: AbortSignal,
 ): void {
   if (scopes.has(context)) throw new ScheduledMCPBearerError('binding_mismatch', '');
   scopes.set(
     context,
     host
-      ? host.bind(identity, stage)
+      ? host.bind(identity, stage, signal)
       : {
+          identity: Object.freeze({ ...identity }),
           async resolve(input) {
             if (usesDirectOpenIDBearerRecovery(applyRequestHeaders(input.config)))
               throw new ScheduledMCPBearerError('provider_missing', input.serverName);
@@ -265,9 +275,13 @@ export async function resolveScheduledMCPBearerConfig(
 ): Promise<ParsedServerConfig> {
   if (input.context?.cleanupStarted)
     throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
-  return input.context && scopes.has(input.context)
-    ? scopes.get(input.context)!.resolve(input)
-    : input.config;
+  const config =
+    input.context && scopes.has(input.context)
+      ? await scopes.get(input.context)!.resolve(input)
+      : input.config;
+  if (input.context?.cleanupStarted)
+    throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
+  return config;
 }
 export function rejectScheduledMCPBearer(
   context: RequestScopedMCPConnectionStore | undefined,
@@ -281,6 +295,7 @@ export function prepareScheduledMCPBearer(input: {
   context?: RequestScopedMCPConnectionStore;
   restoredContext?: ScheduledTokenContext;
   host?: ScheduledMCPBearerHost;
+  signal?: AbortSignal;
 }): void {
   if (!isScheduleFireRequest(input.req)) return;
   const fire = readScheduleFireContext(input.req);
@@ -319,6 +334,7 @@ export function prepareScheduledMCPBearer(input: {
     { ...identity, tenantId: identity.tenantId ?? null },
     input.host,
     root ? 'resume' : 'invoke',
+    input.signal,
   );
 }
 
@@ -331,16 +347,37 @@ export function bindScheduledMCPBearerInvocation(
   if (!context || !scopes.has(context)) return;
   return Object.freeze({
     context,
+    identity: scopes.get(context)!.identity,
+    agentId,
     async resolve(input: Omit<BearerInput, 'selection'>) {
-      return resolveScheduledMCPBearerConfig({
-        ...input,
-        context,
-        selection: { agentId: agentId ?? '', tools: [tool] },
-      });
+      try {
+        return await resolveScheduledMCPBearerConfig({
+          ...input,
+          context,
+          selection: { agentId: agentId ?? '', tools: [tool] },
+        });
+      } catch (error) {
+        if (error instanceof ScheduledMCPBearerError)
+          throw new ScheduledMCPBearerError(error.failure.reason, input.serverName, agentId);
+        throw error;
+      }
     },
   });
 }
 export interface ScheduledMCPBearerInvocation {
+  readonly identity: ScheduledMCPIdentity;
+  readonly agentId?: string;
   readonly context: RequestScopedMCPConnectionStore;
   readonly resolve: (input: Omit<BearerInput, 'selection'>) => Promise<ParsedServerConfig>;
+}
+
+/** Preserve ordinary tool errors; resource-bearer authorization denials retain schedule evidence. */
+export function createMCPPermissionDeniedError(
+  invocation: ScheduledMCPBearerInvocation | undefined,
+  serverName: string,
+  config?: ParsedServerConfig,
+): Error {
+  return invocation && config && usesDirectOpenIDBearerRecovery(applyRequestHeaders(config))
+    ? new ScheduledMCPBearerError('rbac_denied', serverName, invocation.agentId)
+    : new Error('Forbidden: Insufficient MCP server permissions');
 }
