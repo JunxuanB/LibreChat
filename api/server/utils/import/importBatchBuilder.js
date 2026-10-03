@@ -87,6 +87,7 @@ class ImportBatchBuilder {
     this.sourceIsTemporary = undefined;
     this.flushThreshold = options.flushThreshold ?? 250;
     this.lastFlushOutcome = 'none';
+    this.committedConversations = 0;
   }
 
   getRetentionFields() {
@@ -106,6 +107,14 @@ class ImportBatchBuilder {
    */
   getLastFlushOutcome() {
     return this.lastFlushOutcome;
+  }
+
+  /**
+   * Returns how many conversations flushes have committed so far.
+   * @returns {number}
+   */
+  getCommittedConversationCount() {
+    return this.committedConversations;
   }
 
   /**
@@ -279,6 +288,7 @@ class ImportBatchBuilder {
       throw error;
     }
     this.lastFlushOutcome = 'committed';
+    this.committedConversations += conversations.length;
 
     const tags = resolveImportTagCounts(
       this.getRetentionFields(),
