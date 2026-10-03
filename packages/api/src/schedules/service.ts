@@ -533,6 +533,7 @@ export function createSchedulesService(
   }
 
   const engineDeps: ScheduleEngineDeps = {
+    reconcileRetainedJobs,
     preflightMCP: deps.preflightMCP,
     methods,
     getLimits,

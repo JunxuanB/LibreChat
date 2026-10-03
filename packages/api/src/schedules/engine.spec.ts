@@ -118,6 +118,15 @@ afterEach(() => jest.restoreAllMocks());
 /** Overdue past MISFIRE_GRACE_MS (15m), so the tick skips it forward instead of firing. */
 const staleAt = () => new Date(Date.now() - 20 * 60_000);
 
+describe('armed-engine retained-job recovery', () => {
+  it('retries held-job settlement independently of active and unbookkept Mongo rows', async () => {
+    const methods = makeMethods(makeClaimedSchedule());
+    const reconcileRetainedJobs = jest.fn(async () => undefined);
+    await reconcileOnce(makeDeps(methods, { reconcileRetainedJobs }));
+    expect(reconcileRetainedJobs).toHaveBeenCalled();
+  });
+});
+
 describe('runTick misfire skip-forward', () => {
   it('advances a stale occurrence to the next future one', async () => {
     const schedule = makeClaimedSchedule({ nextRunAt: staleAt() });

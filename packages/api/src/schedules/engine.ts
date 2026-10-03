@@ -56,6 +56,9 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
    */
   async function reconcile() {
     try {
+      await runAsSystem(async () => deps.reconcileRetainedJobs?.()).catch((error) =>
+        logger.warn('[schedules] retained job recovery deferred:', error),
+      );
       const limits = await deps.getLimits();
       const runs = await runAsSystem(() =>
         deps.methods.getRunsForReconciliation(

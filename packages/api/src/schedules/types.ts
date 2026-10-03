@@ -181,6 +181,8 @@ export interface ScheduleFileRef {
 }
 
 export interface ScheduleEngineDeps {
+  /** Retried even when Mongo has no active/unbookkept run left to enumerate. */
+  reconcileRetainedJobs?: () => Promise<void>;
   preflightMCP: ScheduleMCPPreflight;
   methods: ScheduleMethods;
   /** Resolves interface.schedules limits, per-principal when a user is given. */
