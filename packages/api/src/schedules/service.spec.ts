@@ -749,6 +749,7 @@ describe('scheduled OBO tool failure settlement', () => {
     methods.eraseScheduleIfDrained = jest.fn(async () => false);
     methods.getScheduleRunAbortState = jest.fn(async () => ({ status: 'started', mcp: [failure] }));
     const store = {
+      durableScheduleReceipts: false,
       getJob: jest.fn(async () => ({
         createdAt: 42,
         scheduleId: 's1',
@@ -767,6 +768,7 @@ describe('scheduled OBO tool failure settlement', () => {
     'retains a verified bearer denial using %s and prevents success settlement',
     async (storageMode) => {
       const { service, methods, store } = setup();
+      store.durableScheduleReceipts = storageMode === 'job evidence';
       const job: {
         createdAt: number;
         scheduleId: string;

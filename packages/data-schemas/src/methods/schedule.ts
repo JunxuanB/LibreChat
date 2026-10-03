@@ -1491,21 +1491,8 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
         { new: false },
       );
       if (paused == null) {
-        const denied = await ScheduleRun()
-          .findOne({
-            scheduleId: params.scheduleId,
-            scheduledFor: params.scheduledFor,
-            status: { $in: ['started', 'requires_action'] },
-            'mcp.detail': 'unattended_auth_required',
-          })
-          .lean<IScheduleRun>();
-        if (denied) {
-          const projection = projectScheduleMCPReceipt({
-            status: 'requires_action',
-            mcp: denied.mcp,
-          });
-          if (projection.status === 'error') await recordRunOutcome({ ...params, ...projection });
-        }
+        // A resume/denial fence is not authority to terminalize. The generation-aware
+        // service owns denied-pause abort, provider drain and steer recovery.
         return;
       }
       // Revision-fenced like the terminal path: an owner edit landing between the fire

@@ -903,6 +903,8 @@ export interface ResumeState {
  */
 export interface IJobStore {
   readonly detachedAgentEventActionStoreMode?: DetachedAgentEventActionStoreMode;
+  /** Receipt evidence survives loss of the generation worker; absent is volatile. */
+  readonly durableScheduleReceipts?: boolean;
 
   initialize(): Promise<void>;
 

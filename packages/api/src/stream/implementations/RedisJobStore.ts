@@ -1863,6 +1863,7 @@ interface PendingChunkAppendBatch {
 }
 
 export class RedisJobStore implements IJobStoreV2 {
+  readonly durableScheduleReceipts = true;
   readonly detachedAgentEventActionStoreMode = 'distributed' as const;
 
   private redis: Redis | Cluster;

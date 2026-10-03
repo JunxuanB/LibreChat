@@ -1045,7 +1045,7 @@ export function createSchedulesService(
       );
     if (
       (writes[0].status === 'fulfilled' && writes[0].value) ||
-      (writes[1].status === 'fulfilled' && retained)
+      (store?.durableScheduleReceipts === true && writes[1].status === 'fulfilled' && retained)
     ) {
       return true;
     }

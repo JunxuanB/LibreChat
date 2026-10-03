@@ -41,7 +41,8 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
         getScheduleById: async () => null,
         getScheduleRunAbortState: async () => ({ status: 'started', mcp: [] }),
         recordMCPToolAuthFailure: async () => {
-          throw new Error('Mongo unavailable');
+          if (!mongoAvailable) throw new Error('Mongo unavailable');
+          return true;
         },
         eraseScheduleIfDrained: async () => false,
       },
@@ -320,6 +321,38 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
     });
   });
 
+  it('does not acknowledge volatile job evidence while Mongo cannot persist the denial', async () => {
+    const job = await GenerationJobManager.createJob('conversation', 'owner', 'conversation', {
+      initialMetadata: {
+        scheduleId: identity.scheduleId,
+        scheduledFor,
+        agent_id: identity.agentId,
+      },
+    });
+    let durable = false;
+    dependencies.methods.recordMCPToolAuthFailure = async () => durable;
+    let returned = false;
+    const pending = recordScheduledMCPToolAuthFailure(
+      {
+        error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+        identity,
+        streamId: job.streamId,
+        jobCreatedAt: job.createdAt,
+        userId: 'owner',
+        serverName: 'Files',
+      },
+      () => service.recordMCPToolAuthFailure,
+    ).then(() => {
+      returned = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await store.getJob(job.streamId))?.scheduleOutcomeError).toContain('consent_revoked');
+    expect(returned).toBe(false);
+    durable = true;
+    await pending;
+    expect(returned).toBe(true);
+  });
+
   it('blocks tool continuation during both-store failure and records the denial after recovery', async () => {
     const job = await GenerationJobManager.createJob('conversation', 'owner', 'conversation', {
       initialMetadata: {
@@ -337,6 +370,10 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
       serverName: 'Files',
     };
     let unavailable = true;
+    dependencies.methods.recordMCPToolAuthFailure = async () => {
+      if (unavailable) throw new Error('Mongo unavailable');
+      return true;
+    };
     let returned = false;
     const update = store.updateJob.bind(store);
     jest.spyOn(store, 'updateJob').mockImplementation(async (...args) => {

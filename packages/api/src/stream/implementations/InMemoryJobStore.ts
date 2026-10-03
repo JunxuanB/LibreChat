@@ -146,6 +146,7 @@ interface ContentState {
  * - No chunk persistence needed - same instance handles generation and reconnects
  */
 export class InMemoryJobStore implements IJobStoreV2 {
+  readonly durableScheduleReceipts = false;
   readonly detachedAgentEventActionStoreMode = 'process_local' as const;
 
   private jobs = new Map<string, SerializableJobData>();
