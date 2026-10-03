@@ -34,7 +34,7 @@ export function applySearchTokens(schema: Schema, fields: readonly SearchTokenFi
       if (!update) {
         return;
       }
-      const next = withSearchTokens(fields, update);
+      const next = withSearchTokens(fields, update, { upsert: this.getOptions().upsert === true });
       if (next !== update) {
         this.setUpdate(next);
       }

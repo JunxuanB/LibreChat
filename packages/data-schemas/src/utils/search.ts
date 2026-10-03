@@ -42,8 +42,6 @@ export const MAX_SEARCH_TOKEN_LENGTH = 64;
 export const MAX_SEARCH_VALUE_LENGTH = 256;
 /** Most tokens stored per field. */
 export const MAX_SEARCH_TOKENS = 32;
-/** Most query tokens matched; further words in a query are ignored. */
-export const MAX_SEARCH_QUERY_TOKENS = 8;
 
 const NON_WORD = /[^\p{L}\p{N}]+/u;
 const COMBINING_MARKS = /\p{M}+/gu;
@@ -102,6 +100,11 @@ export function computeSearchTokenSet(
 
 type UpdateDoc = Record<string, unknown>;
 
+/** Mongoose drops `undefined` assignments from an update, so they write nothing. */
+function writes(doc: UpdateDoc | undefined, key: string): doc is UpdateDoc {
+  return doc != null && key in doc && doc[key] !== undefined;
+}
+
 function operator(update: UpdateDoc, key: string): UpdateDoc | undefined {
   const value = update[key];
   return value != null && typeof value === 'object' && !Array.isArray(value)
@@ -113,13 +116,19 @@ function operator(update: UpdateDoc, key: string): UpdateDoc | undefined {
  * Returns `update` with the token fields recomputed for every source field it
  * writes, through `$set`, `$setOnInsert`, `$unset` or a top-level replacement
  * value. Each token field depends on one source field, so a partial update
- * stays correct. Copy-on-write: the same reference comes back when nothing
+ * stays correct. On an upsert, a token field whose source the update does not
+ * write is initialized to `[]` on insert, so new documents never look
+ * un-migrated. Copy-on-write: the same reference comes back when nothing
  * changes. Pipeline updates are returned untouched.
  *
  * Mongoose runs no middleware for `bulkWrite`; a bulk write that changes a
  * source field must pass its update through this function.
  */
-export function withSearchTokens<T>(fields: readonly SearchTokenField[], update: T): T {
+export function withSearchTokens<T>(
+  fields: readonly SearchTokenField[],
+  update: T,
+  options: { upsert?: boolean } = {},
+): T {
   if (update == null || typeof update !== 'object' || Array.isArray(update)) {
     return update;
   }
@@ -138,19 +147,24 @@ export function withSearchTokens<T>(fields: readonly SearchTokenField[], update:
     const set = operator(source, '$set');
     const setOnInsert = operator(source, '$setOnInsert');
     const unset = operator(source, '$unset');
-    if (set && field.source in set) {
+    let written = true;
+    if (writes(set, field.source)) {
       write('$set', field.tokens, computeSearchTokens(field.kind, set[field.source]));
-    } else if (field.source in source) {
+    } else if (writes(source, field.source)) {
       write(null, field.tokens, computeSearchTokens(field.kind, source[field.source]));
     } else if (unset && field.source in unset) {
       write('$set', field.tokens, []);
+    } else {
+      written = false;
     }
-    if (setOnInsert && field.source in setOnInsert) {
+    if (writes(setOnInsert, field.source)) {
       write(
         '$setOnInsert',
         field.tokens,
         computeSearchTokens(field.kind, setOnInsert[field.source]),
       );
+    } else if (options.upsert && !written) {
+      write('$setOnInsert', field.tokens, []);
     }
   }
   return (next ?? source) as T;
@@ -174,7 +188,7 @@ export function buildSearchTokenFilter(
 ): Record<string, unknown> | null {
   const trimmed = query.trim();
   const normalized = normalizeSearchText(trimmed);
-  const queryTokens = [...new Set(words(normalized))].slice(0, MAX_SEARCH_QUERY_TOKENS);
+  const queryTokens = [...new Set(words(normalized))];
   const whole = truncate(normalized, MAX_SEARCH_VALUE_LENGTH);
   const matchWhole = whole.length > 0 && !(queryTokens.length === 1 && queryTokens[0] === whole);
   if (!trimmed || (queryTokens.length === 0 && !matchWhole)) {

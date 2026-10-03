@@ -4,7 +4,7 @@ import { CacheKeys, PrincipalType, SystemRoles } from 'librechat-data-provider';
 import type { TPrincipalSearchResult } from 'librechat-data-provider';
 import type { Model, ClientSession, FilterQuery } from 'mongoose';
 import type { CacheStore, IGroup, IRole, IUser } from '~/types';
-import { buildUserSearchFilter, buildGroupSearchFilter } from '~/utils/search';
+import { normalizeSearchText, buildUserSearchFilter, buildGroupSearchFilter } from '~/utils/search';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { scopedCacheKey } from '~/config/tenantContext';
 import { escapeRegExp } from '~/utils/string';
@@ -1015,7 +1015,7 @@ export function createUserGroupMethods(
    * @returns Relevance score (0-100)
    */
   function calculateRelevanceScore(item: TPrincipalSearchResult, searchPattern: string): number {
-    const normalizedPattern = searchPattern.toLowerCase();
+    const normalizedPattern = normalizeSearchText(searchPattern);
 
     /** Get searchable text based on type */
     const searchableFields =
@@ -1027,7 +1027,7 @@ export function createUserGroupMethods(
 
     for (const field of searchableFields) {
       if (!field) continue;
-      const fieldLower = field.toLowerCase();
+      const fieldLower = normalizeSearchText(field);
       let score = 0;
 
       /** Exact match gets highest score */

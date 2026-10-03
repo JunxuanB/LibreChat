@@ -6,7 +6,6 @@ import {
   MAX_SEARCH_TOKENS,
   USER_SEARCH_TOKEN_FIELDS,
   MAX_SEARCH_TOKEN_LENGTH,
-  MAX_SEARCH_QUERY_TOKENS,
 } from './search';
 
 describe('normalizeSearchText', () => {
@@ -109,6 +108,20 @@ describe('withSearchTokens', () => {
     });
   });
 
+  it('ignores undefined assignments, which Mongoose drops from the update', () => {
+    const update = { $set: { name: undefined, role: 'ADMIN' }, username: undefined };
+    expect(withSearchTokens(USER_SEARCH_TOKEN_FIELDS, update)).toBe(update);
+  });
+
+  it('initializes every unwritten token field on upsert inserts', () => {
+    expect(
+      withSearchTokens(USER_SEARCH_TOKEN_FIELDS, { $set: { name: 'Al' } }, { upsert: true }),
+    ).toEqual({
+      $set: { name: 'Al', nameTokens: ['al'] },
+      $setOnInsert: { emailTokens: [], usernameTokens: [] },
+    });
+  });
+
   it('returns the same reference when no source field is written', () => {
     const update = { $set: { role: 'ADMIN' } };
     expect(withSearchTokens(USER_SEARCH_TOKEN_FIELDS, update)).toBe(update);
@@ -143,13 +156,14 @@ describe('buildUserSearchFilter', () => {
     expect(filter.$and[1].$or).not.toContainEqual({ nameTokens: /^john smi/ });
   });
 
-  it('escapes regex metacharacters and caps the number of query tokens', () => {
+  it('escapes regex metacharacters and requires every query token, however many', () => {
     const filter = buildUserSearchFilter('a.b') as { $and: Array<{ $or: unknown[] }> };
     expect(filter.$and[0].$or).toContainEqual({ emailTokens: /^a\.b/ });
 
-    const many = Array.from({ length: MAX_SEARCH_QUERY_TOKENS + 4 }, (_, i) => `t${i}`).join(' ');
-    const capped = buildUserSearchFilter(many) as { $and: unknown[] };
-    expect(capped.$and).toHaveLength(MAX_SEARCH_QUERY_TOKENS);
+    const many = Array.from({ length: 12 }, (_, i) => `t${i}`).join(' ');
+    const all = buildUserSearchFilter(many) as { $and: Array<{ $or: unknown[] }> };
+    expect(all.$and).toHaveLength(12);
+    expect(all.$and[11].$or).toContainEqual({ nameTokens: /^t11/ });
   });
 
   it('searches punctuation-only queries on full values only', () => {

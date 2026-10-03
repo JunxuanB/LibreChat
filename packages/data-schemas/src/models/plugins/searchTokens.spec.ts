@@ -97,6 +97,7 @@ describe('search token write paths', () => {
     );
     const upserted = await User.findOne({ email: 'new@x.io' }).select(TOKENS).lean<t.IUser>();
     expect(upserted?.nameTokens).toEqual(['new', 'person']);
+    expect(upserted?.usernameTokens).toEqual([]);
 
     await User.insertMany([user('Many One', 'one@x.io', 'm1')]);
     const inserted = await User.findOne({ email: 'one@x.io' }).select(TOKENS).lean<t.IUser>();
@@ -125,6 +126,15 @@ describe('search token write paths', () => {
     const entra = await methods.upsertGroupByExternalId('ext-1', 'entra', { name: 'Sales EMEA' });
     const entraTokens = await Group.findById(entra?._id).select('+nameTokens').lean<t.IGroup>();
     expect(entraTokens?.nameTokens).toEqual(['sales', 'emea']);
+    expect(await Group.countDocuments({ _id: entra?._id, emailTokens: { $exists: true } })).toBe(1);
+  });
+
+  it('keeps tokens when an update assigns undefined to a source field', async () => {
+    const doc = await User.create(user('Kept Name', 'kept@x.io'));
+    await User.findByIdAndUpdate(doc._id, { $set: { name: undefined, role: 'ADMIN' } });
+    const stored = await User.findById(doc._id).select(`name ${TOKENS}`).lean<t.IUser>();
+    expect(stored?.name).toBe('Kept Name');
+    expect(stored?.nameTokens).toEqual(['kept', 'name']);
   });
 });
 

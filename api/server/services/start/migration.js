@@ -37,11 +37,7 @@ async function checkMigrations() {
   } catch (error) {
     logger.error('Failed to check prompt permissions migration:', error);
   }
-  try {
-    await warnOnMissingSearchTokens(mongoose.connection);
-  } catch (error) {
-    logger.error('Failed to check search token migration:', error);
-  }
+  await warnOnMissingSearchTokens(mongoose.connection);
 }
 
 module.exports = {

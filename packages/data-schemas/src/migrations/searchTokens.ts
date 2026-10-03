@@ -20,7 +20,7 @@ const SEARCH_TOKEN_COLLECTIONS: ReadonlyArray<{
 ];
 
 export interface SearchTokenBackfillResult {
-  /** Documents missing at least one token field, per collection. */
+  /** Documents whose token fields are missing or no longer match their source, per collection. */
   pending: Record<string, number>;
   /** Documents written, per collection; zero on a dry run. */
   updated: Record<string, number>;
@@ -31,13 +31,25 @@ function missingTokens(fields: readonly SearchTokenField[]): Document {
   return { $or: fields.map((field) => ({ [field.tokens]: { $exists: false } })) };
 }
 
+function sameTokens(stored: unknown, expected: string[]): boolean {
+  return (
+    Array.isArray(stored) &&
+    stored.length === expected.length &&
+    stored.every((token, index) => token === expected[index])
+  );
+}
+
 /**
- * Writes the search-token arrays on users and groups saved before they existed.
- * Idempotent and resumable: only documents missing a token field are read, and
- * each write is guarded by the source values it was computed from, so a
- * concurrent rename (whose own update already wrote fresh tokens) is skipped.
- * Runs across all tenants on the raw collections; the `_id` filter keeps every
- * write on its own document, and `tenantId` is never written.
+ * Brings the search-token arrays on users and groups in line with their source
+ * fields: fills documents saved before the tokens existed and repairs tokens
+ * left stale by a writer that did not maintain them (an older server during a
+ * rolling deploy, a raw collection write). Every document is read and only the
+ * ones whose tokens differ are written, so it is idempotent and resumable; run
+ * it again once a rollout completes. Each write is guarded by the source values
+ * it was computed from, so a concurrent rename (whose own update already wrote
+ * fresh tokens) is skipped. Runs across all tenants on the raw collections; the
+ * `_id` filter keeps every write on its own document, and `tenantId` is never
+ * written.
  */
 export async function backfillSearchTokens(
   connection: Connection,
@@ -59,14 +71,15 @@ export async function backfillSearchTokens(
         );
       }
     }
-    const filter = missingTokens(fields);
-    result.pending[name] = await collection.countDocuments(filter);
+    result.pending[name] = 0;
     result.updated[name] = 0;
-    if (options.dryRun || result.pending[name] === 0) {
-      continue;
-    }
 
-    const projection = Object.fromEntries(fields.map((field) => [field.source, 1]));
+    const projection = Object.fromEntries(
+      fields.flatMap((field) => [
+        [field.source, 1],
+        [field.tokens, 1],
+      ]),
+    );
     let batch: AnyBulkWriteOperation[] = [];
     const flush = async () => {
       if (batch.length === 0) {
@@ -78,24 +91,29 @@ export async function backfillSearchTokens(
       batch = [];
     };
 
-    for await (const doc of collection.find(filter, { projection })) {
+    for await (const doc of collection.find({}, { projection })) {
+      const expected = computeSearchTokenSet(fields, doc);
+      if (fields.every((field) => sameTokens(doc[field.tokens], expected[field.tokens]))) {
+        continue;
+      }
+      result.pending[name] += 1;
+      if (options.dryRun) {
+        continue;
+      }
       const guard = Object.fromEntries(
         fields.map((field) => [field.source, doc[field.source] ?? null]),
       );
-      batch.push({
-        updateOne: {
-          filter: { _id: doc._id, ...guard },
-          update: { $set: computeSearchTokenSet(fields, doc) },
-        },
-      });
+      batch.push({ updateOne: { filter: { _id: doc._id, ...guard }, update: { $set: expected } } });
       if (batch.length >= batchSize) {
         await flush();
       }
     }
     await flush();
-    logger.info(
-      `[SearchTokenMigration] ${name}: ${result.updated[name]} of ${result.pending[name]} documents backfilled`,
-    );
+    if (!options.dryRun) {
+      logger.info(
+        `[SearchTokenMigration] ${name}: ${result.updated[name]} of ${result.pending[name]} documents updated`,
+      );
+    }
   }
   return result;
 }
@@ -103,15 +121,23 @@ export async function backfillSearchTokens(
 /**
  * Logs a startup warning when users or groups still lack search tokens. Those
  * documents stay findable through the slower unindexed fallback until
- * `npm run migrate:search-tokens` runs.
+ * `npm run migrate:search-tokens` runs. A best-effort diagnostic: a failed
+ * check is logged and never blocks startup.
  */
-export async function warnOnMissingSearchTokens(connection: Connection): Promise<number> {
-  const { pending } = await backfillSearchTokens(connection, { dryRun: true });
-  const total = Object.values(pending).reduce((sum, count) => sum + count, 0);
-  if (total > 0) {
-    logger.warn(
-      `[SearchTokenMigration] ${total} users and groups lack search tokens; people search scans the collection for them until you run: npm run migrate:search-tokens`,
+export async function warnOnMissingSearchTokens(connection: Connection): Promise<void> {
+  try {
+    const counts = await Promise.all(
+      SEARCH_TOKEN_COLLECTIONS.map(({ name, fields }) =>
+        connection.db!.collection(name).countDocuments(missingTokens(fields)),
+      ),
     );
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    if (total > 0) {
+      logger.warn(
+        `[SearchTokenMigration] ${total} users and groups lack search tokens; people search scans the collection for them until you run: npm run migrate:search-tokens`,
+      );
+    }
+  } catch (error) {
+    logger.error('[SearchTokenMigration] Failed to check search token migration:', error);
   }
-  return total;
 }

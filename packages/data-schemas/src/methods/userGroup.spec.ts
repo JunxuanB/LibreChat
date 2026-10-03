@@ -1414,6 +1414,14 @@ describe('userGroup methods', () => {
       expect(score).toBe(50);
     });
 
+    it('scores accent-folded matches like their plain spelling', () => {
+      const score = methods.calculateRelevanceScore(
+        { type: PrincipalType.USER, name: 'Zoë', source: 'local' },
+        'zoe',
+      );
+      expect(score).toBe(100);
+    });
+
     it('returns 10 (default) when no substring or exact match', () => {
       const score = methods.calculateRelevanceScore(
         { type: PrincipalType.USER, name: 'bob', source: 'local' },

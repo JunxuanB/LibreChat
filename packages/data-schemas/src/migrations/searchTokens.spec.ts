@@ -83,6 +83,27 @@ describe('backfillSearchTokens', () => {
     });
   });
 
+  it('repairs tokens left stale by a writer that did not maintain them', async () => {
+    await users().insertOne({
+      name: 'New Name',
+      email: 'stale@x.io',
+      nameTokens: ['old', 'name'],
+      emailTokens: ['stale@x.io', 'stale', 'x', 'io'],
+      usernameTokens: [],
+    });
+    await expect(backfillSearchTokens(mongoose.connection, { dryRun: true })).resolves.toEqual({
+      pending: { users: 1, groups: 0 },
+      updated: { users: 0, groups: 0 },
+    });
+    await expect(backfillSearchTokens(mongoose.connection)).resolves.toEqual({
+      pending: { users: 1, groups: 0 },
+      updated: { users: 1, groups: 0 },
+    });
+    expect(await users().findOne({ email: 'stale@x.io' })).toMatchObject({
+      nameTokens: ['new', 'name'],
+    });
+  });
+
   it('creates the token indexes when the schema indexes were never built', async () => {
     await users().insertOne({ name: 'No Index', email: 'noindex@x.io' });
     await groups().insertOne({ name: 'Plain Group' });
@@ -114,12 +135,23 @@ describe('backfillSearchTokens', () => {
 describe('warnOnMissingSearchTokens', () => {
   it('warns only while documents lack tokens', async () => {
     await users().insertOne({ name: 'Old User', email: 'old@x.io' });
-    await expect(warnOnMissingSearchTokens(mongoose.connection)).resolves.toBe(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('migrate:search-tokens'));
+    await groups().insertOne({ name: 'Old Group' });
+    await warnOnMissingSearchTokens(mongoose.connection);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('2 users and groups'));
 
     jest.clearAllMocks();
     await backfillSearchTokens(mongoose.connection);
-    await expect(warnOnMissingSearchTokens(mongoose.connection)).resolves.toBe(0);
+    await warnOnMissingSearchTokens(mongoose.connection);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed check instead of failing startup', async () => {
+    const broken = {
+      db: { collection: () => ({ countDocuments: () => Promise.reject(new Error('down')) }) },
+    };
+    await expect(
+      warnOnMissingSearchTokens(broken as unknown as typeof mongoose.connection),
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
   });
 });
