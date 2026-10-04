@@ -1100,6 +1100,10 @@ export const toolApprovalPolicySchema = z
   .object({
     enabled: z.boolean().optional(),
     mode: toolApprovalModeSchema.optional(),
+    /** Enable after all replicas support agent-scoped approval modes and grants. */
+    agentModes: z.boolean().optional(),
+    /** Bounded grant lookups fail back to manual review, never automatic approval. */
+    grantLookupTimeoutMs: z.number().int().min(100).max(5000).optional(),
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
     ask: z.array(z.string()).optional(),
@@ -1285,6 +1289,9 @@ export const CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS =
 
 export const codeEnvironmentAdmissionSchema = z
   .object({
+    durableRequests: z.boolean().optional(),
+    transportTimeoutMs: z.number().int().min(1000).max(30000).optional(),
+    pollIntervalMs: z.number().int().min(100).max(5000).optional(),
     /** Optional per-request queue ceiling, bounded by transport and execution reserves. */
     queueWaitMs: z.number().int().min(1).max(CODE_ENVIRONMENT_ADMISSION_MAX_MS).optional(),
     initialDelayMs: z.number().int().min(100).max(30_000).optional().default(1_000),
