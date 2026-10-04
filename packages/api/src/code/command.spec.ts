@@ -1308,3 +1308,55 @@ describe('createAttachedWorkspaceBashTool', () => {
     ]);
   });
 });
+
+describe('attached command admission configuration', () => {
+  test('bounds the advertised command ceiling by the shorter overall run budget', () => {
+    expect(
+      resolveAttachedWorkspaceCommandTimeoutMax({
+        limits: {
+          maxCommandTimeoutMs: 100_000,
+          maxRequestTimeoutMs: 100_000,
+          maxRunTimeoutMs: 65_000,
+        },
+      }),
+    ).toBe(45_000);
+  });
+
+  test('passes separate run and retry policies through the actual tool invocation', async () => {
+    const admission = {
+      queueWaitMs: 60_000,
+      initialDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      multiplier: 2,
+      jitterRatio: 0.2,
+    };
+    const fetchImpl = jest.fn<ReturnType<CodeBridgeFetch>, Parameters<CodeBridgeFetch>>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            protocolVersion: 1,
+            operation: 'execute_command',
+            workspaceId: 'primary',
+            exitCode: 0,
+            stdout: 'ready',
+            stderr: '',
+            timedOut: false,
+            truncated: false,
+          }),
+        ),
+    );
+    const bash = createAttachedWorkspaceBashTool({
+      baseUrl: 'https://code.example/v1',
+      authHeaders: () => ({}),
+      workspaceId: 'primary',
+      fetchImpl,
+      maxRequestTimeoutMs: 100_000,
+      maxRunTimeoutMs: 180_000,
+      admission,
+    });
+    await bash.invoke({ command: 'echo ready' });
+    expect(
+      new Headers(fetchImpl.mock.calls[0][1]?.headers).get('X-LibreChat-Workspace-Queue-Wait-Ms'),
+    ).toBe('60000');
+  });
+});

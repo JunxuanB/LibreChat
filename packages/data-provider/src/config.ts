@@ -139,6 +139,8 @@ export const excludedKeys = new Set([
   'agentEventActorLegacyTurn',
   'subagentThread',
   'title',
+  'titleSetByUser',
+  'titleRevision',
   'iconURL',
   'greeting',
   'endpoint',
@@ -1281,6 +1283,22 @@ export const CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS =
   CODE_ENVIRONMENT_COMMAND_TIMEOUT_HARD_MAX_MS +
   CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS;
 
+export const codeEnvironmentAdmissionSchema = z
+  .object({
+    /** Optional per-request queue ceiling, bounded by transport and execution reserves. */
+    queueWaitMs: z.number().int().min(1).max(CODE_ENVIRONMENT_ADMISSION_MAX_MS).optional(),
+    initialDelayMs: z.number().int().min(100).max(30_000).optional().default(1_000),
+    maxDelayMs: z.number().int().min(100).max(300_000).optional().default(30_000),
+    multiplier: z.number().min(1).max(10).optional().default(1),
+    /** Additive jitter never advances a server's Retry-After hint. */
+    jitterRatio: z.number().min(0).max(1).optional().default(0),
+  })
+  .strict()
+  .refine((policy) => policy.maxDelayMs >= policy.initialDelayMs, {
+    path: ['maxDelayMs'],
+    message: 'Maximum retry delay must cover the initial delay',
+  });
+
 /**
  * Typed user-tunable surface for one attached code environment. Omitted fields
  * remain fixed at LibreChat's safe baseline. Isolation, networking, mounts,
@@ -1295,6 +1313,7 @@ export const codeEnvironmentUserConfigSchema = z
       })
       .strict()
       .optional(),
+    admission: codeEnvironmentAdmissionSchema.optional(),
     limits: z
       .object({
         /** Foreground Bash timeout when the call omits timeoutMs. Omission keeps 30 seconds;
@@ -1331,19 +1350,25 @@ export const codeEnvironmentUserConfigSchema = z
           .min(0)
           .max(CODE_ENVIRONMENT_QUEUE_WAIT_DEFAULT_MS)
           .optional(),
-        /** Total HTTP budget for one workspace tool call, including retries,
-         * execution, settlement, and delivery. Only set this after verifying
-         * the shortest timeout on the actual Code API path and updating Code API
-         * to honor per-request queue allowances. Omission keeps the 30-second
-         * per-attempt admission budget. */
+        /** Transport ceiling after verifying the shortest timeout on the Code API path.
+         * Also the overall call budget unless maxRunTimeoutMs is set. Omission keeps
+         * the legacy per-attempt admission and execution budgets. */
         maxRequestTimeoutMs: z
           .number()
           .int()
           .min(1)
           .max(CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS)
           .optional(),
+        /** Separate overall call deadline across credentials, backoff, and HTTP attempts.
+         * Omission preserves maxRequestTimeoutMs as the total budget. */
+        maxRunTimeoutMs: z
+          .number()
+          .int()
+          .min(1)
+          .max(CODE_ENVIRONMENT_REQUEST_TIMEOUT_HARD_MAX_MS)
+          .optional(),
         /** Admission allowance before local dispatch overhead for a Bash command inside
-         * maxRequestTimeoutMs. Omission reserves ten seconds; ignored without a total HTTP budget. */
+         * the transport/run budgets. Omission reserves ten seconds. */
         minCommandAdmissionMs: z
           .number()
           .int()
@@ -1353,19 +1378,22 @@ export const codeEnvironmentUserConfigSchema = z
       })
       .strict()
       .superRefine((limits, context) => {
+        const budgetMs = Math.min(
+          limits.maxRequestTimeoutMs ?? Infinity,
+          limits.maxRunTimeoutMs ?? Infinity,
+        );
         if (
-          limits.maxRequestTimeoutMs == null ||
-          limits.maxRequestTimeoutMs >
-            (limits.minCommandAdmissionMs ?? CODE_ENVIRONMENT_COMMAND_ADMISSION_DEFAULT_MS) +
-              CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS
+          budgetMs >
+          (limits.minCommandAdmissionMs ?? CODE_ENVIRONMENT_COMMAND_ADMISSION_DEFAULT_MS) +
+            CODE_ENVIRONMENT_COMMAND_BUDGET_GRACE_MS
         ) {
           return;
         }
+        const field =
+          limits.maxRunTimeoutMs === budgetMs ? 'maxRunTimeoutMs' : 'maxRequestTimeoutMs';
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          path: [
-            limits.minCommandAdmissionMs == null ? 'maxRequestTimeoutMs' : 'minCommandAdmissionMs',
-          ],
+          path: [limits.minCommandAdmissionMs == null ? field : 'minCommandAdmissionMs'],
           message: 'Command admission and settlement reserves must leave time for execution',
         });
       })
@@ -2514,6 +2542,8 @@ export const interfaceSchema = z
     customWelcome: z.string().optional(),
     mcpServers: mcpServersSchema.optional(),
     modelSelect: z.boolean().optional(),
+    /** Enable only after every API replica supports title ownership and old title jobs drain. */
+    runningChatRename: z.boolean().default(false),
     /** Milliseconds between syntax highlights while a code block streams. */
     codeHighlightThrottleMs: z.number().int().min(0).max(60_000).default(300),
     /** Most agents the agents panel selector lists before a search term is
@@ -2749,6 +2779,7 @@ export const interfaceSchema = z
   })
   .default({
     modelSelect: true,
+    runningChatRename: false,
     codeHighlightThrottleMs: 300,
     agentSelectorLimit: DEFAULT_AGENT_SELECTOR_LIMIT,
     parameters: true,
@@ -2853,6 +2884,9 @@ export const turnstileSchema = z.object({
 
 export type TTurnstileConfig = z.infer<typeof turnstileSchema>;
 
+/** Distinguishes collector acceptance from the proxy's silent 204 authentication drop. */
+export const RUM_COLLECTOR_ACK_HEADER = 'x-librechat-rum-accepted';
+
 export type TRumConfig = {
   provider: 'hyperdx';
   enabled: boolean;
@@ -2866,6 +2900,8 @@ export type TRumConfig = {
   advancedNetworkCapture?: boolean;
   sampleRate?: number;
   environment?: string;
+  /** Opt-in, proxy mode only: export client logger warnings/errors as OTLP logs via the RUM proxy. */
+  clientLogs?: boolean;
 };
 
 export type StartupConfigContext = 'share';
@@ -2958,7 +2994,21 @@ export function resolveMCPAppsPolicy(
   };
 }
 
+export const CONVERSATION_TITLE_OWNERSHIP_VERSION = 1 as const;
+
+/** Missing capability means an older replica, even when its YAML has the new option. */
+export function supportsConversationTitleOwnership(config?: {
+  conversationTitleOwnershipVersion?: typeof CONVERSATION_TITLE_OWNERSHIP_VERSION;
+  interface?: Pick<TInterfaceConfig, 'runningChatRename'>;
+}): boolean {
+  return (
+    config?.conversationTitleOwnershipVersion === CONVERSATION_TITLE_OWNERSHIP_VERSION &&
+    config.interface?.runningChatRename === true
+  );
+}
+
 export type TStartupConfig = {
+  conversationTitleOwnershipVersion?: typeof CONVERSATION_TITLE_OWNERSHIP_VERSION;
   appTitle: string;
   socialLogins?: string[];
   langfuseFanoutEnabled?: boolean;

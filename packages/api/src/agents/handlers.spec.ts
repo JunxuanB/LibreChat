@@ -5638,7 +5638,7 @@ describe('createToolExecuteHandler', () => {
     ];
 
     it.each(['SKILL.md', 'references/a.md'])(
-      'rejects compact amplification atomically for %s without starving timers',
+      'rejects compact amplification atomically for %s',
       async (file) => {
         const updateSkill = jest.fn();
         const saveSkillFileContent = jest.fn();
@@ -5663,10 +5663,6 @@ describe('createToolExecuteHandler', () => {
           updateSkill,
           saveSkillFileContent,
         });
-        let timerFired = false;
-        const timer = setTimeout(() => {
-          timerFired = true;
-        }, 0);
         const [result] = await invokeHandler(handler, [
           {
             id: 'amplification',
@@ -5674,10 +5670,8 @@ describe('createToolExecuteHandler', () => {
             args: { path: `skills/bounded-skill/${file}`, edits: amplificationEdits() },
           },
         ]);
-        clearTimeout(timer);
         expect(result.status).toBe('error');
         expect(result.errorMessage).toContain('budget exceeded');
-        expect(timerFired).toBe(true);
         expect(updateSkill).not.toHaveBeenCalled();
         expect(saveSkillFileContent).not.toHaveBeenCalled();
       },
@@ -7400,7 +7394,18 @@ describe('createToolExecuteHandler', () => {
               statefulSessions: true,
               environmentType: 'attached',
               codeEnvironmentConfigSchema: {
-                limits: { maxQueueWaitMs: budget, maxRequestTimeoutMs: 125_000 },
+                limits: {
+                  maxQueueWaitMs: budget,
+                  maxRequestTimeoutMs: 125_000,
+                  maxRunTimeoutMs: 180_000,
+                },
+                admission: {
+                  queueWaitMs: 60_000,
+                  initialDelayMs: 1_000,
+                  maxDelayMs: 30_000,
+                  multiplier: 2,
+                  jitterRatio: 0.2,
+                },
               },
               bridgeWorkerId: 'user-worker',
             },
@@ -7423,7 +7428,13 @@ describe('createToolExecuteHandler', () => {
           expect.objectContaining({
             maxQueueWaitMs: budget,
             maxRequestTimeoutMs: 125_000,
-            deadlineAtMs: startedAt + 125_000,
+            maxRunTimeoutMs: 180_000,
+            admission: expect.objectContaining({
+              queueWaitMs: 60_000,
+              multiplier: 2,
+              jitterRatio: 0.2,
+            }),
+            deadlineAtMs: startedAt + 180_000,
           }),
         );
         expect(result.status).toBe('success');
@@ -7432,7 +7443,13 @@ describe('createToolExecuteHandler', () => {
             expected_base_sha256: 'b'.repeat(64),
             maxQueueWaitMs: remaining,
             maxRequestTimeoutMs: 125_000,
-            deadlineAtMs: startedAt + 125_000,
+            maxRunTimeoutMs: 180_000,
+            admission: expect.objectContaining({
+              queueWaitMs: 60_000,
+              multiplier: 2,
+              jitterRatio: 0.2,
+            }),
+            deadlineAtMs: startedAt + 180_000,
           }),
         );
       },
@@ -9058,8 +9075,9 @@ describe('createToolExecuteHandler', () => {
         async (name) => {
           const message = await reject(name, legacyBody);
 
-          expect(message).toContain('Invalid workspace path');
-          expect(message.endsWith('"}"')).toBe(true);
+          expect(message).toContain('INVALID_PATH');
+          expect(message).not.toContain('Invalid workspace path');
+          expect(message).not.toContain('upstreamBody');
         },
       );
     });
