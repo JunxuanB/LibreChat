@@ -14,22 +14,6 @@ jest.mock('librechat-data-provider', () => {
   };
 });
 
-/** Keep the real query hook; only its HTTP data service is replaced below. */
-jest.mock('~/data-provider', () => ({
-  useGetEndpointsQuery: jest.requireActual('~/data-provider/Endpoints/queries')
-    .useGetEndpointsQuery,
-}));
-jest.mock('~/components/Endpoints/Icon', () => ({
-  __esModule: true,
-  default: () => <span data-testid="generic-avatar" />,
-}));
-jest.mock('~/components/Endpoints/ConvoIconURL', () => ({
-  __esModule: true,
-  default: ({ iconURL }: { iconURL?: string }) => (
-    <span data-testid="historical-avatar" data-icon={iconURL} />
-  ),
-}));
-
 const historicalMessage: TMessage = {
   messageId: 'parent',
   parentMessageId: null,
@@ -59,8 +43,10 @@ it('draws public-share authors without private requests and enables them again i
   );
   const { rerender } = render(tree(true));
 
-  expect(screen.getByTestId('generic-avatar')).toBeInTheDocument();
-  expect(screen.getByTestId('historical-avatar')).toHaveAttribute('data-icon', '/historical.png');
+  expect(screen.getByRole('img', { name: 'Historical Parent' })).toHaveAttribute(
+    'src',
+    '/historical.png',
+  );
   expect(queryClient.isFetching()).toBe(0);
   expect(getEndpoints).not.toHaveBeenCalled();
 

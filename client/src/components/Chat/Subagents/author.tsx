@@ -62,21 +62,34 @@ export function agentAuthor(agent: Agent | undefined, fallbackName: string): Tur
   };
 }
 
-/** The message that speaks for the agent behind `messageId`: the message itself
- *  when an agent wrote it, else its first agent reply — a wake-up is stored as a
- *  user turn, and the agent it woke answers it. One pass over the thread. */
+type AuthorIndex = {
+  byId: Map<string, TMessage>;
+  byParentId: Map<string, TMessage>;
+};
+
+/** React Query replaces loaded message arrays. Weak keys let streamed snapshots
+ *  be collected, while every wake-up in one snapshot shares a single pass. */
+const authorIndexes = new WeakMap<TMessage[], AuthorIndex>();
+
+/** The dispatching agent message, or the first agent reply to a user turn. */
 export function findAgentAuthorMessage(
   messages: TMessage[] | undefined,
   messageId: string,
 ): TMessage | undefined {
   if (messages == null || messageId === '') return undefined;
-  let reply: TMessage | undefined;
-  for (const message of messages) {
-    if (message.isCreatedByUser === true) continue;
-    if (message.messageId === messageId) return message;
-    if (reply == null && message.parentMessageId === messageId) reply = message;
+  let index = authorIndexes.get(messages);
+  if (index == null) {
+    index = { byId: new Map(), byParentId: new Map() };
+    for (const message of messages) {
+      if (message.isCreatedByUser === true) continue;
+      if (!index.byId.has(message.messageId)) index.byId.set(message.messageId, message);
+      if (message.parentMessageId != null && !index.byParentId.has(message.parentMessageId)) {
+        index.byParentId.set(message.parentMessageId, message);
+      }
+    }
+    authorIndexes.set(messages, index);
   }
-  return reply;
+  return index.byId.get(messageId) ?? index.byParentId.get(messageId);
 }
 
 /** The author main chat's own header shows for `message`. */

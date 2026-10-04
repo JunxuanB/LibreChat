@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ContentTypes, EModelEndpoint, ForkOptions, QueryKeys } from 'librechat-data-provider';
 import type {
   TMessage,
@@ -132,12 +132,20 @@ jest.mock('~/Providers', () => ({
  *  when it has one. */
 jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
   __esModule: true,
-  default: ({ agent }: { agent?: { avatar?: { filepath?: string } } }) =>
-    agent?.avatar?.filepath != null ? (
-      <img src={agent.avatar.filepath} alt="" data-testid="author-face" />
+  default: ({
+    agent,
+    iconData,
+  }: {
+    agent?: { avatar?: { filepath?: string } };
+    iconData?: { iconURL?: string };
+  }) => {
+    const src = iconData?.iconURL ?? agent?.avatar?.filepath;
+    return src != null ? (
+      <img src={src} alt="" data-testid="author-face" />
     ) : (
       <span data-testid="author-face" />
-    ),
+    );
+  },
 }));
 
 jest.mock('./ParentSubagentsProvider', () => ({
@@ -221,7 +229,7 @@ jest.mock('./SubagentConversation', () => ({
     detailStateByTask,
     onLoadTurnDetails,
   }: {
-    author: { name: string };
+    author: { name: string; icon: React.ReactNode };
     parentAuthor: { name: string };
     turns: Array<{
       taskId: string;
@@ -238,6 +246,7 @@ jest.mock('./SubagentConversation', () => ({
       data-author={author.name}
       data-parent-author={parentAuthor.name}
     >
+      {author.icon}
       {turns.map((turn) => (
         <div key={turn.taskId} data-testid="conversation-turn">
           {turn.trigger.summary}
@@ -473,6 +482,17 @@ const completedView: SubagentThreadView = {
   ],
 };
 
+const completedTurns: SubagentThreadView['turns'] = [
+  {
+    taskId: 'task',
+    trigger: { kind: 'parent_dispatch', summary: 'Historical request.' },
+    status: 'completed',
+    activity: completedView.activity,
+    activityTruncated: false,
+    messages: completedView.messages,
+  },
+];
+
 describe('SubagentThreadPanel', () => {
   beforeEach(() => {
     queryClient = new QueryClient();
@@ -561,6 +581,103 @@ describe('SubagentThreadPanel', () => {
       'com_endpoint_message_new: Historical Reviewer',
     );
   });
+
+  it('restores a self-spawn with the complete historical parent author', () => {
+    queryClient.setQueryData<TMessage[]>(
+      [QueryKeys.messages, 'parent-conversation'],
+      [
+        {
+          messageId: 'parent-message',
+          parentMessageId: null,
+          conversationId: 'parent-conversation',
+          isCreatedByUser: false,
+          endpoint: EModelEndpoint.agents,
+          model: 'agent_deleted',
+          sender: 'Historical Parent',
+          iconURL: '/historical-parent.png',
+          text: '',
+        },
+      ],
+    );
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        ...completedView,
+        subagentType: 'self',
+        agentId: 'agent_deleted',
+        turns: completedTurns,
+      },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel
+          selection={{
+            ...selection,
+            subagentType: 'self',
+          }}
+        />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeInTheDocument();
+    const conversation = screen.getByTestId('subagent-conversation');
+    expect(conversation).toHaveAttribute('data-author', 'Historical Parent');
+    expect(within(conversation).getByRole('img', { hidden: true })).toHaveAttribute(
+      'src',
+      '/historical-parent.png',
+    );
+  });
+
+  it.each([true, false])(
+    'names an unavailable event actor by its projected label (indexed: %s)',
+    (indexed) => {
+      const child: ParentSubagentSummary = {
+        threadId: 'child-thread',
+        parentMessageId: 'parent-message',
+        subagentType: 'agent_deleted',
+        subagentKind: 'agent',
+        agentId: 'agent_deleted',
+        title: 'Agent actor: reviewer',
+        origin: 'event',
+        actorId: 'reviewer',
+        status: 'completed',
+        latestTaskId: 'task',
+        tasks: [{ taskId: 'task', status: 'completed' }],
+        tasksTruncated: false,
+      };
+      if (indexed) {
+        mockParentChildrenByMessage = new Map([['parent-message', [child]]]);
+        mockParentChildrenByThread = new Map([[child.threadId, child]]);
+      }
+      mockUseSubagentThreadQuery.mockReturnValue({
+        isLoading: false,
+        isError: false,
+        data: {
+          ...completedView,
+          agentId: 'agent_deleted',
+          title: child.title,
+          turns: completedTurns,
+        },
+      });
+      render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{
+              ...selection,
+              event: { actorId: 'reviewer', progressKey: 'event-task:child-thread:task' },
+            }}
+          />
+        </Root>,
+      );
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+        'data-author',
+        'reviewer',
+      );
+      expect(screen.getByRole('heading', { name: 'reviewer' })).toBeInTheDocument();
+      expect(screen.queryByText('Agent actor: reviewer')).not.toBeInTheDocument();
+    },
+  );
 
   it.each([undefined, { subagentKind: 'graph' as const, subagentAgentId: 'graph:agent-1' }])(
     'does not resolve graph or legacy panel types as saved agents',

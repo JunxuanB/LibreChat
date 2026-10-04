@@ -236,6 +236,7 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
       : agentsMap?.[selectedEventActor.agentId]?.name) ??
     selectedEventActor?.actorId ??
     eventSummary?.actorId ??
+    selection.event?.actorId ??
     foregroundTitle;
   const { data, isLoading, isError, isPreviousData, isReadinessPending, refetch } =
     useSubagentThreadQuery(selection.parentConversationId, threadId, taskId, {
@@ -853,22 +854,27 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
   );
   /** One author for the header, the composer and every child turn, so the three
    *  can never name the child differently. */
-  const childAuthor = useMemo(
-    () =>
-      agentAuthor(
-        selectedActorAgent,
-        readableSubagentTitle(threadView?.title, selectedActorAgentId, threadView?.subagentKind) ||
-          (selection.event == null ? foregroundTitle : selectedEventActorName),
-      ),
-    [
-      foregroundTitle,
-      selectedActorAgent,
-      selectedActorAgentId,
-      selectedEventActorName,
-      selection.event,
-      threadView,
-    ],
-  );
+  const childAuthor = useMemo(() => {
+    if (isSelfSpawn && selection.event == null) return parentAuthor;
+    const fallbackName =
+      selection.event != null
+        ? selectedEventActorName
+        : readableSubagentTitle(
+            threadView?.title,
+            selectedActorAgentId,
+            threadView?.subagentKind,
+          ) || foregroundTitle;
+    return agentAuthor(selectedActorAgent, fallbackName);
+  }, [
+    foregroundTitle,
+    isSelfSpawn,
+    parentAuthor,
+    selectedActorAgent,
+    selectedActorAgentId,
+    selectedEventActorName,
+    selection.event,
+    threadView,
+  ]);
   const panelTitle = childAuthor.name;
   const actorOptions = useMemo<OptionWithIcon[]>(() => {
     if (selection.event == null) return [];
