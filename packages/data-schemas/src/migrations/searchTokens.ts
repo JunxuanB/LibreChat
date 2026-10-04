@@ -11,6 +11,8 @@ import { buildIndexWithRetry } from '~/utils/retry';
 import logger from '~/config/winston';
 
 const DEFAULT_BATCH_SIZE = 500;
+/** Upper bound on the startup probe, in case it runs before the token indexes exist. */
+const STARTUP_PROBE_MAX_TIME_MS = 5_000;
 
 const SEARCH_TOKEN_COLLECTIONS: ReadonlyArray<{
   name: string;
@@ -126,18 +128,26 @@ export async function backfillSearchTokens(
  * documents stay findable through the slower unindexed fallback until
  * `npm run migrate:search-tokens` runs. A best-effort diagnostic: a failed
  * check is logged and never blocks startup.
+ *
+ * Probes for one such document rather than counting them: before the backfill
+ * the token indexes may not exist, but a document without tokens is found at
+ * once; after it, the backfill has built the indexes and the probe seeks them.
+ * `maxTimeMS` bounds the case in between.
  */
 export async function warnOnMissingSearchTokens(connection: Connection): Promise<void> {
   try {
-    const counts = await Promise.all(
+    const found = await Promise.all(
       SEARCH_TOKEN_COLLECTIONS.map(({ name, fields }) =>
-        connection.db!.collection(name).countDocuments(missingTokens(fields)),
+        connection.db!.collection(name).findOne(missingTokens(fields), {
+          projection: { _id: 1 },
+          maxTimeMS: STARTUP_PROBE_MAX_TIME_MS,
+        }),
       ),
     );
-    const total = counts.reduce((sum, count) => sum + count, 0);
-    if (total > 0) {
+    const pending = SEARCH_TOKEN_COLLECTIONS.filter((_, index) => found[index] != null);
+    if (pending.length > 0) {
       logger.warn(
-        `[SearchTokenMigration] ${total} users and groups lack search tokens; people search scans the collection for them until you run: npm run migrate:search-tokens`,
+        `[SearchTokenMigration] Some ${pending.map(({ name }) => name).join(' and ')} lack search tokens; people search scans the collection for them until you run: npm run migrate:search-tokens`,
       );
     }
   } catch (error) {

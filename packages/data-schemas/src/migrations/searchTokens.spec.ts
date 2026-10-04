@@ -145,7 +145,7 @@ describe('warnOnMissingSearchTokens', () => {
     await users().insertOne({ name: 'Old User', email: 'old@x.io' });
     await groups().insertOne({ name: 'Old Group' });
     await warnOnMissingSearchTokens(mongoose.connection);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('2 users and groups'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Some users and groups'));
 
     jest.clearAllMocks();
     await backfillSearchTokens(mongoose.connection);
@@ -153,7 +153,22 @@ describe('warnOnMissingSearchTokens', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('counts through the token indexes, not a collection scan', async () => {
+  it('stops at the first document without tokens when the token indexes do not exist', async () => {
+    await users().insertMany(
+      Array.from({ length: 200 }, (_, i) => ({ name: `Old ${i}`, email: `old${i}@x.io` })),
+    );
+    const explain = await users()
+      .find({
+        $or: ['nameTokens', 'emailTokens', 'usernameTokens'].map((field) => ({
+          [field]: { $exists: false },
+        })),
+      })
+      .limit(1)
+      .explain('executionStats');
+    expect(explain.executionStats.totalDocsExamined).toBe(1);
+  });
+
+  it('probes through the token indexes, not a collection scan', async () => {
     await users().insertMany(
       Array.from({ length: 50 }, (_, i) => ({ name: `User ${i}`, email: `u${i}@x.io` })),
     );
@@ -164,6 +179,7 @@ describe('warnOnMissingSearchTokens', () => {
           [field]: { $exists: false },
         })),
       })
+      .limit(1)
       .explain('queryPlanner');
     const plan = JSON.stringify(explain.queryPlanner.winningPlan);
     expect(plan).toContain('IXSCAN');
@@ -172,7 +188,7 @@ describe('warnOnMissingSearchTokens', () => {
 
   it('logs a failed check instead of failing startup', async () => {
     const broken = {
-      db: { collection: () => ({ countDocuments: () => Promise.reject(new Error('down')) }) },
+      db: { collection: () => ({ findOne: () => Promise.reject(new Error('down')) }) },
     };
     await expect(
       warnOnMissingSearchTokens(broken as unknown as typeof mongoose.connection),
