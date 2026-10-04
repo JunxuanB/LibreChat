@@ -2689,6 +2689,17 @@ export const interfaceSchema = z
               readOnlyPolicy: z.record(scheduledMCPReadOnlyPolicySchema).optional(),
             })
             .optional(),
+          /** Bounded exponential receipt retry interval; equal jitter prevents outage waves. */
+          mcpReceiptRetry: z
+            .object({
+              baseMs: z.number().int().min(100).max(60_000).optional(),
+              maxMs: z.number().int().min(100).max(600_000).optional(),
+            })
+            .refine(
+              (value) => (value.maxMs ?? 30_000) >= (value.baseMs ?? 250),
+              'Receipt retry maxMs must be at least baseMs',
+            )
+            .optional(),
           mcpPreflightConcurrency: z.number().int().min(1).max(10).optional(),
           mcpPreflightTimeoutMs: z.number().int().min(1000).max(600000).optional(),
           /** Refuse schedules that are not filed under a chat project. Enforced on

@@ -156,6 +156,95 @@ redisDescribe('real Redis receipt retention', () => {
     }
   });
 
+  it.each(['update', 'transition'] as const)(
+    'retires failed same-epoch %s pre-arms without erasing a successful re-arm',
+    async (mode) => {
+      const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+      await redis.connect();
+      const store = new RedisJobStore(redis);
+      const stream = `failed-prearm-${mode}`;
+      const job = await store.createJob(stream, 'owner');
+      const member = JSON.stringify([stream, job.createdAt]);
+      try {
+        if (mode === 'update') {
+          jest.spyOn(redis, 'eval').mockImplementationOnce(async () => {
+            throw new Error('CAS unavailable');
+          });
+          await expect(
+            store.updateJob(stream, { preserveForScheduleReconcile: true }, job.createdAt),
+          ).rejects.toThrow();
+          jest.mocked(redis.eval).mockRestore();
+        } else {
+          expect(
+            await store.transitionStatus(stream, {
+              from: 'requires_action',
+              to: 'error',
+              expectCreatedAt: job.createdAt,
+              patch: { preserveForScheduleReconcile: true },
+            }),
+          ).toBe(false);
+        }
+        expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(1);
+        await store.getScheduleReconcileJobs(100);
+        expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(0);
+        // A successful writer that crosses retirement must confirm its hint after CAS.
+        await store.updateJob(stream, { preserveForScheduleReconcile: true }, job.createdAt);
+        expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(1);
+      } finally {
+        jest.restoreAllMocks();
+        await store.deleteJob(stream, job.createdAt);
+        await redis.quit();
+      }
+    },
+  );
+
+  it('confirms a successful same-epoch CAS after its pre-arm is retired by an outbox scan', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis);
+    const stream = 'prearm-during-scan';
+    const job = await store.createJob(stream, 'owner');
+    const evaluate = redis.eval.bind(redis);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const intercept = jest.spyOn(redis, 'eval').mockImplementationOnce(async (...args) => {
+      entered();
+      await gate;
+      return evaluate(...args);
+    });
+    const writing = store.updateJob(stream, { preserveForScheduleReconcile: true }, job.createdAt);
+    try {
+      await started;
+      await store.getScheduleReconcileJobs(100);
+      expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify([stream, job.createdAt]),
+        ),
+      ).toBe(0);
+      release();
+      await writing;
+      expect((await store.getJob(stream))?.preserveForScheduleReconcile).toBe(true);
+      expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify([stream, job.createdAt]),
+        ),
+      ).toBe(1);
+    } finally {
+      release();
+      await writing;
+      intercept.mockRestore();
+      await store.deleteJob(stream, job.createdAt);
+      await redis.quit();
+    }
+  });
+
   it('recovers stale owner evidence and indexes post-settlement release across store restarts', async () => {
     const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
     await redis.connect();

@@ -915,6 +915,18 @@ export interface ResumeState {
  * the additional {@link IJobStoreV2} capabilities before accepting a custom
  * store at runtime.
  */
+/** Captured stale provider identity. Recovery requires positive host termination proof. */
+export interface ScheduleProviderOwner {
+  streamId: string;
+  createdAt: number;
+  providerExecutionId: string;
+  scheduleId: string;
+  scheduledFor: string;
+  userId: string;
+  tenantId: string | null;
+  lastActiveAt: number;
+}
+
 export interface ScheduleCleanupScope {
   scheduleId?: string;
   userId?: string;
@@ -978,6 +990,8 @@ export interface IJobStore {
   getScheduleReconcileJobs?(limit: number): Promise<SerializableJobData[]>;
   /** Independent of active Mongo runs. Missing capability cannot certify cleanup. */
   hasScheduleCleanupObligation?(scope: ScheduleCleanupScope): Promise<boolean>;
+  /** Used only after trusted host process-loss confirmation; status/epoch/segment/liveness CAS. */
+  recoverScheduleProviderOwnerLoss?(owner: ScheduleProviderOwner): Promise<boolean>;
   /** Enumerates detached Event Actor completion generations from a versioned
    * retry lane known only to capable consumers. Redis keeps this lane separate
    * from `getTerminalHostActionJobs` so a rolling-deployment replica that only

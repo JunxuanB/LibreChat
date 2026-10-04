@@ -23,6 +23,7 @@ import type {
   IdempotencyClaimResult,
   ParkedSteerClaim,
   ScheduleCleanupScope,
+  ScheduleProviderOwner,
 } from '~/stream/interfaces/IJobStore';
 import type { EarlyBufferOverflowState } from '../../types/earlyBufferRecovery';
 import type { RecoveredSteerPayload } from '~/stream/SteerRecovery';
@@ -736,6 +737,28 @@ export class InMemoryJobStore implements IJobStoreV2 {
     // (running ⇄ requires_action) go solely through transitionStatus.
     const patch = retainScheduleMCPFailure(job, updates);
     Object.assign(job, patch, retainedScheduleReceipt(job, updates));
+  }
+
+  async recoverScheduleProviderOwnerLoss(owner: ScheduleProviderOwner): Promise<boolean> {
+    const job = this.jobs.get(owner.streamId);
+    if (
+      !job ||
+      job.createdAt !== owner.createdAt ||
+      job.providerExecutionId !== owner.providerExecutionId ||
+      job.scheduleId !== owner.scheduleId ||
+      job.scheduledFor !== owner.scheduledFor ||
+      job.userId !== owner.userId ||
+      (job.tenantId ?? null) !== owner.tenantId ||
+      (job.lastActiveAt ?? job.createdAt) !== owner.lastActiveAt ||
+      job.status !== 'error' ||
+      job.error !== 'Scheduled generation owner became unavailable' ||
+      job.preserveForScheduleReconcile !== true ||
+      job.providerDrained !== false
+    )
+      return false;
+    job.providerDrained = true;
+    job.error = 'Scheduled provider owner termination confirmed';
+    return true;
   }
 
   async markProviderExecutionDrained(

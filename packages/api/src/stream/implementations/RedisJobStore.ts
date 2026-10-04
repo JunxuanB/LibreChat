@@ -33,6 +33,7 @@ import type {
   SteerReceiptInput,
   ParkedSteerClaim,
   ScheduleCleanupScope,
+  ScheduleProviderOwner,
 } from '~/stream/interfaces/IJobStore';
 import type { EarlyBufferOverflowState } from '../../types/earlyBufferRecovery';
 import type { ResolvedAskUserQuestion } from '~/agents/hitl/resume';
@@ -721,6 +722,17 @@ const RECOVER_TERMINAL_PROVIDER_DRAIN_LUA =
 /** Exact initial provider-start fence. The controller rechecks account
  * deletion before this CAS; an abort/replacement that wins next prevents the
  * provider from starting after destructive cleanup has begun. */
+/** Only a host-confirmed stopped process may release this exact stale segment.
+ * Any resumed activity, replacement, or differently-bound owner invalidates the proof. */
+const RECOVER_SCHEDULE_PROVIDER_OWNER_LUA =
+  'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "status") ~= "error" or redis.call("HGET", KEYS[1], "error") ~= "Scheduled generation owner became unavailable" then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") ~= "1" or redis.call("HGET", KEYS[1], "providerDrained") ~= "0" then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "providerExecutionId") ~= ARGV[2] or redis.call("HGET", KEYS[1], "scheduleId") ~= ARGV[3] or redis.call("HGET", KEYS[1], "scheduledFor") ~= ARGV[4] then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "userId") ~= ARGV[5] or (redis.call("HGET", KEYS[1], "tenantId") or "") ~= ARGV[6] then return 0 end ' +
+  'if (redis.call("HGET", KEYS[1], "lastActiveAt") or ARGV[1]) ~= ARGV[7] then return 0 end ' +
+  'redis.call("HSET", KEYS[1], "providerDrained", "1", "error", "Scheduled provider owner termination confirmed") return 1';
+
 const PROVIDER_BEGIN_LUA =
   'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "providerExecutionId") ~= ARGV[2] then return 0 end ' +
@@ -2544,6 +2556,25 @@ export class RedisJobStore implements IJobStoreV2 {
     );
   }
 
+  async recoverScheduleProviderOwnerLoss(owner: ScheduleProviderOwner): Promise<boolean> {
+    return (
+      Number(
+        await this.redis.eval(
+          RECOVER_SCHEDULE_PROVIDER_OWNER_LUA,
+          1,
+          KEYS.job(owner.streamId),
+          String(owner.createdAt),
+          owner.providerExecutionId,
+          owner.scheduleId,
+          owner.scheduledFor,
+          owner.userId,
+          owner.tenantId ?? '',
+          String(owner.lastActiveAt),
+        ),
+      ) === 1
+    );
+  }
+
   async markProviderExecutionDrained(
     streamId: string,
     expectedCreatedAt: number,
@@ -3373,8 +3404,11 @@ export class RedisJobStore implements IJobStoreV2 {
           await this.redis.srem(KEYS.scheduleReconcileJobs, member);
           return null;
         }
-        // Keep pre-armed same-epoch hints: a writer can still be committing its marker.
-        if (job.preserveForScheduleReconcile !== true) return null;
+        if (job.preserveForScheduleReconcile !== true) {
+          // Successful retain writers confirm after CAS; repair a concurrent re-arm too.
+          await this.acknowledgeScheduleReconcile(streamId, job.createdAt);
+          return null;
+        }
         if (job.status === 'running') {
           if (await this.deleteStaleRunningJob(streamId, job, Date.now()))
             job = await this.getJob(streamId);

@@ -86,7 +86,6 @@ mapping and authorization remain the host's responsibility.
 
 This interface adds no token store, STS exchange, consent API, or new MCP credential mode.
 
-
 ## Host-Supplied Resource Bearers
 
 Scheduled direct-bearer MCP configurations require an explicit trusted host.
@@ -113,3 +112,24 @@ A3 execution enforcement, provider acceptance and compatible all-replica upgrade
 remain activation prerequisites. Keep enrollment disabled during upgrade/drain;
 old workers cannot inherit the new guards. Local SDK fixtures certify this wiring,
 not a deployed provider. No managed infrastructure is required by the interface.
+
+## Receipt outages and owner-loss recovery
+
+`interface.schedules.mcpReceiptRetry` configures `baseMs` (default 250) and
+`maxMs` (default 30000). Equal-jitter exponential waits coalesce identical
+occurrence diagnoses. Shutdown interrupts waits without admitting model continuation;
+retained evidence still blocks success and cleanup. Configuration is read only after a
+failed admission, from the trusted owner/tenant configuration.
+
+A retained Redis generation whose provider process was killed cannot acknowledge its
+own drain. Hosts may supply `confirmScheduleProviderOwnerLoss` to `createSchedulesService`.
+It receives stream, epoch, provider segment, schedule/occurrence, owner/tenant and observed
+liveness. Return that exact identity only after confirming the process has terminated and
+cannot issue trailing writes. Alive, unreachable or uncertain owners return `null`.
+The store CAS rejects replacements, changed segments, renewed liveness or mismatched scope.
+Recovery preserves denial receipts and parks accepted steers before settlement.
+
+The default host supplies no process-termination oracle. Such unknown-owner obligations
+remain retained until an operator can confirm termination; elapsed time or a missing
+heartbeat must never substitute for that proof. This is an activation/operations gate,
+not a new managed infrastructure requirement or an authorization bypass.

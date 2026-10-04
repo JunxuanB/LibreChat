@@ -2252,10 +2252,12 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     // MARGIN past its expiry, so a clock-ahead erasure worker cannot destroy a row a
     // skew-behind holder still legitimately claims.
     const deleting = await Schedule()
-      .findOne({ id, deleting: true })
-      .select('_id leaseUntil')
-      .lean<Pick<ISchedule, 'leaseUntil'>>();
-    if (deleting == null) return false;
+      .findOne({ id })
+      .select('_id leaseUntil deleting')
+      .lean<Pick<ISchedule, 'leaseUntil' | 'deleting'>>();
+    // A peer already erased this row. Do not touch orphan or unrelated run history.
+    if (deleting == null) return true;
+    if (deleting.deleting !== true) return false;
     if (
       deleting.leaseUntil != null &&
       deleting.leaseUntil.getTime() > Date.now() - LEASE_SKEW_MARGIN_MS

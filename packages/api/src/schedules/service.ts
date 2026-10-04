@@ -26,7 +26,7 @@ import type {
   ScheduleMCPFailureInput,
   ScheduleMCPSettlementBoundary,
 } from './types';
-import type { SerializableJobData } from '../stream/interfaces/IJobStore';
+import type { SerializableJobData, ScheduleProviderOwner } from '../stream/interfaces/IJobStore';
 import type { AgentCheckpointGeneration } from '../agents/checkpointer';
 import type { ScheduleMCPExecution } from './authorization/execution';
 import type { BalanceUpdateFields } from '../types/balance';
@@ -44,18 +44,19 @@ import {
   captureAgentCheckpointGeneration,
   checkpointStorageConfigs,
 } from '../agents/checkpointer';
+import { isStopConfirmed, PROVIDER_DRAIN_TIMEOUT_MS } from '../stream/interfaces/IJobStore';
+import { isShutdownInProgress, getShutdownSignal } from '../app/shutdown';
 import { scheduleMCPFailurePriority } from '~/stream/scheduleFailure';
 import { fireSchedule, BALANCE_SKIP_DISABLE_THRESHOLD } from './fire';
 import { GenerationJobManager } from '../stream/GenerationJobManager';
 import { ScheduledMCPPolicyError } from './authorization/policy';
-import { isStopConfirmed } from '../stream/interfaces/IJobStore';
 import { buildBalanceUpdateFields } from '../middleware/balance';
 import { getAppConfigOptionsFromUser } from '../app/service';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
 import { ScheduledMCPBearerError } from '../mcp/errors';
-import { isShutdownInProgress } from '../app/shutdown';
 import { startScheduleErasureSweep } from './erasure';
 import { getBalanceConfig } from '../app/config';
+import { waitUntilDeadline } from '~/mcp/utils';
 import { startScheduleEngine } from './engine';
 import { withCapacitySlot } from './capacity';
 import { isEnabled } from '../utils/common';
@@ -198,6 +199,11 @@ export interface SchedulesServiceDeps {
    *  them. Chat projects are user-owned, so this is both the existence check and the
    *  authorization check. */
   getChatProject: (userId: string, projectId: string) => Promise<IChatProject | null>;
+  /** Positive process-termination proof for this exact provider segment, never a heartbeat timeout.
+   * Hosts without proof retain the obligation. This hook must return null for alive/unknown owners. */
+  confirmScheduleProviderOwnerLoss?: (
+    owner: ScheduleProviderOwner,
+  ) => Promise<ScheduleProviderOwner | null>;
   /** Whether this user's account deletion has begun. Fail-closed (unknown == true). */
   isUserDeleting: (userId: string) => Promise<boolean>;
   /** Shared durable trigger admission from the merged agent-trigger service. */
@@ -217,6 +223,9 @@ export interface SchedulesService {
   ) => Promise<FireResult | null>;
   recordScheduleOutcome: (input: RecordScheduleOutcomeInput) => Promise<boolean>;
   recordMCPToolAuthFailure: (input: ScheduleMCPFailureInput) => Promise<boolean>;
+  getMCPReceiptRetryPolicy: (
+    input: ScheduleMCPFailureInput,
+  ) => Promise<ScheduleMCPReceiptRetryPolicy | undefined>;
   registerMCPSettlement: (boundary: ScheduleMCPSettlementBoundary) => void;
   /**
    * Stamps a scheduled run's interactive Stop BEFORE the abort is signalled, so the owner
@@ -314,10 +323,20 @@ export class ScheduledMCPReceiptFencedError extends Error {
   }
 }
 
+export interface ScheduleMCPReceiptRetryPolicy {
+  baseMs?: number;
+  maxMs?: number;
+}
+const receiptFlights = new WeakMap<
+  SchedulesService['recordMCPToolAuthFailure'],
+  Map<string, Promise<boolean>>
+>();
+
 /** Bearer failures do not become model tool errors until durable evidence exists. */
-export async function recordScheduledMCPToolAuthFailure(
-  input: Parameters<SchedulesService['recordMCPToolAuthFailure']>[0],
+export function recordScheduledMCPToolAuthFailure(
+  input: ScheduleMCPFailureInput,
   getRecorder: () => SchedulesService['recordMCPToolAuthFailure'],
+  getRetryPolicy?: () => Promise<ScheduleMCPReceiptRetryPolicy | undefined>,
 ): Promise<boolean> {
   const bearer =
     input.error instanceof ScheduledMCPBearerError ||
@@ -333,32 +352,111 @@ export async function recordScheduledMCPToolAuthFailure(
     !input.userId ||
     (input.error instanceof ScheduledMCPBearerError && !input.identity)
   ) {
-    if (bearer) throw new ScheduledMCPReceiptFencedError();
-    return false;
+    return bearer ? Promise.reject(new ScheduledMCPReceiptFencedError()) : Promise.resolve(false);
   }
-  if (input.error instanceof ScheduledMCPPolicyError) {
-    try {
-      return await getRecorder()(input);
-    } catch (error) {
+  if (isShutdownInProgress()) return Promise.reject(new ScheduledMCPReceiptFencedError());
+  let record: SchedulesService['recordMCPToolAuthFailure'];
+  try {
+    record = getRecorder();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (input.error instanceof ScheduledMCPPolicyError)
+    return record(input).catch((error) => {
       logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
       return false;
-    }
+    });
+  const key = JSON.stringify([
+    input.streamId,
+    input.jobCreatedAt,
+    input.userId,
+    input.identity,
+    input.serverName,
+    input.error instanceof ScheduledMCPBearerError
+      ? input.error.outcomes
+      : 'missing_upstream_provider',
+  ]);
+  let flights = receiptFlights.get(record);
+  if (!flights) {
+    flights = new Map();
+    receiptFlights.set(record, flights);
   }
-  for (;;) {
-    try {
-      if (await getRecorder()(input)) return true;
-    } catch (error) {
-      if (error instanceof ScheduledMCPReceiptFencedError) throw error;
-      if (!bearer) {
-        logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
-        return false;
+  const current = flights.get(key);
+  if (current) return current;
+  const flight = (async () => {
+    let interval = 250;
+    let cap = 30_000;
+    let configured = false;
+    const signal = getShutdownSignal();
+    for (;;) {
+      if (signal.aborted || isShutdownInProgress()) throw new ScheduledMCPReceiptFencedError();
+      try {
+        const result = await waitUntilDeadline(record(input), undefined, signal);
+        if (!result.settled) throw new ScheduledMCPReceiptFencedError();
+        if (result.value) return true;
+      } catch (error) {
+        if (error instanceof ScheduledMCPReceiptFencedError) throw error;
+        if (!bearer) {
+          logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
+          return false;
+        }
       }
+      if (!bearer) return false;
+      if (!configured) {
+        const loaded = await waitUntilDeadline(
+          getRetryPolicy?.().catch(() => undefined) ?? Promise.resolve(undefined),
+          undefined,
+          signal,
+        );
+        if (!loaded.settled) throw new ScheduledMCPReceiptFencedError();
+        const policy = loaded.value;
+        const { baseMs, maxMs } = policy ?? {};
+        if (
+          typeof baseMs === 'number' &&
+          Number.isSafeInteger(baseMs) &&
+          baseMs >= 100 &&
+          baseMs <= 60_000
+        )
+          interval = baseMs;
+        if (
+          typeof maxMs === 'number' &&
+          Number.isSafeInteger(maxMs) &&
+          maxMs >= 100 &&
+          maxMs <= 600_000
+        )
+          cap = maxMs;
+        cap = Math.max(interval, cap);
+        configured = true;
+      }
+      // Equal jitter; no caller cancellation may turn an unrecorded denial into model continuation.
+      try {
+        await new Promise<void>((resolve, reject) => {
+          if (signal.aborted) {
+            reject(new ScheduledMCPReceiptFencedError());
+            return;
+          }
+          const finish = () => {
+            signal.removeEventListener('abort', abort);
+            resolve();
+          };
+          const timer = setTimeout(finish, Math.ceil(interval * (0.5 + Math.random() * 0.5)));
+          const abort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', abort);
+            reject(new ScheduledMCPReceiptFencedError());
+          };
+          signal.addEventListener('abort', abort, { once: true });
+        });
+      } catch {
+        throw new ScheduledMCPReceiptFencedError();
+      }
+      interval = Math.min(cap, interval * 2);
     }
-    if (!bearer) return false;
-    // The owning provider remains busy, so no model completion can publish peer success.
-    // No caller cancellation may turn an unrecorded denial into an ordinary tool error.
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
+  })().finally(() => {
+    flights!.delete(key);
+  });
+  flights.set(key, flight);
+  return flight;
 }
 
 /** Captures host scope, never model arguments or mutable runnable config. */
@@ -1185,6 +1283,19 @@ export function createSchedulesService(
     return false;
   }
 
+  async function getMCPReceiptRetryPolicy(
+    input: ScheduleMCPFailureInput,
+  ): Promise<ScheduleMCPReceiptRetryPolicy | undefined> {
+    if (!input.identity || input.userId !== input.identity.ownerId) return;
+    const owner = await engineDeps.getUserContext(input.identity.ownerId);
+    if (!owner || (owner.tenantId ?? null) !== input.identity.tenantId) return;
+    return engineDeps.runInTenantContext(owner, async () => {
+      const config = await deps.getAppConfig(getAppConfigOptionsFromUser(owner));
+      const schedules = config?.interfaceConfig?.schedules;
+      return typeof schedules === 'object' ? schedules.mcpReceiptRetry : undefined;
+    });
+  }
+
   /** The job outbox survives both owner death and a crash after Mongo bookkeeping. */
   async function reconcileRetainedJobs(): Promise<void> {
     const store = GenerationJobManager.getJobStore();
@@ -1200,6 +1311,49 @@ export function createSchedulesService(
           job = current;
         } catch (error) {
           logger.warn('[schedules] retained terminal recovery deferred:', error);
+          continue;
+        }
+      }
+      if (
+        job.status === 'error' &&
+        job.error === 'Scheduled generation owner became unavailable' &&
+        job.providerDrained === false &&
+        job.providerExecutionId &&
+        job.scheduleId &&
+        job.scheduledFor &&
+        deps.confirmScheduleProviderOwnerLoss &&
+        store.recoverScheduleProviderOwnerLoss
+      ) {
+        const owner: ScheduleProviderOwner = {
+          streamId: job.streamId,
+          createdAt: job.createdAt,
+          providerExecutionId: job.providerExecutionId,
+          scheduleId: job.scheduleId,
+          scheduledFor: job.scheduledFor,
+          userId: job.userId,
+          tenantId: job.tenantId ?? null,
+          lastActiveAt: job.lastActiveAt ?? job.createdAt,
+        };
+        try {
+          const observed = await waitUntilDeadline(
+            deps.confirmScheduleProviderOwnerLoss(Object.freeze(owner)),
+            Date.now() + PROVIDER_DRAIN_TIMEOUT_MS,
+          );
+          const proof = observed.settled ? observed.value : null;
+          if (
+            proof &&
+            Object.keys(owner).every(
+              (key) =>
+                owner[key as keyof ScheduleProviderOwner] ===
+                proof[key as keyof ScheduleProviderOwner],
+            ) &&
+            (await store.recoverScheduleProviderOwnerLoss(owner))
+          ) {
+            const current = await store.getJob(job.streamId);
+            if (!current || current.createdAt !== owner.createdAt) continue;
+            job = current;
+          }
+        } catch {
           continue;
         }
       }
@@ -2336,6 +2490,7 @@ export function createSchedulesService(
     fireScheduleNow,
     recordScheduleOutcome,
     recordMCPToolAuthFailure,
+    getMCPReceiptRetryPolicy,
     registerMCPSettlement,
     beginScheduledStop,
     acknowledgeScheduledStopPersistence,

@@ -2409,3 +2409,183 @@ describe('provider-drained schedule aborts', () => {
     expect(deleteJob).toHaveBeenCalledWith('c1', 7);
   });
 });
+
+describe('scheduled receipt retry load', () => {
+  it('backs off instead of polling durable stores four times per second', async () => {
+    jest.useFakeTimers();
+    const input = {
+      error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+      streamId: 'backoff',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: null,
+        agentId: 'root',
+        invocationMode: 'delegated' as const,
+      },
+    };
+    let durable = false;
+    const persist = jest.fn(async () => durable);
+    const pending = recordScheduledMCPToolAuthFailure(input, () => persist);
+    try {
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(persist.mock.calls.length).toBeLessThanOrEqual(7);
+      durable = true;
+      await jest.advanceTimersByTimeAsync(30_000);
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      durable = true;
+      await jest.runAllTimersAsync();
+      await pending;
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not issue receipt writes during shutdown or return model-visible success', async () => {
+    const shutdown = jest
+      .spyOn(jest.requireActual('../app/shutdown'), 'isShutdownInProgress')
+      .mockReturnValue(true);
+    const persist = jest.fn(async () => true);
+    try {
+      await expect(
+        recordScheduledMCPToolAuthFailure(
+          {
+            error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+            streamId: 'shutdown',
+            jobCreatedAt: 42,
+            userId: 'owner',
+            serverName: 'Files',
+            identity: {
+              scheduleId: 's1',
+              ownerId: 'owner',
+              tenantId: null,
+              agentId: 'root',
+              invocationMode: 'delegated',
+            },
+          },
+          () => persist,
+        ),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(persist).not.toHaveBeenCalled();
+    } finally {
+      shutdown.mockRestore();
+    }
+  });
+});
+
+it('coalesces only identical receipt retries and honors a capped host policy', async () => {
+  jest.useFakeTimers();
+  const randomness = jest.spyOn(Math, 'random').mockReturnValue(1);
+  const input = {
+    error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+    streamId: 'coalesced',
+    jobCreatedAt: 42,
+    userId: 'owner',
+    serverName: 'Files',
+    identity: {
+      scheduleId: 's1',
+      ownerId: 'owner',
+      tenantId: null,
+      agentId: 'root',
+      invocationMode: 'delegated' as const,
+    },
+  };
+  let durable = false;
+  const record = jest.fn(async () => durable);
+  const config = jest.fn(async () => ({ baseMs: 1000, maxMs: 2000 }));
+  const first = recordScheduledMCPToolAuthFailure(input, () => record, config);
+  const second = recordScheduledMCPToolAuthFailure(input, () => record, config);
+  try {
+    expect(second).toBe(first);
+    await jest.advanceTimersByTimeAsync(3000);
+    expect(record).toHaveBeenCalledTimes(3);
+    expect(config).toHaveBeenCalledTimes(1);
+    durable = true;
+    await jest.advanceTimersByTimeAsync(2000);
+    await expect(first).resolves.toBe(true);
+  } finally {
+    durable = true;
+    await jest.runAllTimersAsync();
+    await first;
+    randomness.mockRestore();
+    jest.useRealTimers();
+  }
+});
+
+it('interrupts a pending receipt backoff immediately when shutdown starts', async () => {
+  const controller = new AbortController();
+  const signal = jest
+    .spyOn(jest.requireActual('../app/shutdown'), 'getShutdownSignal')
+    .mockReturnValue(controller.signal);
+  const record = jest.fn(async () => false);
+  const pending = recordScheduledMCPToolAuthFailure(
+    {
+      error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+      streamId: 'abort-wait',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: null,
+        agentId: 'root',
+        invocationMode: 'delegated',
+      },
+    },
+    () => record,
+    async () => ({ baseMs: 60_000, maxMs: 60_000 }),
+  );
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    const stopped = pending.catch((error) => error);
+    controller.abort();
+    await expect(stopped).resolves.toMatchObject({ name: 'AbortError' });
+    expect(record).toHaveBeenCalledTimes(1);
+  } finally {
+    controller.abort();
+    signal.mockRestore();
+  }
+});
+
+it('stops a stalled receipt attempt on shutdown without acknowledging persistence', async () => {
+  const controller = new AbortController();
+  const signal = jest
+    .spyOn(jest.requireActual('../app/shutdown'), 'getShutdownSignal')
+    .mockReturnValue(controller.signal);
+  let release!: (value: boolean) => void;
+  const unresolved = new Promise<boolean>((resolve) => {
+    release = resolve;
+  });
+  const record = jest.fn(() => unresolved);
+  const pending = recordScheduledMCPToolAuthFailure(
+    {
+      error: new ScheduledMCPBearerError('consent_revoked', 'Files'),
+      streamId: 'stalled-shutdown',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: null,
+        agentId: 'root',
+        invocationMode: 'delegated',
+      },
+    },
+    () => record,
+  );
+  try {
+    const stopped = pending.catch((error) => error);
+    controller.abort();
+    await expect(stopped).resolves.toMatchObject({ name: 'AbortError' });
+    expect(record).toHaveBeenCalledTimes(1);
+  } finally {
+    release(false);
+    controller.abort();
+    signal.mockRestore();
+  }
+});

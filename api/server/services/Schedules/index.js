@@ -89,6 +89,7 @@ module.exports = {
     require('@librechat/api').recordScheduledMCPToolAuthFailure(
       input,
       () => getService().recordMCPToolAuthFailure,
+      () => getService().getMCPReceiptRetryPolicy(input),
     ),
   beginScheduledStop: invoke('beginScheduledStop'),
   acknowledgeScheduledStopPersistence: invoke('acknowledgeScheduledStopPersistence'),

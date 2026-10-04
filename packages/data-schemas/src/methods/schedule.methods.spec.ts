@@ -3789,3 +3789,15 @@ describe('scheduled resource bearer denial receipts', () => {
     }
   });
 });
+
+it('acknowledges peer-erased schedules without deleting orphan history or live schedules', async () => {
+  const schedule = await methods.createSchedule(scheduleData());
+  const scheduledFor = new Date('2026-10-04T15:00:00Z');
+  await methods.insertScheduleRun(runData(schedule, { scheduledFor, status: 'success' }));
+  await Schedule.deleteOne({ id: schedule.id });
+  await expect(methods.eraseScheduleIfDrained(schedule.id)).resolves.toBe(true);
+  expect(await ScheduleRun.findOne({ scheduleId: schedule.id }).lean()).not.toBeNull();
+  const live = await methods.createSchedule(scheduleData({ id: 'live-after-erasure' }));
+  await expect(methods.eraseScheduleIfDrained(live.id)).resolves.toBe(false);
+  expect(await Schedule.findOne({ id: live.id }).lean()).not.toBeNull();
+});
