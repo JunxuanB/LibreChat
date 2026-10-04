@@ -1,6 +1,19 @@
+import { useLayoutEffect, useRef } from 'react';
 import { JSX } from 'react/jsx-runtime';
 import { cn } from '~/utils/';
 import './Spinner.css';
+
+const pending = new Set<SVGSVGElement>();
+
+/** Reads every pending animation before writing any start time: a write dirties style, so
+ *  interleaving them would force one style recalculation per spinner. */
+function pinPending() {
+  const animations = [...pending].flatMap((svg) => svg.getAnimations?.() ?? []);
+  pending.clear();
+  animations.forEach((animation) => {
+    animation.startTime = 0;
+  });
+}
 
 interface SpinnerProps {
   className?: string;
@@ -28,12 +41,31 @@ export default function Spinner({
   speed = 0.75,
   strokeWidth = 5,
 }: SpinnerProps): JSX.Element {
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  /** Every spinner starts its rotation at the document timeline origin, so one that mounts
+   *  while others spin joins them in phase instead of restarting at zero. */
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) {
+      return;
+    }
+    pending.add(svg);
+    if (pending.size === 1) {
+      queueMicrotask(pinPending);
+    }
+    return () => {
+      pending.delete(svg);
+    };
+  }, [speed]);
+
   const cssVars = {
     '--spinner-speed': `${speed}s`,
   } as React.CSSProperties;
 
   return (
     <svg
+      ref={svgRef}
       className={cn(className, 'spinner')}
       width={size}
       height={size}
