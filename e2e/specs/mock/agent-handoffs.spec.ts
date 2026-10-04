@@ -76,8 +76,9 @@ async function openOrchestration(page: Page, form: Locator) {
     await form.getByRole('button', { name: 'Add tools' }).click();
     await page
       .getByRole('dialog', { name: 'Tool Library', exact: true })
-      .getByRole('button', { name: /Multi-agent orchestration/ })
-      .first()
+      .getByRole('listitem')
+      .filter({ hasText: 'Multi-agent orchestration' })
+      .getByRole('button', { name: 'Configure', exact: true })
       .click();
   }
   return page.getByTestId('item-dialog').getByRole('region', { name: 'Handoffs' });
@@ -88,7 +89,12 @@ async function closeOrchestration(page: Page) {
     return;
   }
   await page.getByTestId('item-dialog').getByRole('button', { name: 'Close', exact: true }).click();
-  const marketplace = page.getByRole('dialog', { name: 'Tool Library', exact: true });
+  await expect(page.getByTestId('item-dialog')).toBeHidden();
+  const marketplace = page.getByRole('dialog', {
+    name: 'Tool Library',
+    exact: true,
+    includeHidden: true,
+  });
   if (await marketplace.count()) {
     await marketplace.getByRole('button', { name: 'Close', exact: true }).click();
   }
