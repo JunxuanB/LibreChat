@@ -88,22 +88,22 @@
   },
   "client/src/components/Auth/LoginForm.tsx": {
     "shadcn/no-restyle": {
-      "count": 39
+      "count": 37
     }
   },
   "client/src/components/Auth/Registration.tsx": {
     "shadcn/no-restyle": {
-      "count": 39
+      "count": 37
     }
   },
   "client/src/components/Auth/RequestPasswordReset.tsx": {
     "shadcn/no-restyle": {
-      "count": 15
+      "count": 14
     }
   },
   "client/src/components/Auth/ResetPassword.tsx": {
     "shadcn/no-restyle": {
-      "count": 54
+      "count": 52
     }
   },
   "client/src/components/Auth/TwoFactorScreen.tsx": {

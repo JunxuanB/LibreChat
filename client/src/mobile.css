@@ -137,6 +137,11 @@
 /* Content elements */
 .sp-preview-iframe {
   @apply h-full w-full grow;
+  /* An artifact document is written for a light page: unstyled, it inks in the browser's black
+   * over a transparent frame, which is unreadable on a dark theme. The frame paints the document's
+   * paper itself, and says which scheme that paper is. */
+  color-scheme: light;
+  background-color: rgb(var(--surface-artifact-preview, 255 255 255));
 }
 
 .sp-cm {

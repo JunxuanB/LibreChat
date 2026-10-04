@@ -111,6 +111,17 @@ export interface IThemeRGB {
   'rgb-field-fill'?: string;
   /** A field's typed value; follows `rgb-text-primary` when a theme omits it. */
   'rgb-field-text'?: string;
+  /** A tooltip's chip and its label; they follow `rgb-surface-primary` and `rgb-text-primary` when a
+   *  theme omits them. */
+  'rgb-surface-tooltip'?: string;
+  'rgb-text-tooltip'?: string;
+  /** The error alert's fill and edge; they follow `rgb-status-error-subtle` and
+   *  `rgb-status-error-border` when a theme omits them. */
+  'rgb-alert-error-fill'?: string;
+  'rgb-alert-error-border'?: string;
+  /** The paper an artifact document is drawn on. Artifacts are written for a light page, so an
+   *  unstyled one inks in the browser's black; the default is white in both modes. */
+  'rgb-surface-artifact-preview'?: string;
   /** Disabled fill, ink and edge. Painted only under the `fill` disabled style. */
   'rgb-surface-disabled'?: string;
   'rgb-text-disabled'?: string;
@@ -300,6 +311,11 @@ export interface IThemeVariables {
   '--border-field-focus': string;
   '--field-fill': string;
   '--field-text': string;
+  '--surface-tooltip': string;
+  '--text-tooltip': string;
+  '--alert-error-fill': string;
+  '--alert-error-border': string;
+  '--surface-artifact-preview': string;
   '--surface-disabled': string;
   '--text-disabled': string;
   '--border-disabled': string;
@@ -439,6 +455,11 @@ export interface IThemeColors {
   'border-field-focus'?: string;
   'field-fill'?: string;
   'field-text'?: string;
+  'surface-tooltip'?: string;
+  'text-tooltip'?: string;
+  'alert-error-fill'?: string;
+  'alert-error-border'?: string;
+  'surface-artifact-preview'?: string;
   'surface-disabled'?: string;
   'text-disabled'?: string;
   'border-disabled'?: string;
@@ -517,6 +538,11 @@ export interface IThemeAppearance {
    *  control and surface radii; their defaults are the literals those primitives drew. */
   menuRadius: string;
   tooltipRadius: string;
+  /** A tooltip's padding and the size of its text, apart from the control spacing and the type
+   *  scale; their defaults are the literals the tooltip drew. */
+  tooltipPaddingX: string;
+  tooltipPaddingY: string;
+  tooltipTextSize: string;
   tabRadius: string;
   /** The narrowest a tab trigger draws; `0` sizes it by its label. */
   tabMinWidth: string;
