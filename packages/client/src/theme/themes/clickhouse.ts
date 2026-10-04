@@ -320,7 +320,7 @@ export const clickHouseDarkTheme: IThemeRGB = {
   'rgb-illustration-subtle': '161 190 247', // #a1bef7 (palette.info.200)
   'rgb-illustration': '67 126 239', // #437eef (palette.info.400)
   'rgb-illustration-strong': '16 78 198', // #104ec6 (palette.info.600)
-  'rgb-file-document': '13 62 155', // #0d3e9b (palette.info.700)
+  'rgb-file-document': '67 126 239', // #437eef (palette.info.400)
   'rgb-file-sheet': '0 138 11', // #008a0b (palette.success.700)
   'rgb-file-code': '214 79 0', // #d64f00 (palette.warning.600)
   'rgb-file-artifact': '48 46 50', // #302e32 (palette.slate.800)

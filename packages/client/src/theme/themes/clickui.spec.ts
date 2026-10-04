@@ -289,7 +289,7 @@ const colorSources: Record<ThemeMode, Partial<Record<keyof IThemeRGB, string>>> 
     'rgb-illustration-subtle': 'palette.info.200',
     'rgb-illustration': 'palette.info.400',
     'rgb-illustration-strong': 'palette.info.600',
-    'rgb-file-document': 'palette.info.700',
+    'rgb-file-document': 'palette.info.400',
     'rgb-file-sheet': 'palette.success.700',
     'rgb-file-code': 'palette.warning.600',
     'rgb-file-artifact': 'palette.slate.800',
