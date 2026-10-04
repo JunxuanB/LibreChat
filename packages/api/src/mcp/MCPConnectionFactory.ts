@@ -46,15 +46,16 @@ import {
   ScheduledMCPBearerError,
 } from '~/schedules/bearer';
 import {
+  isOAuthAuthenticationError,
+  isMCPTransportAuthenticationError,
+  MCPAuthenticationRejectedError,
+  isMCPInitializationError,
+} from './errors';
+import {
   isDirectOpenIDBearerRecoveryEnabled,
   resolveDirectOpenIDBearerConfig,
   usesDirectOpenIDBearerRecovery,
 } from './openid';
-import {
-  isOAuthAuthenticationError,
-  isMCPTransportAuthenticationError,
-  MCPAuthenticationRejectedError,
-} from './errors';
 import { PENDING_STALE_MS, FlowStateNotFoundError, normalizeExpiresAt } from '~/flow/manager';
 import { createLazyOboUpstreamTokenProvider, awaitOboOperation } from '~/mcp/oauth/obo';
 import { preProcessGraphTokens } from '~/utils/graph';
@@ -495,7 +496,12 @@ export class MCPConnectionFactory {
             }),
           };
         }
-      } catch {
+      } catch (error) {
+        if (isMCPInitializationError(error)) {
+          connection.removeListener('oauthRequired', oauthHandler);
+          await this.disposeQuietly(connection);
+          throw error;
+        }
         MCPConnection.decrementCycleCount(this.serverName);
         logger.debug(
           `${this.logPrefix} [Discovery] Connection failed, attempting unauthenticated tool listing`,
@@ -528,7 +534,8 @@ export class MCPConnectionFactory {
         return { tools, connection: null, oauthRequired, oauthUrl };
       }
       MCPConnection.decrementCycleCount(this.serverName);
-    } catch {
+    } catch (error) {
+      if (isMCPInitializationError(error)) throw error;
       MCPConnection.decrementCycleCount(this.serverName);
       logger.debug(`${this.logPrefix} [Discovery] Unauthenticated tool listing failed`);
     }
@@ -647,7 +654,11 @@ export class MCPConnectionFactory {
         await this.disposeQuietly(unauthConnection);
         return snapshot.complete ? snapshot.tools : null;
       }
-    } catch {
+    } catch (error) {
+      if (isMCPInitializationError(error)) {
+        await this.disposeQuietly(unauthConnection);
+        throw error;
+      }
       logger.debug(`${this.logPrefix} [Discovery] Unauthenticated connection attempt failed`);
     }
 

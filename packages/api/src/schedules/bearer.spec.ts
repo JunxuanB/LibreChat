@@ -507,6 +507,51 @@ it('uses the host adapter at scheduled preflight and preserves missing-adapter d
 });
 
 describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
+  it.each(['consent_revoked', 'rbac_denied'] as const)(
+    'preserves the original %s after real session setup and before required catalog reads',
+    async (reason) => {
+      let requests = 0;
+      const server = await createOAuthMCPServer({
+        onResourceRequest: (req) => {
+          if (req.method !== 'DELETE') requests++;
+        },
+      });
+      const definition: ParsedServerConfig = { ...config, url: server.url, requiresOAuth: false };
+      const f = await bearerFixture(definition);
+      server.issuedTokens.add('resource-only');
+      server.tokenIssueTimes.set('resource-only', Date.now());
+      const connection = await MCPConnectionFactory.create(
+        {
+          serverName: 'Files',
+          serverConfig: definition,
+          ephemeralConnection: true,
+          useSSRFProtection: false,
+        },
+        { user, requestScopedConnections: f.context },
+      );
+      try {
+        await connection.fetchToolsSnapshot();
+        if (reason === 'consent_revoked') await f.revoke();
+        else f.deny();
+        const before = requests;
+        const read = connection.fetchOrderedToolsSnapshot();
+        await expect(read).rejects.toMatchObject({
+          failure: { reason },
+          outcomes: [expect.objectContaining({ server: 'Files', reason, automaticReplay: false })],
+        });
+        await expect(connection.fetchTools()).rejects.toMatchObject({ failure: { reason } });
+        await expect(connection.refreshToolList()).rejects.toMatchObject({ failure: { reason } });
+        expect(requests).toBe(before);
+        expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+      } finally {
+        await connection.dispose();
+        await cleanupMCPRequestContext(f.context);
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+      }
+    },
+  );
+
   it.each(['revoke', 'expiry', 'automatic'] as const)(
     'withholds automatic session reopening after %s without replay',
     async (change) => {

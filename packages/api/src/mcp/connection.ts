@@ -33,6 +33,7 @@ import {
   isMCPTransportAuthenticationError,
   MCPTransportAuthenticationError,
   isStandaloneSseConflict,
+  isMCPInitializationError,
 } from './errors';
 import {
   createMCPAppSSEEventGuard,
@@ -1064,6 +1065,12 @@ export interface MCPToolsSnapshot {
   orderingUnavailable?: boolean;
 }
 
+/** Fatal initialization evidence cannot become a partial or optional catalog. */
+function requireToolsSnapshot(snapshot: MCPToolsSnapshot): MCPToolsSnapshot {
+  if (isMCPInitializationError(snapshot.authenticationError)) throw snapshot.authenticationError;
+  return snapshot;
+}
+
 export class MCPConnection extends EventEmitter {
   public client: Client;
   private options: t.MCPOptions;
@@ -1996,7 +2003,8 @@ export class MCPConnection extends EventEmitter {
       await this.settlesBefore(refresh, undefined, signal);
       signal.throwIfAborted();
     }
-    return (await refresh) ?? this.suspendedToolListSnapshot;
+    const snapshot = (await refresh) ?? this.suspendedToolListSnapshot;
+    return snapshot && requireToolsSnapshot(snapshot);
   }
 
   private clearToolListRefreshRetry(): void {
@@ -2056,7 +2064,7 @@ export class MCPConnection extends EventEmitter {
       const snapshot: MCPToolsSnapshot =
         this.client.getServerCapabilities()?.tools == null
           ? { tools: [], complete: true, ...(await this.reserveToolsPublicationRevision()) }
-          : await this.fetchToolsSnapshot(undefined, signal);
+          : await this.readToolsSnapshot(undefined, signal);
       if (signal?.aborted) {
         if (this.toolListRefreshEpoch === refreshEpoch) {
           this.toolListRefreshSuspended = true;
@@ -2073,7 +2081,11 @@ export class MCPConnection extends EventEmitter {
       }
       /** Publishing unordered would drop this catalog silently; retry until it can be ordered. */
       if (!snapshot.complete || snapshot.orderingUnavailable) {
-        if (snapshot.authenticationError && this.directBearerRecoveryEnabled) {
+        if (
+          snapshot.authenticationError &&
+          (isMCPInitializationError(snapshot.authenticationError) ||
+            this.directBearerRecoveryEnabled)
+        ) {
           /** Keep the stopped queue's outcome available to an owner arriving after settlement. */
           this.suspendedToolListSnapshot = snapshot;
           this.toolListRefreshSuspended = true;
@@ -2615,8 +2627,8 @@ export class MCPConnection extends EventEmitter {
    *
    * Pagination is bounded by {@link mcpConfig.TOOLS_LIST_MAX_PAGES}, aggregate
    * tool count, approximate serialized size, elapsed time, and a repeated-cursor
-   * guard. On error, the tools already fetched are returned rather than discarded,
-   * and the method never throws.
+   * guard. Transient failures preserve partial pages; fatal initialization
+   * failures propagate to the owning run.
    */
   async fetchTools(): Promise<MCPListToolsResult['tools']> {
     return (await this.fetchToolsSnapshot()).tools;
@@ -2634,6 +2646,14 @@ export class MCPConnection extends EventEmitter {
    * the SDK raises an abort from `request()` and the failed page ends pagination gracefully.
    */
   public async fetchToolsSnapshot(
+    deadlineMs?: number,
+    signal?: AbortSignal,
+  ): Promise<MCPToolsSnapshot> {
+    return requireToolsSnapshot(await this.readToolsSnapshot(deadlineMs, signal));
+  }
+
+  /** Refresh workers retain failure evidence without publishing or retrying a fatal denial. */
+  private async readToolsSnapshot(
     deadlineMs?: number,
     signal?: AbortSignal,
   ): Promise<MCPToolsSnapshot> {
@@ -2685,7 +2705,13 @@ export class MCPConnection extends EventEmitter {
       try {
         result = await this.listToolsPage(cursor, remainingMs, signal);
       } catch (error) {
-        /** Request failed mid-pagination: return the pages already fetched instead of discarding them. */
+        if (isMCPInitializationError(error)) {
+          // The SDK may stop the stream before refresh can retain this denial.
+          this.suspendedToolListSnapshot = snapshot(false, error);
+          this.toolListRefreshSuspended = true;
+          return this.suspendedToolListSnapshot;
+        }
+        /** Request failed mid-pagination: preserve partial pages for transient errors. */
         return snapshot(false, isMCPTransportAuthenticationError(error) ? error : undefined);
       }
 
@@ -2834,7 +2860,7 @@ export class MCPConnection extends EventEmitter {
       (deadlineMs == null || Date.now() < deadlineMs) &&
       this.suspendedToolListSnapshot
     ) {
-      return this.suspendedToolListSnapshot;
+      return requireToolsSnapshot(this.suspendedToolListSnapshot);
     }
 
     return { tools: [], complete: false };
