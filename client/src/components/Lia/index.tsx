@@ -1,13 +1,20 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import type { TSubmission } from 'librechat-data-provider';
 import type { RefObject } from 'react';
 import { useGetStartupConfig } from '~/data-provider';
+import { lazyWithRecovery } from '~/lib/assets/lazy';
 import { showLiaAtom } from './store';
 
 /* The engine and its art load only for people who turned Lia on, after the page has painted,
  * so the welcome screen's first paint never waits on them. */
-const Stage = lazy(() => import('./Stage'));
+let stageLoaded = false;
+const Stage = lazyWithRecovery(() =>
+  import('./Stage').then((module) => {
+    stageLoaded = true;
+    return module;
+  }),
+);
 
 /** How long Lia stays to wave off the first message after the welcome screen gives way. */
 export const FAREWELL_MS = 1900;
@@ -40,7 +47,8 @@ export default function Lia({ bandRef, landing, submission }: LiaProps) {
   /* Leaving the welcome screen by sending a message gets a farewell; navigating away does not. */
   if (landing !== prevLanding) {
     setPrevLanding(landing);
-    setLeaving(!landing && submission != null && submission !== seen);
+    /* Only once she has been on screen: a send that beats her chunk ends without a farewell. */
+    setLeaving(stageLoaded && !landing && submission != null && submission !== seen);
   }
 
   useEffect(() => {

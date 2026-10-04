@@ -51,6 +51,17 @@ describe('Lia', () => {
     expect(screen.queryByTestId('lia-stage')).toBeNull();
   });
 
+  /* Runs before any other test lets the stage chunk load; the load is remembered per module. */
+  it('gives no farewell to a send made before her chunk arrived', async () => {
+    const { update } = renderLia({ enabled: true });
+    expect(screen.queryByTestId('lia-stage')).toBeNull();
+    update({ landing: false, submission: send() });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByTestId('lia-stage')).toBeNull();
+  });
+
   it('shows Lia when the user opted in and the deployment allows it', async () => {
     renderLia({ enabled: true });
     expect(await screen.findByTestId('lia-stage')).toBeInTheDocument();
