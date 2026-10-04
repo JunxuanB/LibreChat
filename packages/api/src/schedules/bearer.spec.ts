@@ -8,7 +8,10 @@ import type {
   AppConfig,
 } from '@librechat/data-schemas';
 import type { ScheduledMCPIdentity, ScheduledMCPTarget } from 'librechat-data-provider';
-import type { ScheduledMCPBearerResult } from './authorization/contract';
+import type {
+  ScheduledMCPBearerResult,
+  ScheduledMCPResourceBearerResolver,
+} from './authorization/contract';
 import type { MCPOAuthTokens } from '~/mcp/oauth/types';
 import type { ParsedServerConfig } from '~/mcp/types';
 import {
@@ -20,10 +23,14 @@ import {
   bindScheduledMCPBearerInvocation,
   rejectScheduledMCPBearer,
 } from './bearer';
+import {
+  createMCPRequestContext,
+  cleanupMCPRequestContext,
+  quiesceMCPRequestContext,
+} from '~/mcp/request';
 import { createScheduleMCPExecution, bindScheduledMCPInvocation } from './authorization/execution';
 import { MockKeyv, createOAuthMCPServer } from '~/mcp/__tests__/helpers/oauthTestServer';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
-import { createMCPRequestContext, cleanupMCPRequestContext } from '~/mcp/request';
 import { getScheduledMCPToolDefinitionDigest } from './authorization/policy';
 import { createScheduleMCPConsentService } from './authorization/service';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
@@ -114,7 +121,10 @@ async function bearerFixture(serverConfig = config) {
     lifetimeHours: 1,
   });
   const resolveBearer = jest.fn(
-    async (): Promise<ScheduledMCPBearerResult> => ({
+    async (
+      _request: Parameters<ScheduledMCPResourceBearerResolver>[0],
+      _options: Parameters<ScheduledMCPResourceBearerResolver>[1],
+    ): Promise<ScheduledMCPBearerResult> => ({
       state: 'ready',
       accessToken: 'resource-only',
       expiresAtMs: time + 60_000,
@@ -240,7 +250,7 @@ it('renews after synthetic expiry without a session, retaining no login refresh 
   expect(f.resolveBearer).toHaveBeenCalledTimes(2);
   expect(f.resolveBearer.mock.calls[0]).toEqual([
     expect.objectContaining({ stage: 'mint', identity, resource: f.target.resource }),
-    { signal: undefined },
+    { signal: expect.any(AbortSignal) },
   ]);
 });
 it.each(['revoke', 'expiry', 'policy', 'root', 'revision', 'resource'] as const)(
@@ -1112,4 +1122,84 @@ it('classifies a pre-transport RBAC denial without altering ordinary permission 
   expect(createMCPPermissionDeniedError(undefined, 'Files', config).message).toBe(
     'Forbidden: Insufficient MCP server permissions',
   );
+});
+
+it('cancels the occurrence-owned mint without aborting another occurrence or accepting late credentials', async () => {
+  const f = await bearerFixture();
+  const other = await bearerFixture();
+  let deliver!: (value: ScheduledMCPBearerResult) => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const provider = new Promise<ScheduledMCPBearerResult>((resolve) => {
+    deliver = resolve;
+  });
+  let mintSignal: AbortSignal | undefined;
+  const token: ScheduledMCPBearerResult = {
+    state: 'ready',
+    accessToken: 'late-only',
+    expiresAtMs: Date.now() + 60_000,
+    issuer: f.target.resource.issuer!,
+    audience: f.target.resource.audience!,
+    resourceUrl: f.target.resource.url,
+  };
+  f.resolveBearer.mockImplementationOnce(async (_request, options) => {
+    mintSignal = options.signal;
+    entered();
+    return provider;
+  });
+  const first = f.call().catch((error) => error);
+  const sibling = f.call('child').catch((error) => error);
+  try {
+    await started;
+    await quiesceMCPRequestContext(f.context);
+    const abortedBeforeRelease = mintSignal?.aborted;
+    const early = await Promise.race([
+      Promise.all([first, sibling]),
+      new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), 100)),
+    ]);
+    deliver(token);
+    const outcomes = await Promise.all([first, sibling]);
+    expect(abortedBeforeRelease).toBe(true);
+    expect(early).not.toBe('still waiting');
+    for (const error of outcomes) expect(error).toMatchObject({ name: 'AbortError' });
+    await expect(other.call()).resolves.toMatchObject({
+      headers: expect.objectContaining({ Authorization: 'Bearer resource-only' }),
+    });
+    await expect(f.call()).rejects.toMatchObject({ name: 'AbortError' });
+    expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+  } finally {
+    deliver(token);
+    await Promise.all([first, sibling]);
+    await cleanupMCPRequestContext(f.context);
+    await cleanupMCPRequestContext(other.context);
+  }
+});
+
+it('detaches stalled enrollment at the occurrence cutoff and withholds its late result', async () => {
+  const f = await bearerFixture();
+  let entered!: () => void, release!: (value: ScheduledMCPTarget[]) => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const enrollment = new Promise<ScheduledMCPTarget[]>((resolve) => {
+    release = resolve;
+  });
+  f.resolveEnrollment.mockImplementationOnce(async () => {
+    entered();
+    return enrollment;
+  });
+  const result = f.call().catch((error) => error);
+  try {
+    await started;
+    await quiesceMCPRequestContext(f.context);
+    await expect(result).resolves.toMatchObject({ name: 'AbortError' });
+    release([f.target]);
+    expect(f.resolveBearer).not.toHaveBeenCalled();
+  } finally {
+    release([f.target]);
+    await result;
+    await cleanupMCPRequestContext(f.context);
+  }
 });

@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import {
   createMCPRuntimeRequestBody,
   createMCPRequestContext,
+  getMCPRequestSignal,
   quiesceMCPRequestContext,
   cleanupMCPRequestContext,
   getMCPRequestContext,
@@ -181,4 +182,48 @@ describe('strict occurrence completion', () => {
     expect(context.connections.size).toBe(0);
     await expect(quiesceMCPRequestContext(context)).rejects.toBe(failure);
   });
+});
+
+it.each(['cleanup', 'quiesce'] as const)(
+  'aborts %s-owned resolver waits before joining the pending context',
+  async (mode) => {
+    const context = createMCPRequestContext();
+    const other = createMCPRequestContext();
+    const signal = getMCPRequestSignal(context);
+    const otherSignal = getMCPRequestSignal(other);
+    context.pending.set(
+      'resolver',
+      new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      ),
+    );
+    const closing =
+      mode === 'cleanup' ? cleanupMCPRequestContext(context) : quiesceMCPRequestContext(context);
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toMatchObject({ name: 'AbortError' });
+    expect(otherSignal.aborted).toBe(false);
+    await Promise.all([closing, quiesceMCPRequestContext(context)]);
+    expect(context.pending.size).toBe(0);
+    expect(getMCPRequestSignal(context)).toBe(signal);
+  },
+);
+
+it('publishes a joinable cutoff before cancellation listeners can request cleanup again', async () => {
+  const context = createMCPRequestContext();
+  const signal = getMCPRequestSignal(context);
+  const dispose = jest.fn(async () => undefined);
+  context.connections.set('server', { disconnect: jest.fn(), dispose });
+  let nested: Promise<void> | undefined;
+  signal.addEventListener(
+    'abort',
+    () => {
+      expect(context.cleanupStarted).toBe(true);
+      nested = quiesceMCPRequestContext(context);
+    },
+    { once: true },
+  );
+  const first = quiesceMCPRequestContext(context);
+  expect(nested).toBe(first);
+  await first;
+  expect(dispose).toHaveBeenCalledTimes(1);
 });

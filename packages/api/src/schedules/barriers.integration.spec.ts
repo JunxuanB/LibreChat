@@ -1146,3 +1146,142 @@ it.each(['root', 'child'])(
   },
   30_000,
 );
+
+it.each(['connect', 'SSE retry'] as const)(
+  'cancels stalled %s bearer work before joining completion cleanup',
+  async (mode) => {
+    const f = await fixture();
+    let dispatched = 0;
+    const dispatchedMethods: string[] = [];
+    const server = await createOAuthMCPServer({
+      onResourceRequest: (req) => {
+        if (req.method !== 'DELETE') {
+          dispatched++;
+          dispatchedMethods.push(req.method ?? 'unknown');
+        }
+      },
+    });
+    const context = createMCPRequestContext();
+    let connection: MCPConnection | undefined;
+    let slow = mode === 'connect';
+    let released!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let captured: AbortSignal | undefined;
+    const failures = jest.fn(async () => true);
+    attachScheduledMCPBearer(
+      context,
+      f.identity,
+      {
+        bind: (identity, _stage, signal) => {
+          captured = signal;
+          return {
+            identity,
+            reject: () => {},
+            resolve: async (input) => {
+              if (slow) {
+                entered();
+                await gate;
+              }
+              return { ...input.config, headers: { Authorization: 'Bearer quiesce-only' } };
+            },
+          };
+        },
+      },
+      'invoke',
+      undefined,
+      { onFailure: failures },
+    );
+    f.service.registerMCPSettlement({
+      identity: f.identity,
+      streamId: f.job.streamId,
+      jobCreatedAt: f.job.createdAt,
+      quiesce: () => quiesceMCPRequestContext(context),
+    });
+    server.issuedTokens.add('quiesce-only');
+    server.tokenIssueTimes.set('quiesce-only', Date.now());
+    const definition: ParsedServerConfig = {
+      type: 'streamable-http',
+      url: server.url,
+      requiresOAuth: false,
+      source: 'yaml',
+      headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+    };
+    let stalled: Promise<unknown> | undefined;
+    try {
+      if (mode === 'connect') {
+        stalled = MCPConnectionFactory.create(
+          {
+            serverName: 'Files',
+            serverConfig: definition,
+            ephemeralConnection: true,
+            useSSRFProtection: false,
+          },
+          { user: { id: f.owner } as IUser, requestScopedConnections: context },
+        );
+        context.pending.set('Files', stalled);
+      } else {
+        connection = await MCPConnectionFactory.create(
+          {
+            serverName: 'Files',
+            serverConfig: definition,
+            ephemeralConnection: true,
+            useSSRFProtection: false,
+          },
+          { user: { id: f.owner } as IUser, requestScopedConnections: context },
+        );
+        context.connections.set('Files', connection);
+        const streamDeadline = Date.now() + 2000;
+        while (!dispatchedMethods.includes('GET') && Date.now() < streamDeadline)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(dispatchedMethods).toContain('GET');
+        slow = true;
+        const transport = Reflect.get(connection, 'transport');
+        stalled = transport._startOrAuthSse({ resumptionToken: undefined });
+      }
+      const rejected = stalled!.catch((error) => error);
+      await started;
+      const before = dispatched;
+      await f.store.updateJob(
+        f.job.streamId,
+        { status: 'complete', completedAt: Date.now() },
+        f.job.createdAt,
+      );
+      const writes = jest.spyOn(f.service.engineDeps.methods, 'recordRunOutcome');
+      const settlement = f.service.recordScheduleOutcome(f.outcome);
+      const early = await Promise.race([
+        settlement,
+        new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), 100)),
+      ]);
+      const abortedBeforeRelease = captured?.aborted;
+      released();
+      await rejected;
+      await settlement;
+      expect(abortedBeforeRelease).toBe(true);
+      expect(early).toBe(true);
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(dispatched).toBe(before);
+      expect(failures).not.toHaveBeenCalled();
+      expect(context.pending.size).toBe(0);
+      expect(context.connections.size).toBe(0);
+      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
+        { status: 'success' },
+      );
+      expect(await f.store.getJob(f.job.streamId)).toBeNull();
+    } finally {
+      released();
+      await stalled?.catch(() => undefined);
+      await connection?.dispose().catch(() => undefined);
+      await cleanupMCPRequestContext(context);
+      MCPConnection.clearCooldown('Files');
+      await server.close();
+      await f.close();
+    }
+  },
+  30_000,
+);

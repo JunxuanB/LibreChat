@@ -59,6 +59,23 @@ interface Disconnectable {
 
 const contexts = new WeakMap<object, MCPRequestContext>();
 const cleanupFlights = new WeakMap<RequestScopedMCPConnectionStore, Promise<void>>();
+const requestControllers = new WeakMap<RequestScopedMCPConnectionStore, AbortController>();
+
+/** Owned by the occurrence, not an individual connection or mint waiter. */
+export function getMCPRequestSignal(context: RequestScopedMCPConnectionStore): AbortSignal {
+  let controller = requestControllers.get(context);
+  if (!controller) {
+    controller = new AbortController();
+    requestControllers.set(context, controller);
+    if (context.cleanupStarted || context.quiesceStarted)
+      controller.abort(new MCPRequestQuiescedError());
+  }
+  return controller.signal;
+}
+
+function abortMCPRequest(context: RequestScopedMCPConnectionStore): void {
+  requestControllers.get(context)?.abort(new MCPRequestQuiescedError());
+}
 
 /** Completion cancellation is not evidence of withdrawn consent. */
 export class MCPRequestQuiescedError extends Error {
@@ -90,12 +107,15 @@ function isDisconnectable(value: unknown): value is Disconnectable {
 /** Stops occurrence work and exposes admission failure to the settlement owner. */
 export function quiesceMCPRequestContext(context?: RequestScopedMCPConnectionStore): Promise<void> {
   if (!context) return Promise.resolve();
-  const previous = cleanupFlights.get(context);
-  if (previous) return previous;
   context.quiesceStarted = true;
   context.cleanupStarted = true;
-  const flight = disposeContext(context, true);
-  cleanupFlights.set(context, flight);
+  let flight = cleanupFlights.get(context);
+  if (!flight) {
+    flight = Promise.resolve().then(() => disposeContext(context, true));
+    cleanupFlights.set(context, flight);
+  }
+  // Publish the cutoff and joinable flight before synchronous abort listeners run.
+  abortMCPRequest(context);
   return flight;
 }
 
@@ -141,11 +161,15 @@ export async function cleanupMCPRequestContext(context?: MCPRequestContext): Pro
   if (!context) return;
   let flight = cleanupFlights.get(context);
   if (!flight) {
-    if (context.cleanupStarted) return;
+    if (context.cleanupStarted) {
+      abortMCPRequest(context);
+      return;
+    }
     context.cleanupStarted = true;
-    flight = disposeContext(context);
+    flight = Promise.resolve().then(() => disposeContext(context));
     cleanupFlights.set(context, flight);
   }
+  abortMCPRequest(context);
   await flight.catch(() => {
     logger.warn('[MCP Request Context] Failed to dispose request-scoped connection');
   });

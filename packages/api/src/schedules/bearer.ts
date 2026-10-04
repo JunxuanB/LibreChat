@@ -23,6 +23,7 @@ import type { ScheduleMCPEnrollmentResolver } from './authorization/service';
 import type { ScheduledTokenContext } from './context';
 import {
   getMCPRequestContext,
+  getMCPRequestSignal,
   quiesceMCPRequestContext,
   MCPRequestQuiescedError,
 } from '~/mcp/request';
@@ -269,6 +270,8 @@ export function attachScheduledMCPBearer(
   options?: { manual?: boolean; onFailure?: BearerFailureRecorder },
 ): void {
   if (scopes.has(context)) throw new ScheduledMCPBearerError('binding_mismatch', '');
+  const requestSignal = getMCPRequestSignal(context);
+  signal = signal ? AbortSignal.any([signal, requestSignal]) : requestSignal;
   if (options?.onFailure) failureRecorders.set(context, options.onFailure);
   scopes.set(
     context,
@@ -382,10 +385,15 @@ export async function resolveScheduledMCPBearerConfig(
   if (input.context?.quiesceStarted) throw new MCPRequestQuiescedError();
   if (input.context?.cleanupStarted)
     throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
-  const config =
-    input.context && scopes.has(input.context)
-      ? await scopes.get(input.context)!.resolve(input)
-      : input.config;
+  const scope = input.context && scopes.get(input.context);
+  let config = input.config;
+  if (scope && input.context) {
+    const requestSignal = getMCPRequestSignal(input.context);
+    const signal = input.signal ? AbortSignal.any([input.signal, requestSignal]) : requestSignal;
+    signal.throwIfAborted();
+    // Hosts should cancel their I/O; detachment also bounds a host that ignores the signal.
+    config = await awaitOboOperation(scope.resolve({ ...input, signal }), signal);
+  }
   if (input.context?.quiesceStarted) throw new MCPRequestQuiescedError();
   if (input.context?.cleanupStarted)
     throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
