@@ -75,23 +75,13 @@ async function openShareDialog(page: Page): Promise<{ dialog: Locator; agentId: 
 }
 
 const execFileAsync = promisify(execFile);
-const NO_AUTO_INDEX = path.join(__dirname, 'no-auto-index.cjs');
 
-/**
- * Async so a stuck script fails the test on its timeout instead of blocking the
- * worker. The harness server already built the schema indexes, so the script
- * skips Mongoose's module-scope rebuild (as `reset-password.spec.ts` does); the
- * backfill still creates its token indexes explicitly.
- */
+/** Async so a stuck script fails the test on its timeout instead of blocking the worker. */
 async function runBackfill(): Promise<void> {
   try {
     await execFileAsync('node', ['config/migrate-search-tokens.js'], {
       cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        MONGO_URI: getMongoUri(),
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require ${NO_AUTO_INDEX}`.trim(),
-      },
+      env: { ...process.env, MONGO_URI: getMongoUri() },
       timeout: 60000,
       killSignal: 'SIGKILL',
     });

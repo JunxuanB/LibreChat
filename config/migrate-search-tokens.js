@@ -10,6 +10,7 @@ const connect = require('./connect');
  * Usage: npm run migrate:search-tokens [-- --dry-run] [-- --batch-size=500]
  */
 (async () => {
+  let exitCode = 0;
   try {
     await connect();
     const batchArg = process.argv.find((arg) => arg.startsWith('--batch-size='));
@@ -18,11 +19,12 @@ const connect = require('./connect');
       batchSize: batchArg ? parseInt(batchArg.split('=')[1], 10) || undefined : undefined,
     });
     console.log(JSON.stringify(result, null, 2));
-    process.exitCode = 0;
   } catch (error) {
     console.error('Search token migration failed:', error);
-    process.exitCode = 1;
+    exitCode = 1;
   } finally {
     await mongoose.disconnect();
   }
+  /** Exit explicitly: with Redis enabled, the cache clients opened on connect keep the process alive. */
+  process.exit(exitCode);
 })();
