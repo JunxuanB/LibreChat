@@ -62,6 +62,7 @@ test('removal explicitly disables subagents and preserves their settings and unr
     shareFiles: true,
     graphs: [
       {
+        type: 'team',
         name: 'Review',
         description: 'Review work',
         entry_agent_id: 'child',
