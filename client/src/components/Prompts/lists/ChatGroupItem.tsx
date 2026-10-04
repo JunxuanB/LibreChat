@@ -140,8 +140,8 @@ function ChatGroupItem({
     <>
       <div
         className={cn(
-          'group hover:bg-surface-active-alt relative mb-0.5 rounded-lg bg-transparent',
-          !isChatRoute && params.promptId === group._id && 'bg-surface-active-alt',
+          'group hover:bg-surface-nav-hover relative mb-0.5 rounded-lg bg-transparent',
+          !isChatRoute && params.promptId === group._id && 'bg-surface-nav-selected',
         )}
       >
         {/* Clickable overlay for card */}

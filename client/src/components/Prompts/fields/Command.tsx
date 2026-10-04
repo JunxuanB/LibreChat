@@ -10,7 +10,7 @@ const Command = ({
   onValueChange,
   disabled,
   tabIndex,
-  labelBgClassName = 'bg-surface-primary-alt',
+  labelBgClassName = 'bg-surface-primary-alt theme-field-fill:bg-field-fill',
 }: {
   initialValue?: string;
   onValueChange?: (value: string) => void;
