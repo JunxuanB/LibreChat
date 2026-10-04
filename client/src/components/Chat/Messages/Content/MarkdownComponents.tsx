@@ -13,6 +13,7 @@ import { useCodeBlockContext, useMediaContext } from '~/Providers';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
+import PrivateImage from './PrivateImage';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
 
@@ -236,6 +237,12 @@ export const img: React.ElementType = memo(function MarkdownImage({
     return toAbsoluteFilePath(resolved, baseURL);
   }, [src, baseURL, attachmentsByName]);
 
+  const privateFile = /^\/api\/files\/download\/([a-f0-9]{24})\/([a-f0-9-]{36})$/.exec(src ?? '');
+  if (privateFile) {
+    return (
+      <PrivateImage userId={privateFile[1]} fileId={privateFile[2]} alt={alt || 'image.png'} />
+    );
+  }
   return <img src={fixedSrc} alt={alt} title={title} className={className} style={style} />;
 });
 img.displayName = 'MarkdownImage';

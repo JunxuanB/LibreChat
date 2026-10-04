@@ -69,6 +69,7 @@ import TokenUsage from './TokenUsage';
 import StopButton from './StopButton';
 import SendButton from './SendButton';
 import EditBadges from './EditBadges';
+import Reasoning from './Reasoning';
 import BadgeRow from './BadgeRow';
 import Mention from './Mention';
 import store from '~/store';
@@ -861,6 +862,14 @@ const ChatForm = memo(function ChatForm({
                     setFilesLoading={setFilesLoading}
                   />
                 </div>
+                <Reasoning
+                  conversation={conversation}
+                  enabled={
+                    startupConfig?.sub2api?.enabled === true &&
+                    startupConfig?.interface?.parameters === true
+                  }
+                  disabled={isSubmitting}
+                />
                 <BadgeRow
                   showEphemeralBadges={
                     !!endpoint &&

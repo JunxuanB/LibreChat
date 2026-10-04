@@ -1,6 +1,6 @@
 # sub2api 聊天端
 
-基于 LibreChat `main` 的 `f10b1d91f`，定制版本 `1.0.0`。源码：<https://github.com/JunxuanB/LibreChat/tree/sub2api>。
+基于 LibreChat `main` 的 `f10b1d91f`，定制版本 `1.0.1`。源码：<https://github.com/JunxuanB/LibreChat/tree/sub2api>。
 
 ## 部署
 
@@ -14,15 +14,16 @@ docker compose up -d
 
 默认与 sub2api 部署在同一台 Linux 主机，sub2api 的宿主机端口为 `7777`。如需调整地址，仅修改 YAML 的 `SUB2API_URL`（容器访问网关地址）、`SUB2API_PUBLIC_URL`（用户浏览器访问主站地址）、`DOMAIN_CLIENT` / `DOMAIN_SERVER`（用户浏览器访问聊天端地址）及端口映射。使用域名或反向代理时将两个 DOMAIN 值设置为同一外部 HTTPS 地址。远程公开访问时请使用 HTTPS。
 
-镜像 `junxuanb/librechat:1.0.0` 支持 Linux amd64 和 arm64。仅启动聊天端、初始化容器及独立 MongoDB，不需要 Meilisearch、向量数据库或邮件服务，不改动现有 sub2api 数据库。
+镜像 `junxuanb/librechat:1.0.1` 支持 Linux amd64 和 arm64。仅启动聊天端、初始化容器及独立 MongoDB，不需要 Meilisearch、向量数据库或邮件服务，不改动现有 sub2api 数据库。
 
 ## 使用
 
-- 默认简体中文，已有语言偏好仍会保留。
+- 默认简体中文，已有语言偏好仍会保留。首次默认选择 `gpt-6.1-sol`（需该 Key 可用），之后保留用户主动选择。GPT-6 模型在输入框下方可直接选择推理强度；完整参数入口也已启用。
 - 登录时校验 Key，自动载入该 Key 可用的模型；模型请求直接使用该 Key，额度、分组和计费遵从 sub2api。
 - 自动同步主站名称、简介与受支持的图片 Logo，设置缓存最多一分钟。
 - Key 被禁用后，已有会话的后续访问最多在 30 秒内被阻止；余额耗尽但 Key 仍有效时可以查看历史，发送新消息由 sub2api 判断余额。
 - 菜单中的“API Key / 余额”跳转到主站管理页；更换 Key 使用“切换 API Key / 退出”，进入新 Key 的聊天空间。替换或重建 Key 不会迁移旧 Key 的历史。
+- `gpt-image-*` 模型自动调用图片生成接口；上传 PNG/JPEG/WebP 参考图时自动调用图片编辑接口。生成图片持久保存，可预览、下载和跨设备恢复，下载按 Key 校验权限。每次生成一张，默认最长等待五分钟，失败不自动重试。
 - 支持流式聊天、聊天导出、附件上传及下载。单文件最多 25 MB，每次最多 5 个、合计 50 MB。文档转换为文本上下文，图片交由支持视觉的模型；实际解析格式和识图能力取决于解析器与所选模型。不包含沙箱代码执行或自动生成 Office/PDF 文件的服务。
 
 ## 数据与升级

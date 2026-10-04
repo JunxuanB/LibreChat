@@ -37,6 +37,7 @@ const base = baseURL.toString().replace(/\/$/, '');
 const config = {
   version: '1.3.5',
   cache: true,
+  secureImageLinks: true,
   sub2api: {
     enabled: true,
     baseURL: base,
@@ -51,7 +52,7 @@ const config = {
   interface: {
     customWelcome: '开始与你的 AI 对话',
     modelSelect: true,
-    parameters: false,
+    parameters: true,
     multiConvo: false,
     bookmarks: true,
     memories: false,

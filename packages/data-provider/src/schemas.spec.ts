@@ -620,8 +620,9 @@ describe('ReasoningEffort', () => {
     expect(eReasoningEffortSchema.parse(ReasoningEffort.max)).toBe('max');
   });
 
-  it('still rejects unknown effort values', () => {
-    expect(() => eReasoningEffortSchema.parse('ultra')).toThrow();
+  it('accepts ultra for the sub2api GPT-6.1 Sol tier and rejects unknown values', () => {
+    expect(eReasoningEffortSchema.parse('ultra')).toBe('ultra');
+    expect(() => eReasoningEffortSchema.parse('invalid')).toThrow();
   });
 });
 

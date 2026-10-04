@@ -1,4 +1,4 @@
-import { AuthType, ErrorTypes } from 'librechat-data-provider';
+import { AuthType, ErrorTypes, FileSources, EImageOutputType } from 'librechat-data-provider';
 import type { BaseInitializeParams } from '~/types';
 
 const mockValidateEndpointURL = jest.fn();
@@ -83,6 +83,21 @@ function createParams(overrides: {
 describe('initializeCustom – Agents API user key resolution', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('routes sub2api image models through the native image adapter even with inherited Responses settings', async () => {
+    const params = createParams({ apiKey: AuthType.USER_PROVIDED });
+    params.endpoint = 'sub2api';
+    params.model_parameters = { model: 'gpt-image-2.5-sunburst', useResponsesApi: true };
+    params.req.config = {
+      fileStrategy: FileSources.local,
+      imageOutputType: EImageOutputType.PNG,
+      config: { version: '1.3.5', sub2api: { enabled: true } },
+    };
+    const result = await initializeCustom(params);
+    expect(result.configOptions?.fetch).toEqual(expect.any(Function));
+    expect(result.configOptions?.maxRetries).toBe(0);
+    expect(result.llmConfig).toMatchObject({ maxRetries: 0, useResponsesApi: false });
   });
 
   it('should fetch user key even when expiresAt is not in request body (Agents API flow)', async () => {

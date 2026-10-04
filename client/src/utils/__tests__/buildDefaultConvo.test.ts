@@ -19,6 +19,24 @@ const baseConversation: TConversation = {
 };
 
 describe('buildDefaultConvo - defaultParamsEndpoint', () => {
+  it('selects the configured preferred model only when the Key can use it', () => {
+    const result = buildDefaultConvo({
+      conversation: { ...baseConversation, endpointType: EModelEndpoint.custom },
+      endpoint: 'sub2api' as EModelEndpoint,
+      lastConversationSetup: null,
+      models: ['gpt-image-2.5-sunburst', 'gpt-6.1-sol'],
+      preferredModel: 'gpt-6.1-sol',
+    });
+    expect(result.model).toBe('gpt-6.1-sol');
+    const restricted = buildDefaultConvo({
+      conversation: { ...baseConversation, endpointType: EModelEndpoint.custom },
+      endpoint: 'sub2api' as EModelEndpoint,
+      lastConversationSetup: null,
+      models: ['allowed-model'],
+      preferredModel: 'gpt-6.1-sol',
+    });
+    expect(restricted.model).toBe('allowed-model');
+  });
   describe('custom endpoint with defaultParamsEndpoint: anthropic', () => {
     const models = ['anthropic/claude-opus-4.5', 'anthropic/claude-sonnet-4'];
 

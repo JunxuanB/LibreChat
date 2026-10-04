@@ -1346,7 +1346,14 @@ export function applyModelAwareDefaults(
       if (setting.key === 'reasoning_effort') {
         return {
           ...setting,
-          options: setting.options?.filter((effort) => effort !== ReasoningEffort.minimal),
+          options: [
+            ...(setting.options?.filter((effort) => effort !== ReasoningEffort.minimal) ?? []),
+            ...(/^gpt-6\.1-sol(?:-|$)/.test(model) ? [ReasoningEffort.ultra] : []),
+          ],
+          enumMappings: {
+            ...setting.enumMappings,
+            [ReasoningEffort.ultra]: 'com_ui_sub2api_ultra',
+          },
         };
       }
       /** Match the native backend's unset default without writing into stored

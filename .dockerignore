@@ -20,6 +20,7 @@ docs
 data
 logs
 uploads
+client/public/images/*
 **/.test-results
 **/coverage
 **/junit.xml

@@ -1454,5 +1454,7 @@
   "com_ui_zoom_in": "放大",
   "com_ui_zoom_level": "缩放级别",
   "com_ui_zoom_out": "缩小",
-  "com_user_message": "您"
+  "com_user_message": "您",
+  "com_ui_sub2api_image_retry": "图片加载失败，点击重试",
+  "com_ui_sub2api_ultra": "超深度"
 }

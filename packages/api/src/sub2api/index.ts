@@ -246,6 +246,7 @@ export function createSub2API(deps: Dependencies): Integration {
       samlLoginEnabled: false,
       sub2api: {
         enabled: true,
+        defaultModel: config.defaultModel,
         siteUrl: resolveURL(config.publicURL),
         subtitle: publicSettings.site_subtitle,
         logo:

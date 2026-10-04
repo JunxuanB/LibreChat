@@ -4,6 +4,7 @@ import {
   envVarRegex,
   EModelEndpoint,
   FetchTokenConfig,
+  configSchema,
   extractEnvVariable,
 } from 'librechat-data-provider';
 import type { TEndpoint } from 'librechat-data-provider';
@@ -20,6 +21,7 @@ import { extractDefaultParams } from '~/endpoints/openai/llm';
 import { isUserProvided, checkUserKeyExpiry } from '~/utils';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { getScopedTokenConfigKey } from '~/endpoints/keys';
+import { createSub2APIImageFetch } from '~/sub2api/images';
 import { getCustomEndpointConfig } from '~/app/config';
 import { resolveEndpointRuntime } from '~/types';
 import { fetchModels } from '~/endpoints/models';
@@ -346,6 +348,28 @@ export async function initializeCustom(
   }
 
   const streamRate = clientOptions.streamRate as number | undefined;
+  const imageConfig = configSchema.shape.sub2api.parse(appConfig?.config?.sub2api);
+  const selectedModel = model_parameters?.model;
+  if (
+    endpoint === 'sub2api' &&
+    imageConfig?.enabled &&
+    typeof selectedModel === 'string' &&
+    imageConfig.imageModelPrefixes?.some((prefix) => selectedModel.startsWith(prefix))
+  ) {
+    options.configOptions = {
+      ...options.configOptions,
+      maxRetries: 0,
+      timeout: imageConfig.imageTimeoutMs,
+      fetch: createSub2APIImageFetch({
+        request: globalThis.fetch,
+        baseURL,
+        apiKey,
+        config: imageConfig,
+        saveImage: db.saveSub2APIImage,
+      }),
+    };
+    Object.assign(options.llmConfig, { maxRetries: 0, useResponsesApi: false });
+  }
   if (streamRate != null) {
     options.llmConfig._lc_stream_delay = streamRate;
   }

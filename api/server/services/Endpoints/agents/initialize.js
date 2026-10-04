@@ -41,6 +41,7 @@ const {
   encodeAndFormatVideos,
   extractFileContext,
   createScheduleUpstreamTokenProviderResolver,
+  createSub2APIImageSaver,
 } = require('@librechat/api');
 const {
   ResourceType,
@@ -106,6 +107,7 @@ const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { determineFileType } = require('~/server/utils');
+const { saveBase64Image } = require('~/server/services/Files/process');
 
 const SUBAGENT_GRAPH_LOAD_CONCURRENCY = 4;
 
@@ -750,6 +752,7 @@ const initializeClientWithProvider = async ({
     },
     {
       getFiles: db.getFiles,
+      saveSub2APIImage: createSub2APIImageSaver({ req, saveImage: saveBase64Image }),
       getUserKey: db.getUserKey,
       getMessages: db.getMessages,
       getConvoFiles: db.getConvoFiles,

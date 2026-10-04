@@ -235,6 +235,7 @@ const useNewConvo = (index = 0) => {
             endpoint: defaultEndpoint,
             models,
             defaultParamsEndpoint,
+            preferredModel: startupConfig?.sub2api?.defaultModel,
           });
 
           if (hasExplicitChatProjectId) {
@@ -312,6 +313,7 @@ const useNewConvo = (index = 0) => {
       defaultPreset,
       assistantsListMap,
       modelsQuery.data,
+      startupConfig,
       hasAgentAccess,
       searchParams,
     ],

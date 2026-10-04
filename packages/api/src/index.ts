@@ -131,3 +131,4 @@ export type * from './mcp/types';
 export type * from './flow/types';
 export type * from './types';
 export { createSub2API } from './sub2api';
+export { createSub2APIImageFetch, createSub2APIImageSaver } from './sub2api/images';

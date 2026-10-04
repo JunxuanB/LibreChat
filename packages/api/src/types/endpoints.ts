@@ -33,6 +33,8 @@ export type GetUserKeyValuesFunction = (params: {
  * These are passed in at invocation time to allow for dependency injection
  */
 export interface EndpointDbMethods {
+  /** Persist generated images with the current request's file owner and storage policy. */
+  saveSub2APIImage?: (dataURL: string) => Promise<{ file_id: string; userId: string }>;
   /** Get single decrypted key value (used for simple API keys) */
   getUserKey: GetUserKeyFunction;
   /** Get parsed key values object (used for apiKey + baseURL combinations) */

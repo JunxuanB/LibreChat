@@ -15,12 +15,14 @@ const buildDefaultConvo = ({
   endpoint = null,
   lastConversationSetup,
   defaultParamsEndpoint,
+  preferredModel,
 }: {
   models: string[];
   conversation: TConversation;
   endpoint?: EModelEndpoint | null;
   lastConversationSetup: TConversation | null;
   defaultParamsEndpoint?: string | null;
+  preferredModel?: string;
 }): TConversation => {
   const { lastSelectedModel, lastSelectedTools } = getLocalStorageItems();
   const endpointType = lastConversationSetup?.endpointType ?? conversation.endpointType;
@@ -40,6 +42,11 @@ const buildDefaultConvo = ({
 
   if (availableModels.includes(model)) {
     possibleModels = [model, ...availableModels];
+  } else if (preferredModel && availableModels.includes(preferredModel)) {
+    possibleModels = [
+      preferredModel,
+      ...availableModels.filter((value) => value !== preferredModel),
+    ];
   } else {
     possibleModels = [...availableModels];
   }
