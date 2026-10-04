@@ -687,7 +687,6 @@ const loadTools = async ({
       context: {
         agentId: agent?.id,
         mcpPermissionContext,
-        agentId: agent?.id,
         signal,
         user: safeUser,
         userMCPAuthMap,
