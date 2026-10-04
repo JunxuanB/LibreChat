@@ -307,7 +307,7 @@ const ProjectItem = memo(
             'group text-text-primary hover:bg-surface-nav-hover relative flex h-9 max-w-full min-w-0 items-center rounded-lg text-sm',
             isActive && 'bg-surface-nav-selected hover:bg-surface-nav-selected',
             !isActive && isMenuOpen && 'bg-surface-nav-selected',
-            isDropOver && canDrop && 'bg-surface-active-alt ring-border-medium ring-1 ring-inset',
+            isDropOver && canDrop && 'bg-surface-nav-selected ring-border-medium ring-1 ring-inset',
           )}
         >
           <button
