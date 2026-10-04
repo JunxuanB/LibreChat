@@ -205,6 +205,31 @@ test.describe('Lia mascot', () => {
     await expect(lia(page)).toHaveCount(0);
   });
 
+  test('a new chat opened during the farewell brings Lia back instead of hiding her @scenario:lia-farewell-cancelled-by-new-chat', async ({
+    page,
+  }) => {
+    await open(page, { optedIn: true });
+    await expect(lia(page)).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(3500);
+    const control = page.getByRole('button', { name: /^Lia: / });
+    await sendMessage(page, 'Hello Lia');
+    await expect(control).toHaveAccessibleName('Lia: Waves your message off');
+    /* Back on the welcome screen inside the farewell, which would hide her for five seconds; the
+     * header button stands in for the sidebar's link only while the sidebar is closed. */
+    const header = page.getByTestId('header-new-chat-button');
+    await (
+      (await header.isVisible())
+        ? header
+        : page.getByRole('link', { name: 'New chat', exact: true })
+    ).click();
+    await expect(page).toHaveURL(/\/c\/new/);
+    /* Unfixed, the farewell would keep her name on it for most of its 6.8 s. */
+    await expect(control).toHaveAccessibleName('Lia: Boots up', { timeout: 3000 });
+    await page.waitForTimeout(2500);
+    await expect(control).not.toHaveAccessibleName('Lia: Waves your message off');
+    await expect(lia(page)).toBeVisible();
+  });
+
   test('a deployment that turns the mascot off hides Lia and her setting @scenario:lia-respects-deployment-opt-out', async ({
     page,
   }) => {

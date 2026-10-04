@@ -100,9 +100,13 @@ export default function Stage({
   const leavingRef = useRef(leaving);
 
   useEffect(() => {
+    const wasLeaving = leavingRef.current;
     leavingRef.current = leaving;
     if (leaving) {
       engineRef.current?.play('r-send', 4);
+    } else if (wasLeaving) {
+      /* Back on the welcome screen before the farewell ended: drop it, she hides at its end. */
+      engineRef.current?.play('intro', 4);
     }
   }, [leaving]);
 
