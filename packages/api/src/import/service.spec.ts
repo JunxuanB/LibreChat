@@ -914,9 +914,10 @@ describe('runImport asset cleanup', () => {
       isCancelled: async () => assetsDone,
     });
 
-    expect(report.assetsImported).toBeGreaterThan(0);
     expect(recorded.conversations).toEqual([]);
-    expect(deleted).toHaveLength(report.assetsImported);
+    expect(deleted.length).toBeGreaterThan(0);
+    /** Every ingested asset was removed again, so the report claims none. */
+    expect(report.assetsImported).toBe(0);
   });
 
   it('can clean up assets after a cancellation-store read fails during ingestion', async () => {
@@ -950,9 +951,10 @@ describe('runImport asset cleanup', () => {
       },
     });
 
-    expect(report.assetsImported).toBeGreaterThan(0);
     expect(recorded.conversations).toEqual([]);
-    expect(deleted).toHaveLength(report.assetsImported);
+    expect(deleted.length).toBeGreaterThan(0);
+    /** Every ingested asset was removed again, so the report claims none. */
+    expect(report.assetsImported).toBe(0);
   });
 
   /** The incremental flush is ambiguous for the same reason the final save is,

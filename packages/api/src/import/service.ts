@@ -270,27 +270,32 @@ function importConversation(
  * disabled, and nothing else knows they exist. `expiresAt` is not an
  * alternative here; it is a MongoDB TTL index that drops the row and leaves
  * the storage object behind.
+ *
+ * Returns how many were removed, so the report counts only what the user kept.
  */
 async function releaseUnusedAssets(
   assets: Map<string, ImportedAsset>,
   usedPointers: Set<string>,
   input: RunImportInput,
-): Promise<void> {
+): Promise<number> {
   const deleteFile = input.deps.deleteFile;
   if (!deleteFile || assets.size === 0) {
-    return;
+    return 0;
   }
 
+  let released = 0;
   for (const [pointer, asset] of assets) {
     if (usedPointers.has(pointer)) {
       continue;
     }
     try {
       await deleteFile(asset);
+      released += 1;
     } catch (error) {
       logger.error(`[import] Could not remove the unreferenced asset ${asset.file_id}`, error);
     }
   }
+  return released;
 }
 
 /** The report a failed run had accumulated, keyed by the error it threw. A
@@ -529,11 +534,16 @@ export async function runImport(input: RunImportInput): Promise<ImportReport> {
        * flushes count. An ambiguous last flush may have saved more, so this is
        * a lower bound rather than an overstatement. */
       const committed = input.batch.getCommittedConversationCount?.();
-      partialReports.set(error, committed == null ? report : { ...report, imported: committed });
+      if (committed != null) {
+        report.imported = committed;
+      }
+      partialReports.set(error, report);
     }
     throw error;
   } finally {
-    await releaseUnusedAssets(ingested, usedPointers, input);
+    /** `report` is the object already returned or recorded as the partial
+     * report, so this correction reaches the caller on every exit path. */
+    report.assetsImported -= await releaseUnusedAssets(ingested, usedPointers, input);
     archive.close();
   }
 }
