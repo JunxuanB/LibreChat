@@ -1610,6 +1610,8 @@ export class MCPConnection extends EventEmitter {
       // A fresh checkout may authorize later; transport/OAuth retries cannot bypass denial.
       this.requestAuthorization.error = error;
       this.shouldStopReconnecting = true;
+      if (this.resolveRequestHeaders.recordFailure)
+        await this.resolveRequestHeaders.recordFailure(error);
       throw error;
     }
   }
@@ -2616,6 +2618,8 @@ export class MCPConnection extends EventEmitter {
   }
 
   public async disconnect(resetCycleTracking = true, forceAgentClose = false): Promise<void> {
+    // SDK request deadlines can elapse before an asynchronous receipt writer settles.
+    if (this.resolveRequestHeaders?.settle) await this.resolveRequestHeaders.settle();
     this.toolListRefreshEpoch++;
     this.suspendedToolListSnapshot = undefined;
     this.toolListRefreshSuspended = true;
@@ -2744,7 +2748,19 @@ export class MCPConnection extends EventEmitter {
       let result: MCPListToolsResult;
       try {
         result = await this.listToolsPage(cursor, remainingMs, signal);
-      } catch (error) {
+      } catch (cause) {
+        let error = cause;
+        if (
+          this.resolveRequestHeaders?.recordFailure &&
+          (isMCPInitializationError(error) || isMCPTransportAuthenticationError(error))
+        ) {
+          this.shouldStopReconnecting = true;
+          try {
+            await this.resolveRequestHeaders.recordFailure(error);
+          } catch (reported) {
+            error = reported;
+          }
+        }
         if (isMCPInitializationError(error)) {
           // The SDK may stop the stream before refresh can retain this denial.
           this.suspendedToolListSnapshot = snapshot(false, error);

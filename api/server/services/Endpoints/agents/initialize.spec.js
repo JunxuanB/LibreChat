@@ -248,11 +248,20 @@ describe('initializeClient — processAgent ACL gate', () => {
   it.each([false, true])(
     'binds the resource bearer host to the trusted root, restored=%s',
     async (restored) => {
-      const { getMCPRequestContext, bindScheduledMCPBearerInvocation } = require('@librechat/api');
+      const {
+        getMCPRequestContext,
+        bindScheduledMCPBearerInvocation,
+        createScheduledMCPBearerHeaderResolver,
+        ScheduledMCPBearerError,
+      } = require('@librechat/api');
+      const receipts = jest
+        .spyOn(require('~/server/services/Schedules'), 'recordMCPToolAuthFailure')
+        .mockResolvedValue(true);
       const resolve = jest.fn(async (input) => input.config);
       const bind = jest.fn((identity) => ({ identity, resolve, reject: jest.fn() }));
       const host = createInitializeClient({ scheduledBearerHost: { bind } });
       const req = makeReq();
+      req._resumableStreamId = 'notification-owner';
       req._isScheduledFire = true;
       req._isAgentTrigger = !restored;
       req.body.agent_id = PRIMARY_ID;
@@ -280,6 +289,7 @@ describe('initializeClient — processAgent ACL gate', () => {
         res: {},
         signal: new AbortController().signal,
         endpointOption: makeEndpointOption(),
+        jobCreatedAt: 42,
         scheduledTokenContext: restored
           ? {
               scheduleId: 'sched-bearer',
@@ -311,6 +321,36 @@ describe('initializeClient — processAgent ACL gate', () => {
       expect(resolve).toHaveBeenCalledWith(
         expect.objectContaining({ selection: { agentId: 'child', tools: ['read'] }, config }),
       );
+      const headers = createScheduledMCPBearerHeaderResolver({
+        context: getMCPRequestContext(req),
+        user: req.user,
+        serverName: 'Files',
+        config: {
+          ...config,
+          source: 'yaml',
+          headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+        },
+      });
+      req.body.agent_id = 'forged';
+      req._resumableStreamId = 'forged-stream';
+      const failure = new ScheduledMCPBearerError('consent_revoked', 'Files');
+      await headers.recordFailure(failure);
+      expect(receipts).toHaveBeenCalledWith({
+        error: failure,
+        streamId: 'notification-owner',
+        jobCreatedAt: 42,
+        userId: req.user.id,
+        serverName: 'Files',
+        identity: {
+          scheduleId: 'sched-bearer',
+          ownerId: req.user.id,
+          tenantId: null,
+          agentId: PRIMARY_ID,
+          invocationMode: 'delegated',
+        },
+      });
+      await headers.settle();
+      receipts.mockRestore();
     },
   );
   it('persists trusted completion lineage before initialization and rechecks it on authenticated resume', async () => {

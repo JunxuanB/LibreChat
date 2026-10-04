@@ -10,7 +10,6 @@ import {
   mergeScheduleMCPReceipts,
 } from 'librechat-data-provider';
 import type { ScheduleMethods, AppConfig, IBalance, IChatProject } from '@librechat/data-schemas';
-import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { TCheckpointerConfig } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
@@ -23,6 +22,8 @@ import type {
   FireableSchedule,
   FireResult,
   JobIdentity,
+  JobState,
+  ScheduleMCPFailureInput,
 } from './types';
 import type { SerializableJobData } from '../stream/interfaces/IJobStore';
 import type { AgentCheckpointGeneration } from '../agents/checkpointer';
@@ -214,14 +215,7 @@ export interface SchedulesService {
     options?: { signal?: AbortSignal },
   ) => Promise<FireResult | null>;
   recordScheduleOutcome: (input: RecordScheduleOutcomeInput) => Promise<boolean>;
-  recordMCPToolAuthFailure: (input: {
-    error: unknown;
-    streamId?: string;
-    jobCreatedAt?: number;
-    userId?: string;
-    serverName: string;
-    identity?: ScheduledMCPIdentity;
-  }) => Promise<boolean>;
+  recordMCPToolAuthFailure: (input: ScheduleMCPFailureInput) => Promise<boolean>;
   /**
    * Stamps a scheduled run's interactive Stop BEFORE the abort is signalled, so the owner
    * settlement barrier, reconciliation, and schedule/account deletion hold off settling or
@@ -1864,6 +1858,30 @@ export function createSchedulesService(
     return appConfig?.endpoints?.agents?.checkpointer;
   }
 
+  function deletionSettlementBlocked(job: JobState | null | undefined): boolean {
+    return (
+      job != null &&
+      (job.status === 'running' ||
+        job.providerDrained === false ||
+        job.terminalPersistencePending === true ||
+        job.terminalHostActionPending === true)
+    );
+  }
+
+  async function cleanupStillPending(
+    runs: Array<{ scheduleId: string; scheduledFor: Date; conversationId?: string }>,
+  ): Promise<boolean> {
+    for (const run of runs) {
+      try {
+        const job = run.conversationId ? await engineDeps.getJobStatus(run.conversationId) : null;
+        if (job && jobMatchesIdentity(job, run) && deletionSettlementBlocked(job)) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Soft-deletes a schedule for its owner: disables + marks it `deleting` (so the
    * engine can no longer claim it and it disappears from the owner's list), rotates
@@ -1907,6 +1925,7 @@ export function createSchedulesService(
         })
       : [];
     let unconfirmed = 0;
+    const cleanupPending: typeof active = [];
     for (const run of active) {
       // UNKNOWN is not ABSENT — the same distinction the quiesce path draws. A lookup
       // that succeeded and returned null is positive evidence no generation holds this
@@ -1969,7 +1988,7 @@ export function createSchedulesService(
         live.known &&
         !hasAbortInFlight(run, Date.now()) &&
         !pauseHandoffInFlight &&
-        !(isThisGeneration && live.job?.status === 'running');
+        !(isThisGeneration && deletionSettlementBlocked(live.job));
       if (settleable) {
         // Positive evidence nothing is generating: settle the row HERE so the erase
         // below can proceed without any reconciler — the clustered entrypoint has
@@ -2007,10 +2026,11 @@ export function createSchedulesService(
           // signalled, so the stamp is NOT renewed — re-arming the owner-death fence
           // on every delete retry would keep a dead owner's row from ever aging into
           // the reconciler's recovery.
-          await abortActiveRun(run, false, {
+          const cleaned = await abortActiveRun(run, false, {
             stampRenewal: false,
             settleAfterAbort: false,
           });
+          if (!cleaned && isThisGeneration) cleanupPending.push(run);
         } else {
           unconfirmed += 1;
         }
@@ -2078,6 +2098,7 @@ export function createSchedulesService(
         return 'unconfirmed';
       }
     }
+    if (await cleanupStillPending(cleanupPending)) return 'unconfirmed';
     const erased = await eraseSettledSchedule(scheduleId).catch((err) => {
       logger.warn(`[schedules] erase failed for ${scheduleId}:`, err);
       return false;
@@ -2103,6 +2124,7 @@ export function createSchedulesService(
     await methods.suspendUserSchedulesForDeletion(userId, token);
     const active = await methods.getActiveRunsForUser(userId);
     const unconfirmed: string[] = [];
+    const cleanupPending: typeof active = [];
     for (const run of active) {
       // Current resumes promote the row back to `started` with a capacity slot, but a
       // rolling deploy or crash-era row may still be `requires_action` while its job is
@@ -2147,7 +2169,7 @@ export function createSchedulesService(
         live.known &&
         !abortInFlight &&
         !pauseHandoffInFlight &&
-        !(isThisGeneration && live.job?.status === 'running');
+        !(isThisGeneration && deletionSettlementBlocked(live.job));
       // Aborts here never preserve for reconcile: account deletion hard-deletes these
       // run rows, so no reconcile pass would ever finalize or clear a retained job.
       const retainedOutcome = isThisGeneration
@@ -2194,10 +2216,11 @@ export function createSchedulesService(
         // or every quiesce retry would re-arm the owner-death fence and a dead owner's
         // row could never age into recovery.
         if (settled) {
-          await abortActiveRun(run, false, {
+          const cleaned = await abortActiveRun(run, false, {
             stampRenewal: false,
             settleAfterAbort: false,
           });
+          if (!cleaned && isThisGeneration) cleanupPending.push(run);
         }
         continue;
       }
@@ -2227,7 +2250,7 @@ export function createSchedulesService(
     // finishes and records a terminal outcome during the drain poll. The run is genuinely
     // settled at that point, so keeping its id in `unconfirmed` would defer account
     // deletion forever. The DRAIN is the authority; delivery is only a hint.
-    const confirmed = remaining === 0;
+    const confirmed = remaining === 0 && !(await cleanupStillPending(cleanupPending));
     if (confirmed && unconfirmed.length > 0) {
       logger.info(
         `[schedules] ${unconfirmed.length} abort(s) were not confirmed delivered but their ` +
@@ -2236,7 +2259,7 @@ export function createSchedulesService(
     }
     if (!confirmed) {
       logger.warn(
-        `[schedules] account-deletion quiesce did not confirm ${Math.max(remaining, unconfirmed.length)} ` +
+        `[schedules] account-deletion quiesce did not confirm ${Math.max(remaining, unconfirmed.length, cleanupPending.length)} ` +
           `in-flight scheduled run(s) settled${unconfirmed.length ? ` [${unconfirmed.join(', ')}]` : ''} ` +
           '— a peer worker generation may still persist data. Guaranteed quiescing requires a ' +
           'shared stream store (USE_REDIS_STREAMS).',

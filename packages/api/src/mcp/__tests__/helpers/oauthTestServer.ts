@@ -104,6 +104,7 @@ export interface OAuthTestServer {
   registeredClients: Map<string, { client_id: string; client_secret: string }>;
   tokenRequests: OAuthTokenRequestRecord[];
   getAuthCode: () => Promise<string>;
+  notifyToolsChanged: () => Promise<void>;
 }
 
 async function readRequestBody(req: http.IncomingMessage): Promise<string> {
@@ -157,6 +158,7 @@ export async function createOAuthMCPServer(
   } = options;
 
   const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const notifyToolsChanged = new Set<() => Promise<void>>();
   const issuedTokens = new Set<string>();
   const tokenIssueTimes = new Map<string, number>();
   const accessTokenScopes = new Map<string, string[]>();
@@ -512,6 +514,7 @@ export async function createOAuthMCPServer(
         return { content: [{ type: 'text' as const, text }] };
       });
       await mcp.connect(transport);
+      notifyToolsChanged.add(() => mcp.server.sendToolListChanged());
     }
 
     await transport.handleRequest(req, res);
@@ -536,6 +539,9 @@ export async function createOAuthMCPServer(
     issuedRefreshTokens,
     registeredClients,
     tokenRequests,
+    notifyToolsChanged: async () => {
+      await Promise.all([...notifyToolsChanged].map((notify) => notify()));
+    },
     getAuthCode: async () => {
       const authUrl = new URL(`${getBaseUrl()}/authorize`);
       authUrl.searchParams.set('redirect_uri', 'http://localhost');

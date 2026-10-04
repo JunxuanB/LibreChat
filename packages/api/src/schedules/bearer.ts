@@ -20,12 +20,13 @@ import type {
 } from '~/mcp/types';
 import type { ScheduleMCPEnrollmentResolver } from './authorization/service';
 import type { ScheduledTokenContext } from './context';
+import type { ScheduleMCPFailureInput } from './types';
+import { ScheduledMCPBearerError, isMCPTransportAuthenticationError } from '~/mcp/errors';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
 import { readScheduleFireContext, isScheduleFireRequest } from './trigger';
 import { getScheduleMCPExecution } from './authorization/execution';
 import { ScheduleMCPConsentError } from './authorization/service';
 import { usesDirectOpenIDBearerRecovery } from '~/mcp/openid';
-import { ScheduledMCPBearerError } from '~/mcp/errors';
 import { getMCPRequestContext } from '~/mcp/request';
 import { awaitOboOperation } from '~/mcp/oauth/obo';
 import { isOwnedAbortError } from '~/utils/errors';
@@ -54,6 +55,8 @@ interface ScheduledBearerScope {
   reject: (serverName: string) => void;
 }
 const scopes = new WeakMap<RequestScopedMCPConnectionStore, ScheduledBearerScope>();
+type BearerFailureRecorder = (error: ScheduledMCPBearerError) => Promise<boolean>;
+const failureRecorders = new WeakMap<RequestScopedMCPConnectionStore, BearerFailureRecorder>();
 
 /** The host owns credential issuance; this module caches only within one bound occurrence. */
 export function createScheduledMCPBearerHost(deps: {
@@ -259,13 +262,14 @@ export function attachScheduledMCPBearer(
   host?: ScheduledMCPBearerHost,
   stage: 'activation' | 'invoke' | 'resume' = 'invoke',
   signal?: AbortSignal,
-  options?: { manual?: boolean },
+  options?: { manual?: boolean; onFailure?: BearerFailureRecorder },
 ): void {
   if (scopes.has(context)) throw new ScheduledMCPBearerError('binding_mismatch', '');
+  if (options?.onFailure) failureRecorders.set(context, options.onFailure);
   scopes.set(
     context,
     host
-      ? host.bind(identity, stage, signal, options)
+      ? host.bind(identity, stage, signal, options && { manual: options.manual })
       : {
           identity: Object.freeze({ ...identity }),
           async resolve(input) {
@@ -287,7 +291,10 @@ export function createScheduledMCPBearerHeaderResolver(
   if (!input.context || !requiresScheduledMCPBearerConnection(input.context, input.config)) return;
   const { context, config, serverName, signal: ownerSignal } = input;
   const user = input.user && Object.freeze({ id: input.user.id, tenantId: input.user.tenantId });
-  return async (signal) => {
+  const onFailure = failureRecorders.get(context);
+  const pending = new Set<Promise<boolean>>();
+  const reports = new WeakMap<object, Promise<boolean>>();
+  const resolver: MCPRequestHeaderResolver = async (signal) => {
     if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
     signal?.throwIfAborted();
     if (context.cleanupStarted) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
@@ -306,6 +313,39 @@ export function createScheduledMCPBearerHeaderResolver(
     if (!authorization) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
     return { authorization: authorization[1] };
   };
+  if (onFailure)
+    resolver.recordFailure = async (cause) => {
+      const rejection = isMCPTransportAuthenticationError(cause);
+      let error = cause instanceof ScheduledMCPBearerError ? cause : undefined;
+      if (!error && rejection)
+        error = new ScheduledMCPBearerError('credential_rejected', serverName);
+      if (!error) return;
+      if (rejection) rejectScheduledMCPBearer(context, serverName);
+      const key = cause != null && typeof cause === 'object' ? cause : error;
+      let admission = reports.get(key);
+      if (!admission) {
+        // The recorder registers exact-owner pending evidence before its first await.
+        admission = onFailure(error);
+        reports.set(key, admission);
+        pending.add(admission);
+        const receipt = admission;
+        void admission.then(
+          (acknowledged) => {
+            if (acknowledged) pending.delete(receipt);
+          },
+          () => undefined,
+        );
+      }
+      if (!(await admission) || rejection) throw error;
+    };
+  if (onFailure)
+    resolver.settle = async () => {
+      while (pending.size > 0) {
+        if ((await Promise.all(pending)).some((acknowledged) => !acknowledged))
+          throw new ScheduledMCPBearerError('dependency_unavailable', serverName);
+      }
+    };
+  return resolver;
 }
 
 export function isScheduledMCPBearer(context?: RequestScopedMCPConnectionStore): boolean {
@@ -355,6 +395,10 @@ export function prepareScheduledMCPBearer(input: {
   restoredContext?: ScheduledTokenContext;
   host?: ScheduledMCPBearerHost;
   signal?: AbortSignal;
+  streamId?: string | null;
+  jobCreatedAt?: number;
+  /** Host facade waits for durable admission, or fences a retired generation. */
+  recordFailure?: (input: ScheduleMCPFailureInput) => Promise<boolean>;
 }): void {
   const context = input.context ?? getMCPRequestContext(input.req);
   const execution = getScheduleMCPExecution(context);
@@ -391,13 +435,26 @@ export function prepareScheduledMCPBearer(input: {
     (identity.tenantId ?? null) !== (input.req.user.tenantId ?? null)
   )
     throw new ScheduledMCPBearerError('binding_mismatch', '');
+  const captured = Object.freeze({ ...identity, tenantId: identity.tenantId ?? null });
+  const { streamId, jobCreatedAt, recordFailure } = input;
+  const onFailure: BearerFailureRecorder | undefined = recordFailure
+    ? (error) =>
+        recordFailure({
+          error,
+          identity: captured,
+          streamId: streamId ?? undefined,
+          jobCreatedAt,
+          userId: captured.ownerId,
+          serverName: error.outcomes[0].server,
+        })
+    : undefined;
   attachScheduledMCPBearer(
     context,
-    { ...identity, tenantId: identity.tenantId ?? null },
+    captured,
     input.host,
     execution?.stage ?? (root ? 'resume' : 'invoke'),
     input.signal,
-    { manual: execution?.manual === true || (!execution && fire?.manual === true) },
+    { manual: execution?.manual === true || (!execution && fire?.manual === true), onFailure },
   );
 }
 

@@ -9,6 +9,7 @@ import type { ScheduledMCPAuthority } from './contract';
 import type { ScheduledTokenContext } from '../context';
 import { isScheduledMCPToolReadOnly, ScheduledMCPPolicyError } from './policy';
 import { getScheduledMCPConfigurationRevision } from './configuration';
+import { ScheduledMCPBearerError } from '~/mcp/errors';
 import { ScheduleMCPConsentError } from './service';
 import { isOwnedAbortError } from '~/utils/errors';
 import { waitUntilDeadline } from '~/mcp/utils';
@@ -212,7 +213,11 @@ export function createScheduleMCPExecution(deps: ScheduleMCPExecutionDeps): {
               }
               signal?.throwIfAborted();
             } catch (error) {
-              if (error instanceof ScheduledMCPPolicyError || isOwnedAbortError(error, signal))
+              if (
+                error instanceof ScheduledMCPPolicyError ||
+                error instanceof ScheduledMCPBearerError ||
+                isOwnedAbortError(error, signal)
+              )
                 throw error;
               deny('dependency_unavailable');
             }

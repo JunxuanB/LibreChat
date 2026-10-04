@@ -1953,6 +1953,10 @@ function createInitializeClient(dependencies = {}) {
             restoredContext: params.scheduledTokenContext,
             host: dependencies.scheduledBearerHost,
             signal: params.signal,
+            streamId: params.req._resumableStreamId,
+            jobCreatedAt: params.jobCreatedAt,
+            recordFailure: (input) =>
+              require('~/server/services/Schedules').recordMCPToolAuthFailure(input),
           },
           () => initializeClientWithProvider({ ...params, upstreamTokenProviderResolver }),
         ),

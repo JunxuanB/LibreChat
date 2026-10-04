@@ -235,7 +235,14 @@ export interface DirectBearerRecoveryState {
 }
 
 /** Host-supplied live headers; transport requests cannot reuse a prior allow observation. */
-export type MCPRequestHeaderResolver = (signal?: AbortSignal) => Promise<Record<string, string>>;
+export type MCPRequestHeaderResolver = ((
+  signal?: AbortSignal,
+) => Promise<Record<string, string>>) & {
+  /** Records asynchronous transport denials at the owning request boundary. */
+  recordFailure?: (error: unknown) => Promise<void>;
+  /** Pending owner evidence must be admitted before transport disposal completes. */
+  settle?: () => Promise<void>;
+};
 
 export interface BasicConnectionOptions {
   resolveRequestHeaders?: MCPRequestHeaderResolver;

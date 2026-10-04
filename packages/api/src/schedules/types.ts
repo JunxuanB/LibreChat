@@ -4,6 +4,7 @@ import type {
   AgentTriggerDeliveryStatus,
   AgentTriggerDeliveryFailure,
 } from '@librechat/data-schemas';
+import type { ScheduledMCPIdentity } from 'librechat-data-provider';
 import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { AgentTriggerEnqueueOptions, AgentTriggerEnvelope } from '../agents/triggers';
@@ -349,3 +350,13 @@ export type ScheduleMCPPreflight = (
     manual?: boolean;
   },
 ) => Promise<ScheduleMCPOutcome[]>;
+
+/** Trusted occurrence attribution for a safe MCP authorization failure. */
+export interface ScheduleMCPFailureInput {
+  error: unknown;
+  streamId?: string;
+  jobCreatedAt?: number;
+  userId?: string;
+  serverName: string;
+  identity?: ScheduledMCPIdentity;
+}
