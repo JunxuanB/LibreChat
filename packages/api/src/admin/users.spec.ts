@@ -197,7 +197,7 @@ describe('createAdminUsersHandlers', () => {
       await handlers.searchUsers(req, res);
 
       const filter = findUsers.mock.calls[0][0];
-      expect(filter).toEqual(buildUserSearchFilter('Test'));
+      expect(filter).toEqual(buildUserSearchFilter('Test', { legacyPrefix: true }));
       expect(filter.$or).toEqual(
         expect.arrayContaining([
           { nameTokens: /^test/ },
@@ -229,9 +229,10 @@ describe('createAdminUsersHandlers', () => {
 
       const filter = findUsers.mock.calls[0][0];
       expect(filter.$and[0].$or).toContainEqual({ emailTokens: /^test\.user\+1/ });
+      /** Documents awaiting the backfill keep the old anchored prefix match. */
       expect(filter.$and[0].$or).toContainEqual({
         nameTokens: { $exists: false },
-        name: /test\.user\+1/i,
+        name: /^test\.user\+1/i,
       });
     });
 

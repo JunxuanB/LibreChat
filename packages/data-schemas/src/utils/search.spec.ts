@@ -176,6 +176,12 @@ describe('buildUserSearchFilter', () => {
     expect(filter.$or).toContainEqual({ nameTokens: { $exists: false }, name: /José/i });
   });
 
+  it('anchors the legacy fallback for callers whose old search was a prefix match', () => {
+    const filter = buildUserSearchFilter('mith', { legacyPrefix: true })!;
+    expect(filter.$or).toContainEqual({ nameTokens: { $exists: false }, name: /^mith/i });
+    expect(filter.$or).not.toContainEqual({ nameTokens: { $exists: false }, name: /mith/i });
+  });
+
   it('requires every query token and also tries the whole query on full-value fields', () => {
     const filter = buildUserSearchFilter('john smi') as { $and: Array<{ $or: unknown[] }> };
     expect(filter.$and).toHaveLength(2);

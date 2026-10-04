@@ -137,7 +137,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
       }
 
       const searchLimit = Math.min(Math.max(1, parseInt(limitStr, 10) || 20), 50);
-      const filter = buildUserSearchFilter(trimmed);
+      const filter = buildUserSearchFilter(trimmed, { legacyPrefix: true });
       const users = filter
         ? await findUsers(filter, '_id name email username avatar', {
             limit: searchLimit,

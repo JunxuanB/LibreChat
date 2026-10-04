@@ -212,6 +212,11 @@ export function withSearchTokens<T>(
   return (next ?? source) as T;
 }
 
+export interface SearchFilterOptions {
+  /** Anchor the legacy fallback at the start of the field, for callers whose old search was a prefix match. */
+  legacyPrefix?: boolean;
+}
+
 /**
  * Builds the filter for a word-prefix search, or `null` when the query has
  * nothing to match.
@@ -220,13 +225,15 @@ export function withSearchTokens<T>(
  * differ per token, so "john gmail" finds John at gmail.com). Fields that
  * store their whole value (email, username) also match the whole query as a
  * prefix, so a pasted "john.smith@exa" works. Documents written before the
- * token fields existed fall back to the old unanchored, case-insensitive
- * regex on the source field; the fallback branches seek the token index on
- * `$exists: false` and match nothing once the backfill has run.
+ * token fields existed fall back to the caller's old case-insensitive regex
+ * on the source field (unanchored, or anchored with `legacyPrefix`); the
+ * fallback branches seek the token index on `$exists: false` and match
+ * nothing once the backfill has run.
  */
 export function buildSearchTokenFilter(
   fields: readonly SearchTokenField[],
   query: string,
+  options: SearchFilterOptions = {},
 ): Record<string, unknown> | null {
   const trimmed = query.trim();
   const normalized = normalizeSearchText(trimmed);
@@ -241,7 +248,7 @@ export function buildSearchTokenFilter(
     return null;
   }
 
-  const legacy = new RegExp(escapeRegExp(trimmed), 'i');
+  const legacy = new RegExp(`${options.legacyPrefix ? '^' : ''}${escapeRegExp(trimmed)}`, 'i');
   const shared: Record<string, unknown>[] = [];
   for (const field of fields) {
     if (matchWhole && field.kind !== 'words') {
@@ -260,8 +267,11 @@ export function buildSearchTokenFilter(
   return clauses.length === 1 ? clauses[0] : { $and: clauses };
 }
 
-export function buildUserSearchFilter(query: string): Record<string, unknown> | null {
-  return buildSearchTokenFilter(USER_SEARCH_TOKEN_FIELDS, query);
+export function buildUserSearchFilter(
+  query: string,
+  options?: SearchFilterOptions,
+): Record<string, unknown> | null {
+  return buildSearchTokenFilter(USER_SEARCH_TOKEN_FIELDS, query, options);
 }
 
 export function buildGroupSearchFilter(query: string): Record<string, unknown> | null {
