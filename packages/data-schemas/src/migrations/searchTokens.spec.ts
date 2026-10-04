@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
+import { Collection } from 'mongodb';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import type { Document, FindOptions } from 'mongodb';
 import { backfillSearchTokens, warnOnMissingSearchTokens } from './searchTokens';
 import logger from '~/config/winston';
 
@@ -153,37 +155,41 @@ describe('warnOnMissingSearchTokens', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  /** Runs the startup check and explains the `users` probe it actually issued. */
+  const explainUserProbe = async () => {
+    const findOne = jest.spyOn(Collection.prototype, 'findOne');
+    try {
+      await warnOnMissingSearchTokens(mongoose.connection);
+      const call = findOne.mock.contexts.findIndex(
+        (collection) => collection.collectionName === 'users',
+      );
+      const [filter, options] = findOne.mock.calls[call] as [Document, FindOptions];
+      expect(options.maxTimeMS).toBeGreaterThan(0);
+      return await users().find(filter).limit(1).explain('executionStats');
+    } finally {
+      findOne.mockRestore();
+    }
+  };
+
   it('stops at the first document without tokens when the token indexes do not exist', async () => {
     await users().insertMany(
       Array.from({ length: 200 }, (_, i) => ({ name: `Old ${i}`, email: `old${i}@x.io` })),
     );
-    const explain = await users()
-      .find({
-        $or: ['nameTokens', 'emailTokens', 'usernameTokens'].map((field) => ({
-          [field]: { $exists: false },
-        })),
-      })
-      .limit(1)
-      .explain('executionStats');
+    const explain = await explainUserProbe();
     expect(explain.executionStats.totalDocsExamined).toBe(1);
+    expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('probes through the token indexes, not a collection scan', async () => {
+  it('examines no documents once the backfill has built the indexes and filled every token', async () => {
     await users().insertMany(
       Array.from({ length: 50 }, (_, i) => ({ name: `User ${i}`, email: `u${i}@x.io` })),
     );
     await backfillSearchTokens(mongoose.connection);
-    const explain = await users()
-      .find({
-        $or: ['nameTokens', 'emailTokens', 'usernameTokens'].map((field) => ({
-          [field]: { $exists: false },
-        })),
-      })
-      .limit(1)
-      .explain('queryPlanner');
-    const plan = JSON.stringify(explain.queryPlanner.winningPlan);
-    expect(plan).toContain('IXSCAN');
-    expect(plan).not.toContain('COLLSCAN');
+    jest.clearAllMocks();
+    const explain = await explainUserProbe();
+    expect(JSON.stringify(explain.queryPlanner.winningPlan)).not.toContain('COLLSCAN');
+    expect(explain.executionStats.totalDocsExamined).toBe(0);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('logs a failed check instead of failing startup', async () => {
