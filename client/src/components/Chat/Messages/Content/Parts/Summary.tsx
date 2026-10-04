@@ -77,12 +77,12 @@ const SummaryButton = memo(
     return (
       <div className="group/summary flex w-full items-center justify-between gap-2">
         <Button
-          variant="ghost"
+          variant="disclosure"
           onClick={onClick}
           aria-expanded={isExpanded}
           aria-controls={contentId}
           className={cn(
-            'group/button h-auto flex-1 justify-start gap-0 rounded-lg p-0 leading-[18px] font-normal hover:bg-transparent',
+            'group/button h-auto flex-1 justify-start gap-0 rounded-lg p-0 leading-[18px] font-normal',
             fontSize,
           )}
         >
