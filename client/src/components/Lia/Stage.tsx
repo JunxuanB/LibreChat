@@ -255,7 +255,8 @@ export default function Stage({
       ) {
         return false;
       }
-      if (!engine.play(id, 2, now)) {
+      /* Wall time for the cooldowns; the engine keeps its own clock, paused while she has no room. */
+      if (!engine.play(id, 2)) {
         return false;
       }
       cooldowns.set(id, now);
@@ -283,7 +284,7 @@ export default function Stage({
         return;
       }
       const now = performance.now();
-      engine.noteTyping(now);
+      engine.noteTyping();
       engine.caret = caretPoint(target, mirror, root.getBoundingClientRect());
       /* Deleting back under the threshold re-arms the reaction for the next long message. */
       if (target.value.length <= 280) {
