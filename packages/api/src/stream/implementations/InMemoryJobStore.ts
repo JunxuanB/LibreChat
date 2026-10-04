@@ -22,6 +22,7 @@ import type {
   IdempotencyClaimValue,
   IdempotencyClaimResult,
   ParkedSteerClaim,
+  ScheduleCleanupScope,
 } from '~/stream/interfaces/IJobStore';
 import type { EarlyBufferOverflowState } from '../../types/earlyBufferRecovery';
 import type { RecoveredSteerPayload } from '~/stream/SteerRecovery';
@@ -1130,6 +1131,24 @@ export class InMemoryJobStore implements IJobStoreV2 {
       }
     }
     return pending;
+  }
+
+  async hasScheduleCleanupObligation(scope: ScheduleCleanupScope): Promise<boolean> {
+    for (const job of this.jobs.values()) {
+      if (
+        !job.scheduleId ||
+        (scope.scheduleId && job.scheduleId !== scope.scheduleId) ||
+        (scope.userId && job.userId !== scope.userId)
+      )
+        continue;
+      if (
+        job.providerDrained === false ||
+        job.terminalPersistencePending === true ||
+        job.terminalHostActionPending === true
+      )
+        return true;
+    }
+    return false;
   }
 
   async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {

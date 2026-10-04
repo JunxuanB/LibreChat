@@ -24,6 +24,7 @@ import type {
   JobIdentity,
   JobState,
   ScheduleMCPFailureInput,
+  ScheduleMCPSettlementBoundary,
 } from './types';
 import type { SerializableJobData } from '../stream/interfaces/IJobStore';
 import type { AgentCheckpointGeneration } from '../agents/checkpointer';
@@ -216,6 +217,7 @@ export interface SchedulesService {
   ) => Promise<FireResult | null>;
   recordScheduleOutcome: (input: RecordScheduleOutcomeInput) => Promise<boolean>;
   recordMCPToolAuthFailure: (input: ScheduleMCPFailureInput) => Promise<boolean>;
+  registerMCPSettlement: (boundary: ScheduleMCPSettlementBoundary) => void;
   /**
    * Stamps a scheduled run's interactive Stop BEFORE the abort is signalled, so the owner
    * settlement barrier, reconciliation, and schedule/account deletion hold off settling or
@@ -490,10 +492,28 @@ export function createSchedulesService(
       outcomes: ScheduleMCPOutcome[];
     }
   >();
+  const mcpBoundaries = new Map<
+    string,
+    { scheduleId: string; quiesce: () => Promise<void>; flight?: Promise<void> }
+  >();
+  function registerMCPSettlement(boundary: ScheduleMCPSettlementBoundary): void {
+    const key = receiptKey(boundary.streamId, boundary.jobCreatedAt);
+    if (mcpBoundaries.get(key)?.flight) throw new ScheduledMCPReceiptFencedError();
+    mcpBoundaries.set(key, { scheduleId: boundary.identity.scheduleId, quiesce: boundary.quiesce });
+  }
+  async function hasScheduleCleanupObligation(scope: {
+    scheduleId?: string;
+    userId?: string;
+  }): Promise<boolean> {
+    const store = GenerationJobManager.getJobStore();
+    if (!store) return false;
+    return !store.hasScheduleCleanupObligation || (await store.hasScheduleCleanupObligation(scope));
+  }
   async function eraseSettledSchedule(scheduleId: string): Promise<boolean> {
     for (const pending of pendingBearerFailures.values()) {
       if (pending.identity?.scheduleId === scheduleId) return false;
     }
+    if (await hasScheduleCleanupObligation({ scheduleId })) return false;
     return methods.eraseScheduleIfDrained(scheduleId);
   }
 
@@ -1281,6 +1301,18 @@ export function createSchedulesService(
     if (!scheduleId || !scheduledFor) {
       return true;
     }
+    const boundaryKey =
+      streamId && jobCreatedAt != null ? receiptKey(streamId, jobCreatedAt) : undefined;
+    const boundary = boundaryKey && mcpBoundaries.get(boundaryKey);
+    if (boundary && boundary.scheduleId === scheduleId) {
+      try {
+        boundary.flight ??= boundary.quiesce();
+        await boundary.flight;
+        if (mcpBoundaries.get(boundaryKey!) === boundary) mcpBoundaries.delete(boundaryKey!);
+      } catch {
+        return false;
+      }
+    }
     let terminal = status !== 'requires_action';
     let mcp: ScheduleMCPOutcome[] = [];
     const receipt =
@@ -1449,6 +1481,22 @@ export function createSchedulesService(
         });
         if (terminal && streamId && jobCreatedAt != null && !retiredPolicyGeneration) {
           try {
+            const current = await GenerationJobManager.getJobStore()?.getJob(streamId);
+            if (
+              current?.createdAt === jobCreatedAt &&
+              (current.providerDrained === false ||
+                current.terminalPersistencePending === true ||
+                current.terminalHostActionPending === true)
+            ) {
+              // Its host callback may settle Mongo while independently retained cleanup stays pending.
+              return true;
+            }
+            const latest = receipt && pendingBearerFailures.get(receipt);
+            if (
+              latest &&
+              (!latest.admitted || mergeReceipts(mcp, latest.outcomes).length !== mcp.length)
+            )
+              return false;
             await GenerationJobManager.updateMetadata(
               streamId,
               { preserveForScheduleReconcile: false },
@@ -2251,7 +2299,10 @@ export function createSchedulesService(
     // finishes and records a terminal outcome during the drain poll. The run is genuinely
     // settled at that point, so keeping its id in `unconfirmed` would defer account
     // deletion forever. The DRAIN is the authority; delivery is only a hint.
-    const confirmed = remaining === 0 && !(await cleanupStillPending(cleanupPending));
+    const confirmed =
+      remaining === 0 &&
+      !(await cleanupStillPending(cleanupPending)) &&
+      !(await hasScheduleCleanupObligation({ userId }));
     if (confirmed && unconfirmed.length > 0) {
       logger.info(
         `[schedules] ${unconfirmed.length} abort(s) were not confirmed delivered but their ` +
@@ -2285,6 +2336,7 @@ export function createSchedulesService(
     fireScheduleNow,
     recordScheduleOutcome,
     recordMCPToolAuthFailure,
+    registerMCPSettlement,
     beginScheduledStop,
     acknowledgeScheduledStopPersistence,
     claimScheduleResume,

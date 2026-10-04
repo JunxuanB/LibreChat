@@ -329,6 +329,8 @@ export interface RequestScopedMCPConnectionStore {
   disposeConnection?: (connectionKey: string, connection: unknown) => Promise<void>;
   /** Set before cleanup snapshots pending work; new connection attempts must fail closed. */
   cleanupStarted?: boolean;
+  /** Completion cutoff: no new occurrence dispatch or connection may begin. */
+  quiesceStarted?: boolean;
 }
 
 export interface OAuthStartOptions {

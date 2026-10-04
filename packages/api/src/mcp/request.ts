@@ -58,6 +58,15 @@ interface Disconnectable {
 }
 
 const contexts = new WeakMap<object, MCPRequestContext>();
+const cleanupFlights = new WeakMap<RequestScopedMCPConnectionStore, Promise<void>>();
+
+/** Completion cancellation is not evidence of withdrawn consent. */
+export class MCPRequestQuiescedError extends Error {
+  constructor() {
+    super('MCP request has settled.');
+    this.name = 'AbortError';
+  }
+}
 
 export function createMCPRequestContext(): MCPRequestContext {
   return {
@@ -78,48 +87,68 @@ function isDisconnectable(value: unknown): value is Disconnectable {
   );
 }
 
-export async function cleanupMCPRequestContext(context?: MCPRequestContext): Promise<void> {
-  if (!context || context.cleanupStarted) {
-    return;
-  }
+/** Stops occurrence work and exposes admission failure to the settlement owner. */
+export function quiesceMCPRequestContext(context?: RequestScopedMCPConnectionStore): Promise<void> {
+  if (!context) return Promise.resolve();
+  const previous = cleanupFlights.get(context);
+  if (previous) return previous;
+  context.quiesceStarted = true;
   context.cleanupStarted = true;
+  const flight = disposeContext(context, true);
+  cleanupFlights.set(context, flight);
+  return flight;
+}
 
+async function disposeContext(
+  context: RequestScopedMCPConnectionStore,
+  strict = false,
+): Promise<void> {
   const connections = new Map<Disconnectable, string>();
-  for (const [connectionKey, connection] of context.connections) {
-    if (isDisconnectable(connection)) {
-      connections.set(connection, connectionKey);
-    }
+  for (const [key, connection] of context.connections) {
+    if (isDisconnectable(connection)) connections.set(connection, key);
   }
-
-  const pending = Array.from(context.pending.entries());
-  if (pending.length > 0) {
+  try {
+    const pending = Array.from(context.pending.entries());
     const settled = await Promise.allSettled(pending.map(([, promise]) => promise));
     for (let index = 0; index < settled.length; index++) {
       const result = settled[index];
-      if (result.status === 'fulfilled' && isDisconnectable(result.value)) {
+      if (result.status === 'fulfilled' && isDisconnectable(result.value))
         connections.set(result.value, pending[index][0]);
-      }
     }
+    const disposed = await Promise.allSettled(
+      Array.from(connections).map(async ([connection, key]) => {
+        // Pool eviction is best-effort. Settlement must observe the connection's admission result.
+        if (strict && connection.dispose) {
+          try {
+            await connection.dispose();
+          } finally {
+            await context.disposeConnection?.(key, connection);
+          }
+        } else if (context.disposeConnection) await context.disposeConnection(key, connection);
+        else if (connection.dispose) await connection.dispose();
+        else await connection.disconnect();
+      }),
+    );
+    const failed = disposed.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+  } finally {
+    context.connections.clear();
+    context.pending.clear();
   }
+}
 
-  await Promise.allSettled(
-    Array.from(connections).map(async ([connection, connectionKey]) => {
-      try {
-        if (context.disposeConnection) {
-          await context.disposeConnection(connectionKey, connection);
-        } else if (connection.dispose) {
-          await connection.dispose();
-        } else {
-          await connection.disconnect();
-        }
-      } catch {
-        logger.warn('[MCP Request Context] Failed to dispose request-scoped connection');
-      }
-    }),
-  );
-
-  context.connections.clear();
-  context.pending.clear();
+export async function cleanupMCPRequestContext(context?: MCPRequestContext): Promise<void> {
+  if (!context) return;
+  let flight = cleanupFlights.get(context);
+  if (!flight) {
+    if (context.cleanupStarted) return;
+    context.cleanupStarted = true;
+    flight = disposeContext(context);
+    cleanupFlights.set(context, flight);
+  }
+  await flight.catch(() => {
+    logger.warn('[MCP Request Context] Failed to dispose request-scoped connection');
+  });
 }
 
 function isResponseFinished(res?: MCPResponseLike): boolean {

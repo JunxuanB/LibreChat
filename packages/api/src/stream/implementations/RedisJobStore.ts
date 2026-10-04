@@ -32,6 +32,7 @@ import type {
   SteerReceipt,
   SteerReceiptInput,
   ParkedSteerClaim,
+  ScheduleCleanupScope,
 } from '~/stream/interfaces/IJobStore';
 import type { EarlyBufferOverflowState } from '../../types/earlyBufferRecovery';
 import type { ResolvedAskUserQuestion } from '~/agents/hitl/resume';
@@ -3299,6 +3300,57 @@ export class RedisJobStore implements IJobStoreV2 {
     const current = await this.getJob(streamId);
     if (current?.createdAt === createdAt && current.preserveForScheduleReconcile === true)
       await this.redis.sadd(KEYS.scheduleReconcileJobs, member);
+  }
+
+  async hasScheduleCleanupObligation(scope: ScheduleCleanupScope): Promise<boolean> {
+    let cursor = '0';
+    do {
+      const [next, members] = await this.redis.sscan(
+        KEYS.scheduleReconcileJobs,
+        cursor,
+        'COUNT',
+        100,
+      );
+      cursor = next;
+      if (members.length === 0) continue;
+      const indexed = members.map(parseTerminalHostActionMember);
+      const fields = [
+        'createdAt',
+        'scheduleId',
+        'userId',
+        'providerDrained',
+        'terminalPersistencePending',
+        'terminalHostActionPending',
+      ] as const;
+      let values: Array<Array<string | null>>;
+      if (this.isCluster) {
+        // A page spans hash slots. Let Cluster route independent commands to their nodes.
+        values = await Promise.all(
+          indexed.map(({ streamId }) => this.redis.hmget(KEYS.job(streamId), ...fields)),
+        );
+      } else {
+        const pipeline = this.redis.pipeline();
+        for (const { streamId } of indexed) pipeline.hmget(KEYS.job(streamId), ...fields);
+        const rows = await pipeline.exec();
+        if (!rows) throw new Error('Schedule cleanup read unavailable');
+        values = rows.map(([error, value]) => {
+          if (error) throw error;
+          return value as Array<string | null>;
+        });
+      }
+      for (let index = 0; index < values.length; index++) {
+        const [epoch, scheduleId, userId, provider, persistence, host] = values[index];
+        if (
+          !scheduleId ||
+          epoch !== String(indexed[index].createdAt) ||
+          (scope.scheduleId && scheduleId !== scope.scheduleId) ||
+          (scope.userId && userId !== scope.userId)
+        )
+          continue;
+        if (provider === '0' || persistence === '1' || host === '1') return true;
+      }
+    } while (cursor !== '0');
+    return false;
   }
 
   async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {

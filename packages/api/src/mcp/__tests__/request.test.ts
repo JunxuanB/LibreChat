@@ -2,6 +2,9 @@ import { EventEmitter } from 'events';
 
 import {
   createMCPRuntimeRequestBody,
+  createMCPRequestContext,
+  quiesceMCPRequestContext,
+  cleanupMCPRequestContext,
   getMCPRequestContext,
   cleanupMCPRequestContextForReq,
 } from '~/mcp/request';
@@ -152,5 +155,30 @@ describe('MCP runtime request body', () => {
         requestBody,
       ),
     ).toEqual(['parentMessageId']);
+  });
+});
+
+describe('strict occurrence completion', () => {
+  it('joins cleanup and propagates fenced admission after disposing every connection', async () => {
+    const context = createMCPRequestContext();
+    const failure = Object.assign(new Error('generation retired'), { name: 'AbortError' });
+    let reject!: (error: Error) => void;
+    const admission = new Promise<void>((_, fail) => {
+      reject = fail;
+    });
+    const first = { disconnect: jest.fn(), dispose: jest.fn(() => admission) };
+    const second = { disconnect: jest.fn(), dispose: jest.fn(async () => undefined) };
+    context.connections.set('first', first);
+    context.connections.set('second', second);
+    const observe = quiesceMCPRequestContext(context).catch((error) => error);
+    const cleanup = cleanupMCPRequestContext(context);
+    expect(context.quiesceStarted).toBe(true);
+    reject(failure);
+    await expect(observe).resolves.toBe(failure);
+    await cleanup;
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+    expect(context.connections.size).toBe(0);
+    await expect(quiesceMCPRequestContext(context)).rejects.toBe(failure);
   });
 });

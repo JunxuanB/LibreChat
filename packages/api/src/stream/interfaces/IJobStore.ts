@@ -915,6 +915,11 @@ export interface ResumeState {
  * the additional {@link IJobStoreV2} capabilities before accepting a custom
  * store at runtime.
  */
+export interface ScheduleCleanupScope {
+  scheduleId?: string;
+  userId?: string;
+}
+
 export interface IJobStore {
   readonly detachedAgentEventActionStoreMode?: DetachedAgentEventActionStoreMode;
   /** Receipt evidence survives loss of the generation worker; absent is volatile. */
@@ -971,6 +976,8 @@ export interface IJobStore {
   getTerminalHostActionJobs?(): Promise<SerializableJobData[]>;
   /** Generation-scoped schedule settlement outbox, including already-bookkept runs. */
   getScheduleReconcileJobs?(limit: number): Promise<SerializableJobData[]>;
+  /** Independent of active Mongo runs. Missing capability cannot certify cleanup. */
+  hasScheduleCleanupObligation?(scope: ScheduleCleanupScope): Promise<boolean>;
   /** Enumerates detached Event Actor completion generations from a versioned
    * retry lane known only to capable consumers. Redis keeps this lane separate
    * from `getTerminalHostActionJobs` so a rolling-deployment replica that only

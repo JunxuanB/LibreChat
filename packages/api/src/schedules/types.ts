@@ -360,3 +360,11 @@ export interface ScheduleMCPFailureInput {
   serverName: string;
   identity?: ScheduledMCPIdentity;
 }
+
+/** The trusted host retires this exact MCP request before occurrence settlement. */
+export interface ScheduleMCPSettlementBoundary {
+  identity: ScheduledMCPIdentity;
+  streamId: string;
+  jobCreatedAt: number;
+  quiesce: () => Promise<void>;
+}

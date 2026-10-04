@@ -1343,3 +1343,33 @@ describe('RedisJobStore', () => {
     expect(store.getCollectedUsage('stream-memory-content')).toEqual([]);
   });
 });
+
+it('routes schedule cleanup reads across Cluster slots without unsafe cross-node pipelines', async () => {
+  const redis = {
+    isCluster: true,
+    sscan: jest.fn().mockResolvedValue(['0', ['["first",1]', '["second",2]']]),
+    hmget: jest
+      .fn()
+      .mockResolvedValueOnce(['1', 'schedule', 'foreign', '1', '0', '1'])
+      .mockResolvedValueOnce(['2', 'schedule', 'owner', '1', '0', '1']),
+    pipeline: jest.fn(),
+  } as unknown as Cluster;
+  const store = new RedisJobStore(redis);
+  await expect(store.hasScheduleCleanupObligation({ userId: 'owner' })).resolves.toBe(true);
+  expect(redis.pipeline).not.toHaveBeenCalled();
+  expect(redis.hmget).toHaveBeenCalledTimes(2);
+});
+
+it('does not treat a stale cleanup hint as a successor obligation or a failed read as absence', async () => {
+  const redis = {
+    isCluster: true,
+    sscan: jest.fn().mockResolvedValue(['0', ['["stream",1]']]),
+    hmget: jest.fn().mockResolvedValue(['2', 'schedule', 'owner', '1', '0', '1']),
+  } as unknown as Cluster;
+  const store = new RedisJobStore(redis);
+  await expect(store.hasScheduleCleanupObligation({ scheduleId: 'schedule' })).resolves.toBe(false);
+  jest.mocked(redis.hmget).mockRejectedValue(new Error('Unavailable'));
+  await expect(store.hasScheduleCleanupObligation({ userId: 'owner' })).rejects.toThrow(
+    'Unavailable',
+  );
+});

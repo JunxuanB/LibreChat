@@ -29,7 +29,8 @@ jest.mock('../stream/GenerationJobManager', () => ({
   GenerationJobManager: {
     // No configured job store by default: abortScheduledJob returns false, so the drain
     // loop is driven purely by getActiveRunsForUser (the run rows).
-    getJobStore: () => mockJobStore,
+    getJobStore: () =>
+      mockJobStore && { ...mockJobStore, hasScheduleCleanupObligation: async () => false },
     abortJob: jest.fn(),
     updateMetadata: jest.fn(async () => undefined),
     isRedis: false,

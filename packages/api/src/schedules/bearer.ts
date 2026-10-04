@@ -18,16 +18,20 @@ import type {
   RequestScopedMCPConnectionStore,
   MCPRequestHeaderResolver,
 } from '~/mcp/types';
+import type { ScheduleMCPFailureInput, ScheduleMCPSettlementBoundary } from './types';
 import type { ScheduleMCPEnrollmentResolver } from './authorization/service';
 import type { ScheduledTokenContext } from './context';
-import type { ScheduleMCPFailureInput } from './types';
+import {
+  getMCPRequestContext,
+  quiesceMCPRequestContext,
+  MCPRequestQuiescedError,
+} from '~/mcp/request';
 import { ScheduledMCPBearerError, isMCPTransportAuthenticationError } from '~/mcp/errors';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
 import { readScheduleFireContext, isScheduleFireRequest } from './trigger';
 import { getScheduleMCPExecution } from './authorization/execution';
 import { ScheduleMCPConsentError } from './authorization/service';
 import { usesDirectOpenIDBearerRecovery } from '~/mcp/openid';
-import { getMCPRequestContext } from '~/mcp/request';
 import { awaitOboOperation } from '~/mcp/oauth/obo';
 import { isOwnedAbortError } from '~/utils/errors';
 import { applyRequestHeaders } from '~/mcp/utils';
@@ -297,6 +301,7 @@ export function createScheduledMCPBearerHeaderResolver(
   const resolver: MCPRequestHeaderResolver = async (signal) => {
     if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
     signal?.throwIfAborted();
+    if (context.quiesceStarted) throw new MCPRequestQuiescedError();
     if (context.cleanupStarted) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
     const resolved = await resolveScheduledMCPBearerConfig({
       config,
@@ -306,6 +311,7 @@ export function createScheduledMCPBearerHeaderResolver(
       context,
     });
     signal?.throwIfAborted();
+    if (context.quiesceStarted) throw new MCPRequestQuiescedError();
     if (context.cleanupStarted) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
     const authorization = Object.entries(
       'headers' in resolved ? (resolved.headers ?? {}) : {},
@@ -373,12 +379,14 @@ export async function resolveScheduledMCPBearerConfig(
     context?: RequestScopedMCPConnectionStore;
   },
 ): Promise<ParsedServerConfig> {
+  if (input.context?.quiesceStarted) throw new MCPRequestQuiescedError();
   if (input.context?.cleanupStarted)
     throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
   const config =
     input.context && scopes.has(input.context)
       ? await scopes.get(input.context)!.resolve(input)
       : input.config;
+  if (input.context?.quiesceStarted) throw new MCPRequestQuiescedError();
   if (input.context?.cleanupStarted)
     throw new ScheduledMCPBearerError('binding_mismatch', input.serverName);
   return config;
@@ -400,6 +408,7 @@ export function prepareScheduledMCPBearer(input: {
   jobCreatedAt?: number;
   /** Host facade waits for durable admission, or fences a retired generation. */
   recordFailure?: (input: ScheduleMCPFailureInput) => Promise<boolean>;
+  registerSettlement?: (boundary: ScheduleMCPSettlementBoundary) => void;
 }): void {
   const context = input.context ?? getMCPRequestContext(input.req);
   const execution = getScheduleMCPExecution(context);
@@ -449,6 +458,13 @@ export function prepareScheduledMCPBearer(input: {
           serverName: error.outcomes[0].server,
         })
     : undefined;
+  if (streamId && jobCreatedAt != null)
+    input.registerSettlement?.({
+      identity: captured,
+      streamId,
+      jobCreatedAt,
+      quiesce: () => quiesceMCPRequestContext(context),
+    });
   attachScheduledMCPBearer(
     context,
     captured,

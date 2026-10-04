@@ -1957,6 +1957,8 @@ function createInitializeClient(dependencies = {}) {
             jobCreatedAt: params.jobCreatedAt,
             recordFailure: (input) =>
               require('~/server/services/Schedules').recordMCPToolAuthFailure(input),
+            registerSettlement: (input) =>
+              require('~/server/services/Schedules').registerMCPSettlement(input),
           },
           () => initializeClientWithProvider({ ...params, upstreamTokenProviderResolver }),
         ),

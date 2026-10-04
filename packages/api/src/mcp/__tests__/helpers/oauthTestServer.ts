@@ -56,7 +56,9 @@ export function trackSockets(httpServer: http.Server): () => Promise<void> {
 }
 
 export interface OAuthTestServerOptions {
-  resourceFailure?: (req: http.IncomingMessage) => 401 | 403 | undefined;
+  resourceFailure?: (
+    req: http.IncomingMessage,
+  ) => 401 | 403 | undefined | Promise<401 | 403 | undefined>;
   tokenTTLMs?: number;
   issueRefreshTokens?: boolean;
   refreshTokenTTLMs?: number;
@@ -473,7 +475,7 @@ export async function createOAuthMCPServer(
 
     // All other paths require Bearer token auth
     onResourceRequest?.(req);
-    const failure = options.resourceFailure?.(req);
+    const failure = await options.resourceFailure?.(req);
     if (failure) {
       writeBearerChallenge(res, failure, 'invalid_token', 'Rejected bearer');
       return;

@@ -257,6 +257,9 @@ describe('initializeClient — processAgent ACL gate', () => {
       const receipts = jest
         .spyOn(require('~/server/services/Schedules'), 'recordMCPToolAuthFailure')
         .mockResolvedValue(true);
+      const boundaries = jest
+        .spyOn(require('~/server/services/Schedules'), 'registerMCPSettlement')
+        .mockImplementation(() => {});
       const resolve = jest.fn(async (input) => input.config);
       const bind = jest.fn((identity) => ({ identity, resolve, reject: jest.fn() }));
       const host = createInitializeClient({ scheduledBearerHost: { bind } });
@@ -350,6 +353,15 @@ describe('initializeClient — processAgent ACL gate', () => {
         },
       });
       await headers.settle();
+      expect(boundaries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          streamId: 'notification-owner',
+          jobCreatedAt: 42,
+          quiesce: expect.any(Function),
+          identity: expect.objectContaining({ agentId: PRIMARY_ID, ownerId: req.user.id }),
+        }),
+      );
+      boundaries.mockRestore();
       receipts.mockRestore();
     },
   );

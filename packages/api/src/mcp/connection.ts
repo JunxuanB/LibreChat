@@ -1116,6 +1116,7 @@ export class MCPConnection extends EventEmitter {
   private requestHeaders?: Record<string, string> | null;
   private readonly resolveRequestHeaders?: t.MCPRequestHeaderResolver;
   private readonly requestAuthorization: { error?: unknown; closed: boolean } = { closed: false };
+  private readonly pendingRequests = new Set<Promise<unknown>>();
   private oauthRequired = false;
   private oauthRecovery = false;
   private readonly useSSRFProtection: boolean;
@@ -1352,6 +1353,7 @@ export class MCPConnection extends EventEmitter {
     const authorizeHeaders = this.resolveRequestHeaders
       ? this.authorizeRequestHeaders.bind(this)
       : undefined;
+    const trackRequest = this.resolveRequestHeaders ? this.trackRequest.bind(this) : undefined;
     const reportRejection = this.resolveRequestHeaders?.recordFailure
       ? this.failRequestAuthorization.bind(this)
       : undefined;
@@ -1427,10 +1429,10 @@ export class MCPConnection extends EventEmitter {
       }
     }
 
-    return async function customFetch(
+    const customFetch = async (
       input: UndiciRequestInfo,
       init?: UndiciRequestInit,
-    ): Promise<UndiciResponse> {
+    ): Promise<UndiciResponse> => {
       /**
        * Resolve the input shape upfront so the redirect loop can work with a
        * (string url, init) pair uniformly. When `input` is a `Request`, we
@@ -1599,6 +1601,20 @@ export class MCPConnection extends EventEmitter {
         currentUrlString = targetUrl.href;
       }
     };
+    return trackRequest
+      ? (input, init) => trackRequest(() => customFetch(input, init))
+      : customFetch;
+  }
+
+  private trackRequest<T>(operation: () => Promise<T>): Promise<T> {
+    if (!this.resolveRequestHeaders) return operation();
+    const request = operation();
+    this.pendingRequests.add(request);
+    void request.then(
+      () => this.pendingRequests.delete(request),
+      () => this.pendingRequests.delete(request),
+    );
+    return request;
   }
 
   private async authorizeRequestHeaders(
@@ -1760,78 +1776,79 @@ export class MCPConnection extends EventEmitter {
               signal: abortController.signal,
             },
             eventSourceInit: {
-              fetch: async (url, init) => {
-                const { urlString, resolvedInit } = await resolveFetchInput(
-                  url as UndiciRequestInfo,
-                  init as UndiciRequestInit,
-                );
-                await assertProxiedRequestTargetAllowed(
-                  urlString,
-                  this.proxyConfig,
-                  this.useSSRFProtection,
-                  this.allowedAddresses,
-                );
-                /** Merge headers: SSE defaults < init headers < user headers (user wins) */
-                const fetchHeaders = Object.assign(
-                  {},
-                  SSE_REQUEST_HEADERS,
-                  resolvedInit?.headers,
-                  headers,
-                );
-                const authorized = this.resolveRequestHeaders
-                  ? await this.authorizeRequestHeaders(resolvedInit?.signal ?? undefined)
-                  : undefined;
-                let liveHeaders = this.directBearerRecoveryEnabled
-                  ? this.getRequestHeaders()
-                  : undefined;
-                if (authorized) liveHeaders = { ...this.getRequestHeaders(), ...authorized };
-                if (liveHeaders) {
-                  for (const key of Object.keys(fetchHeaders)) {
-                    const normalized = key.toLowerCase();
-                    if (
-                      sseConfiguredSecretHeaderKeys.has(normalized) &&
-                      liveHeaders[normalized] != null
-                    ) {
-                      delete fetchHeaders[key];
-                      fetchHeaders[normalized] = liveHeaders[normalized];
+              fetch: (url, init) =>
+                this.trackRequest(async () => {
+                  const { urlString, resolvedInit } = await resolveFetchInput(
+                    url as UndiciRequestInfo,
+                    init as UndiciRequestInit,
+                  );
+                  await assertProxiedRequestTargetAllowed(
+                    urlString,
+                    this.proxyConfig,
+                    this.useSSRFProtection,
+                    this.allowedAddresses,
+                  );
+                  /** Merge headers: SSE defaults < init headers < user headers (user wins) */
+                  const fetchHeaders = Object.assign(
+                    {},
+                    SSE_REQUEST_HEADERS,
+                    resolvedInit?.headers,
+                    headers,
+                  );
+                  const authorized = this.resolveRequestHeaders
+                    ? await this.authorizeRequestHeaders(resolvedInit?.signal ?? undefined)
+                    : undefined;
+                  let liveHeaders = this.directBearerRecoveryEnabled
+                    ? this.getRequestHeaders()
+                    : undefined;
+                  if (authorized) liveHeaders = { ...this.getRequestHeaders(), ...authorized };
+                  if (liveHeaders) {
+                    for (const key of Object.keys(fetchHeaders)) {
+                      const normalized = key.toLowerCase();
+                      if (
+                        sseConfiguredSecretHeaderKeys.has(normalized) &&
+                        liveHeaders[normalized] != null
+                      ) {
+                        delete fetchHeaders[key];
+                        fetchHeaders[normalized] = liveHeaders[normalized];
+                      }
                     }
                   }
-                }
-                const response = await undiciFetch(urlString, {
-                  ...resolvedInit,
-                  redirect: 'manual',
-                  dispatcher: getSSEDispatcher(urlString),
-                  headers: fetchHeaders,
-                });
-                if (
-                  this.resolveRequestHeaders?.recordFailure &&
-                  (response.status === 401 || response.status === 403)
-                ) {
-                  await response.body?.cancel().catch(() => undefined);
-                  return this.failRequestAuthorization(
-                    new MCPTransportAuthenticationError(response.status),
-                  );
-                }
-                return this.capabilityProfile === MCP_APPS_CAPABILITY_PROFILE
-                  ? guardMCPStreamableHTTPResponse(response, {
-                      logPrefix: this.getLogPrefix(),
-                      method: 'GET',
-                      url: urlString,
-                      appProfile: true,
-                      operationLimits: this.operationLimits,
-                      onAppSSEOverflow: () => {
-                        // Let the SDK observe its stream error and reject an in-flight start before
-                        // closing EventSource. Closing synchronously leaves start() pending forever.
-                        // A short bounded grace also prevents the SDK's automatic retry loop.
-                        const stop = setTimeout(() => {
-                          abortController.abort();
-                          void transport.close().catch(() => undefined);
-                        }, 30);
-                        stop.unref?.();
-                      },
-                    })
-                  : response;
-              },
+                  const response = await undiciFetch(urlString, {
+                    ...resolvedInit,
+                    redirect: 'manual',
+                    dispatcher: getSSEDispatcher(urlString),
+                    headers: fetchHeaders,
+                  });
+                  if (
+                    this.resolveRequestHeaders?.recordFailure &&
+                    (response.status === 401 || response.status === 403)
+                  ) {
+                    await response.body?.cancel().catch(() => undefined);
+                    return this.failRequestAuthorization(
+                      new MCPTransportAuthenticationError(response.status),
+                    );
+                  }
+                  return this.capabilityProfile === MCP_APPS_CAPABILITY_PROFILE
+                    ? guardMCPStreamableHTTPResponse(response, {
+                        logPrefix: this.getLogPrefix(),
+                        method: 'GET',
+                        url: urlString,
+                        appProfile: true,
+                        operationLimits: this.operationLimits,
+                        onAppSSEOverflow: () => {
+                          // Let the SDK observe its stream error and reject an in-flight start before
+                          // closing EventSource. Closing synchronously leaves start() pending forever.
+                          // A short bounded grace also prevents the SDK's automatic retry loop.
+                          const stop = setTimeout(() => {
+                            abortController.abort();
+                            void transport.close().catch(() => undefined);
+                          }, 30);
+                          stop.unref?.();
+                        },
+                      })
+                    : response;
+                }),
             },
             fetch: this.createFetchFunction(
               this.getRequestHeaders.bind(this),
@@ -2641,8 +2658,16 @@ export class MCPConnection extends EventEmitter {
   }
 
   public async disconnect(resetCycleTracking = true, forceAgentClose = false): Promise<void> {
-    // SDK request deadlines can elapse before an asynchronous receipt writer settles.
-    if (this.resolveRequestHeaders?.settle) await this.resolveRequestHeaders.settle();
+    let failure: unknown;
+    try {
+      // Include dispatches whose rejection arrives after the completion cutoff.
+      if (this.requestAuthorization.closed) {
+        while (this.pendingRequests.size > 0) await Promise.allSettled(this.pendingRequests);
+      }
+      if (this.resolveRequestHeaders?.settle) await this.resolveRequestHeaders.settle();
+    } catch (error) {
+      failure = error;
+    }
     this.toolListRefreshEpoch++;
     this.suspendedToolListSnapshot = undefined;
     this.toolListRefreshSuspended = true;
@@ -2653,18 +2678,19 @@ export class MCPConnection extends EventEmitter {
         await this.client.close();
         this.transport = null;
       }
-      await this.closeAgents(forceAgentClose);
-      if (this.connectionState === 'disconnected') {
-        return;
+      if (this.connectionState !== 'disconnected') {
+        this.connectionState = 'disconnected';
+        this.emit('connectionChange', 'disconnected');
       }
-      this.connectionState = 'disconnected';
-      this.emit('connectionChange', 'disconnected');
+    } catch (error) {
+      failure ??= error;
     } finally {
+      await this.closeAgents(forceAgentClose);
       this.connectPromise = null;
-      if (!resetCycleTracking) {
-        this.recordCycle();
-      }
+      if (!resetCycleTracking) this.recordCycle();
     }
+    // Fenced evidence still fails, but cannot skip DELETE/client/dispatcher teardown.
+    if (failure != null) throw failure;
   }
 
   /** Permanently tears down a connection that will never be reused. */

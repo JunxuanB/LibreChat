@@ -84,6 +84,7 @@ module.exports = {
   getLimits: invoke('getLimits'),
   fireScheduleNow: invoke('fireScheduleNow'),
   recordScheduleOutcome: invoke('recordScheduleOutcome'),
+  registerMCPSettlement: invoke('registerMCPSettlement'),
   recordMCPToolAuthFailure: (input) =>
     require('@librechat/api').recordScheduledMCPToolAuthFailure(
       input,
