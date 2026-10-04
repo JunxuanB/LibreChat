@@ -96,7 +96,7 @@ function ControlCombobox({
   const remScale = useRemScale();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [buttonWidth, setButtonWidth] = useState<number | null>(null);
-  const popoverWidth = isCollapsed ? '300px' : (buttonWidth ?? '300px');
+  const popoverWidth = isCollapsed ? '18.75rem' : (buttonWidth ?? '18.75rem');
   const popoverZIndex = usePopoverZIndex();
 
   const getItem = (option: OptionWithIcon) => ({
