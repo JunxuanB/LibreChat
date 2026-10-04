@@ -1285,3 +1285,160 @@ it.each(['connect', 'SSE retry'] as const)(
   },
   30_000,
 );
+
+it.each(['cooperative', 'ignores abort'] as const)(
+  'unwinds factory timeout before an initialize authorization host %s completes',
+  async (mode) => {
+    const f = await fixture();
+    let dispatched = 0;
+    const server = await createOAuthMCPServer({
+      onResourceRequest: (req) => {
+        if (req.method !== 'DELETE') dispatched++;
+      },
+    });
+    const context = createMCPRequestContext();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waiterSignal: AbortSignal | undefined, ownerSignal: AbortSignal | undefined;
+    let resolutions = 0;
+    const failures = jest.fn(async () => true);
+    const dispose = MCPConnection.prototype.dispose;
+    const disposed: MCPConnection[] = [];
+    const observing = jest
+      .spyOn(MCPConnection.prototype, 'dispose')
+      .mockImplementation(async function (this: MCPConnection) {
+        disposed.push(this);
+        return dispose.call(this);
+      });
+    const close = jest.spyOn(MCPConnection.prototype, 'disconnect');
+    attachScheduledMCPBearer(
+      context,
+      f.identity,
+      {
+        bind: (identity, _stage, signal) => {
+          ownerSignal = signal;
+          return {
+            identity,
+            reject: () => {},
+            resolve: async (input) => {
+              if (++resolutions === 2) {
+                waiterSignal = input.signal;
+                entered();
+                if (mode === 'ignores abort') await gate;
+                else
+                  await new Promise<void>((resolve, reject) => {
+                    input.signal?.addEventListener('abort', () => reject(input.signal!.reason), {
+                      once: true,
+                    });
+                    gate.then(resolve);
+                  });
+              }
+              return { ...input.config, headers: { Authorization: 'Bearer init-waiter-only' } };
+            },
+          };
+        },
+      },
+      'invoke',
+      undefined,
+      { onFailure: failures },
+    );
+    server.issuedTokens.add('init-waiter-only');
+    server.tokenIssueTimes.set('init-waiter-only', Date.now());
+    const definition: ParsedServerConfig = {
+      type: 'streamable-http',
+      url: server.url,
+      initTimeout: 30,
+      requiresOAuth: false,
+      source: 'yaml',
+      headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+    };
+    const pending = MCPConnectionFactory.create(
+      {
+        serverName: 'Files',
+        serverConfig: definition,
+        ephemeralConnection: true,
+        useSSRFProtection: false,
+      },
+      { user: { id: f.owner } as IUser, requestScopedConnections: context },
+    ).catch((error) => error);
+    context.pending.set('failed-initialize', pending);
+    let sibling: MCPConnection | undefined;
+    try {
+      await started;
+      const outcome = await Promise.race([
+        pending,
+        new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), 250)),
+      ]);
+      const abortedBeforeRelease = waiterSignal?.aborted;
+      release();
+      await pending;
+      expect(outcome).not.toBe('still waiting');
+      expect(outcome).toMatchObject({ message: expect.stringContaining('timeout') });
+      expect(abortedBeforeRelease).toBe(true);
+      expect(ownerSignal?.aborted).toBe(false);
+      expect(close).toHaveBeenCalled();
+      expect(disposed).toHaveLength(1);
+      expect(Reflect.get(disposed[0], 'pendingRequests').size).toBe(0);
+      expect(Reflect.get(disposed[0], 'agents')).toHaveLength(0);
+      expect(Reflect.get(disposed[0], 'transport')).toBeNull();
+      expect(dispatched).toBe(0);
+      expect(failures).not.toHaveBeenCalled();
+      // Disposing one credential waiter cannot close the occurrence or sibling session.
+      sibling = await MCPConnectionFactory.create(
+        {
+          serverName: 'Files',
+          serverConfig: { ...definition, initTimeout: 1000 },
+          ephemeralConnection: true,
+          useSSRFProtection: false,
+        },
+        { user: { id: f.owner } as IUser, requestScopedConnections: context },
+      );
+      context.connections.set('sibling', sibling);
+      await expect(sibling.fetchToolsSnapshot()).resolves.toMatchObject({ complete: true });
+      expect(ownerSignal?.aborted).toBe(false);
+      await f.store.updateJob(
+        f.job.streamId,
+        { status: 'error', completedAt: Date.now() },
+        f.job.createdAt,
+      );
+      f.service.registerMCPSettlement({
+        identity: f.identity,
+        streamId: f.job.streamId,
+        jobCreatedAt: f.job.createdAt,
+        quiesce: () => quiesceMCPRequestContext(context),
+      });
+      await expect(
+        f.service.recordScheduleOutcome({
+          ...f.outcome,
+          status: 'error',
+          error: 'MCP initialize timed out',
+        }),
+      ).resolves.toBe(true);
+      expect(
+        (
+          await f.database
+            .model('ScheduleRun')
+            .findOne({ scheduleId: f.schedule.id })
+            .lean<IScheduleRun>()
+        )?.capacitySlot,
+      ).toBeUndefined();
+      expect(await f.store.getJob(f.job.streamId)).toBeNull();
+    } finally {
+      release();
+      await pending;
+      await sibling?.dispose();
+      observing.mockRestore();
+      close.mockRestore();
+      await cleanupMCPRequestContext(context);
+      MCPConnection.clearCooldown('Files');
+      await server.close();
+      await f.close();
+    }
+  },
+  30_000,
+);

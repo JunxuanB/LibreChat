@@ -45,9 +45,11 @@ import { createSSRFSafeUndiciConnect, isSSRFTarget, resolveHostnameSSRF } from '
 import { projectMCPAppRuntimeTarget, type MCPAppRuntimeTarget } from './apps/binding';
 import { reserveMCPToolsChangedRevision } from './toolsChanged';
 import { runOutsideTracing } from '~/utils/tracing';
+import { MCPRequestQuiescedError } from './request';
 import { mediaTypeEssence } from '~/utils/headers';
 import { isAddressAllowed } from '~/auth/domain';
 import { withMCPRequestSignal } from './signal';
+import { awaitOboOperation } from './oauth/obo';
 import { withTimeout } from '~/utils/promise';
 import { RESOURCE_MIME_TYPE } from './apps';
 import { isOAuthServer } from './utils';
@@ -1115,6 +1117,7 @@ export class MCPConnection extends EventEmitter {
   private oauthTokens?: MCPOAuthTokens | null;
   private requestHeaders?: Record<string, string> | null;
   private readonly resolveRequestHeaders?: t.MCPRequestHeaderResolver;
+  private readonly requestAuthorizationController?: AbortController;
   private readonly requestAuthorization: { error?: unknown; closed: boolean } = { closed: false };
   private readonly pendingRequests = new Set<Promise<unknown>>();
   private oauthRequired = false;
@@ -1289,6 +1292,7 @@ export class MCPConnection extends EventEmitter {
     super();
     this.options = params.serverConfig;
     this.resolveRequestHeaders = params.resolveRequestHeaders;
+    if (this.resolveRequestHeaders) this.requestAuthorizationController = new AbortController();
     this.serverName = params.serverName;
     this.capabilityProfile = params.capabilityProfile ?? STANDARD_MCP_CAPABILITY_PROFILE;
     this.operationLimits = params.operationLimits;
@@ -1623,8 +1627,12 @@ export class MCPConnection extends EventEmitter {
     if (!this.resolveRequestHeaders) return;
     try {
       if (this.requestAuthorization.closed) throw new Error('MCP connection is closed');
-      const headers = await this.resolveRequestHeaders(signal);
-      signal?.throwIfAborted();
+      const connectionSignal = this.requestAuthorizationController!.signal;
+      signal = signal ? AbortSignal.any([signal, connectionSignal]) : connectionSignal;
+      signal.throwIfAborted();
+      // Detach this waiter only; shared mints retain their occurrence-owned signal.
+      const headers = await awaitOboOperation(this.resolveRequestHeaders(signal), signal);
+      signal.throwIfAborted();
       if (this.requestAuthorization.closed) throw new Error('MCP connection is closed');
       return headers;
     } catch (error) {
@@ -2697,6 +2705,9 @@ export class MCPConnection extends EventEmitter {
   public async dispose(): Promise<void> {
     this.isDisposed = true;
     this.requestAuthorization.closed = true;
+    // Failed-init teardown must cancel pre-dispatch waits before joining requests.
+    // Network responses and durable rejection admission keep their own drain barrier.
+    this.requestAuthorizationController?.abort(new MCPRequestQuiescedError());
     this.clearToolListRefreshRetry();
     this.shouldStopReconnecting = true;
     this.removeAllListeners();

@@ -16,6 +16,7 @@ import type { MCPOAuthTokens } from '~/mcp/oauth/types';
 import type { ParsedServerConfig } from '~/mcp/types';
 import {
   createScheduledMCPBearerHost,
+  createScheduledMCPBearerHeaderResolver,
   createMCPPermissionDeniedError,
   attachScheduledMCPBearer,
   resolveScheduledMCPBearerConfig,
@@ -1203,3 +1204,71 @@ it('detaches stalled enrollment at the occurrence cutoff and withholds its late 
     await cleanupMCPRequestContext(f.context);
   }
 });
+
+it('disposes a connection credential waiter without cancelling its sibling shared mint', async () => {
+  const server = await createOAuthMCPServer();
+  const definition: ParsedServerConfig = { ...config, url: server.url, requiresOAuth: false };
+  const f = await bearerFixture(definition);
+  let release!: (token: ScheduledMCPBearerResult) => void, entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const mint = new Promise<ScheduledMCPBearerResult>((resolve) => {
+    release = resolve;
+  });
+  let mintSignal: AbortSignal | undefined;
+  f.resolveBearer.mockImplementationOnce(async (_input, options) => {
+    mintSignal = options.signal;
+    entered();
+    return mint;
+  });
+  const headers = createScheduledMCPBearerHeaderResolver({ ...f.input, config: definition });
+  const first = new MCPConnection({
+    serverName: 'Files',
+    serverConfig: { ...definition, initTimeout: 30 },
+    resolveRequestHeaders: headers,
+  });
+  const second = new MCPConnection({
+    serverName: 'Files',
+    serverConfig: { ...definition, initTimeout: 2000 },
+    resolveRequestHeaders: headers,
+  });
+  const close = jest.spyOn(first.client, 'close');
+  server.issuedTokens.add('resource-only');
+  server.tokenIssueTimes.set('resource-only', Date.now());
+  const token: ScheduledMCPBearerResult = {
+    state: 'ready',
+    accessToken: 'resource-only',
+    expiresAtMs: Date.now() + 60_000,
+    issuer: f.target.resource.issuer!,
+    audience: f.target.resource.audience!,
+    resourceUrl: server.url,
+  };
+  const failed = first.connectClient().catch(async (error) => {
+    await first.dispose();
+    return error;
+  });
+  let sibling: Promise<void> | undefined;
+  try {
+    await started;
+    sibling = second.connectClient();
+    await expect(failed).resolves.toMatchObject({ message: expect.stringContaining('timeout') });
+    expect(close).toHaveBeenCalled();
+    expect(mintSignal?.aborted).toBe(false);
+    expect(f.context.cleanupStarted).toBe(false);
+    release(token);
+    await sibling;
+    await expect(second.fetchToolsSnapshot()).resolves.toMatchObject({ complete: true });
+    expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+    await expect(first.client.listTools()).rejects.toThrow();
+  } finally {
+    release(token);
+    await failed;
+    await sibling?.catch(() => undefined);
+    await first.dispose();
+    await second.dispose();
+    await cleanupMCPRequestContext(f.context);
+    MCPConnection.clearCooldown('Files');
+    await server.close();
+  }
+}, 10_000);
