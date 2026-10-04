@@ -263,6 +263,22 @@ describe('run-level prompt cache identity', () => {
     expect(cacheKey(childForA)).not.toBe(cacheKey(childForB));
   });
 
+  it('keys a self-spawn child by the prefix it sends, not the parent’s', async () => {
+    const instructions = 'Plan the work.';
+    const parent = makeAgent({ instructions, subagents: { enabled: true } });
+    const [rootInput] = await captureRun({ agent: parent, user: 'user-a' });
+    const selfEntry = (rootInput.subagentConfigs ?? []).find((config) => config.self === true) as
+      | { agentInputs?: CapturedAgent }
+      | undefined;
+    expect(selfEntry?.agentInputs).toBeDefined();
+
+    /** The SDK strips the delegation tool from a self child, so it sends this agent's plain prefix. */
+    const [plainInput] = await captureRun({ agent: makeAgent({ instructions }), user: 'user-a' });
+
+    expect(cacheKey(selfEntry!.agentInputs!)).not.toBe(cacheKey(rootInput));
+    expect(cacheKey(selfEntry!.agentInputs!)).toBe(cacheKey(plainInput));
+  });
+
   it('gives one saved-team member its own sealed cache key in each team occurrence', async () => {
     const member = makeAgent({ id: 'shared-member' });
     const writer = makeAgent({ id: 'writer' });

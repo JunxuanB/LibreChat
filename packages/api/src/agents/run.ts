@@ -2116,12 +2116,18 @@ function buildSubagentConfigs(
     countSubagentConfig(state);
     /**
      * Self-spawn reuses the parent's AgentInputs. When the parent has
-     * background or host-injected intent tools, provide a sanitized copy so
-     * the isolated child — which runs the direct/child-graph path rather
-     * than the host interceptors — doesn't advertise `run_in_background` /
+     * background or host-injected intent tools, the copy is sanitized so
+     * the isolated child (which runs the direct/child-graph path rather
+     * than the host interceptors) doesn't advertise `run_in_background` /
      * `check_background_task` or an injected `intent` param its direct tool
      * invocations would forward to tools that never declared it. The
      * resolver keeps a provided `agentInputs` even with `self: true`.
+     *
+     * The copy is provided even when nothing needs sanitizing, so the child
+     * is sealed under its own key: left to the SDK, it would spread the
+     * parent's finished inputs and send the parent's key with a prefix that
+     * lacks the delegation tool and `graphTools`, both of which the SDK
+     * strips from a self child.
      */
     const hasBackground = detachedTasksEnabled || (agent.backgroundToolNames?.length ?? 0) > 0;
     const hasInjectedIntent = (agent.intentToolNames?.length ?? 0) > 0;
@@ -2129,9 +2135,9 @@ function buildSubagentConfigs(
       stripBackgroundFromToolRegistry(agentInput.toolRegistry, agent.backgroundToolNames),
       agent.intentToolNames,
     );
-    const selfChildInputs: AgentInputs | undefined =
+    const selfChildInputs = ownSealableInputs(
       hasBackground || hasInjectedIntent
-        ? ownSealableInputs({
+        ? {
             ...agentInput,
             toolDefinitions: stripIntentFromToolDefinitions(
               stripBackgroundFromToolDefinitions(
@@ -2147,11 +2153,11 @@ function buildSubagentConfigs(
               detachedTasksEnabled && sanitizedToolRegistry != null
                 ? new Map(sanitizedToolRegistry)
                 : sanitizedToolRegistry,
-          })
-        : undefined;
-    if (selfChildInputs != null) {
-      finalizePromptCacheKey(selfChildInputs);
-    }
+          }
+        : agentInput,
+    );
+    delete (selfChildInputs as AgentInputs & { graphTools?: unknown }).graphTools;
+    finalizePromptCacheKey(selfChildInputs);
     configs.push({
       self: true,
       type: SELF_SUBAGENT_TYPE,
@@ -2159,7 +2165,7 @@ function buildSubagentConfigs(
       description: `Spawn ${selfName} in an isolated context to handle a focused subtask. Verbose tool output stays in the child's context; only a summary returns.`,
       /** Self-spawn reuses the parent's config, so mirror the parent's recursion limit. */
       maxTurns: resolveSubagentMaxTurns(agentsEConfig, agent),
-      ...(selfChildInputs != null ? { agentInputs: selfChildInputs } : {}),
+      agentInputs: selfChildInputs,
     });
   }
 
