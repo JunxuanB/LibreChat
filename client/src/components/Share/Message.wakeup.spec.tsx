@@ -62,7 +62,7 @@ const prompt = (status = 'completed', subagentType = 'self') =>
     },
   )}`;
 
-function renderShared(text: string, content = false) {
+function renderShared(text: string, content = false, dispatch?: TMessage) {
   const wake: TMessage = {
     messageId: 'wake',
     parentMessageId: null,
@@ -88,7 +88,9 @@ function renderShared(text: string, content = false) {
       <Provider>
         <RecoilRoot>
           <ShareContext.Provider value={{ isSharedConvo: true, shareId: 'share' }}>
-            <ShareMessagesProvider messages={[wake, reply]}>
+            <ShareMessagesProvider
+              messages={[...(dispatch == null ? [] : [dispatch]), wake, reply]}
+            >
               <MessagesView messagesTree={[wake]} conversationId="shared-view" />
             </ShareMessagesProvider>
           </ShareContext.Provider>
@@ -160,4 +162,52 @@ it.each([false, true])('keeps an ordinary public user message (content: %s)', (c
   expect(
     screen.getByRole('heading', { name: 'com_ui_prompt: com_ui_user', hidden: true }),
   ).toHaveClass('sr-only');
+});
+
+it.each([
+  ['self', 'graph', 'self'],
+  ['agent_research_team', 'graph', 'agent_research_team'],
+  ['self', 'agent', 'Dispatch Parent'],
+] as const)('retains persisted shared alias %s with kind %s', (alias, kind, label) => {
+  const dispatch: TMessage = {
+    messageId: 'dispatch',
+    parentMessageId: null,
+    conversationId: 'original',
+    isCreatedByUser: false,
+    text: '',
+    sender: 'Dispatch Parent',
+    endpoint: EModelEndpoint.agents,
+    model: 'agent_deleted',
+    iconURL: '/dispatch.png',
+    content: [
+      {
+        type: ContentTypes.TOOL_CALL,
+        tool_call: {
+          name: 'subagent',
+          args: { run_in_background: true },
+          output: JSON.stringify({
+            background_task_id: 'task',
+            subagent_thread_id: 'thread',
+            tool: 'subagent',
+            subagent_type: alias,
+            status: 'running',
+            message: 'Poll with background_task_id task.',
+          }),
+          subagentIdentity: {
+            subagentKind: kind,
+            subagentAgentId: kind === 'graph' ? `graph:${alias}` : 'agent_deleted',
+          },
+        },
+      },
+    ],
+  };
+  renderShared(prompt('completed', alias), false, dispatch);
+  expect(screen.getByRole('heading', { name: label })).toBeInTheDocument();
+  if (kind === 'graph') {
+    expect(screen.queryByRole('heading', { name: 'Dispatch Parent' })).not.toBeInTheDocument();
+  } else {
+    expect(screen.getByRole('img', { hidden: true })).toHaveAttribute('src', '/dispatch.png');
+  }
+  expect(screen.queryByRole('heading', { name: 'Historical Parent' })).not.toBeInTheDocument();
+  expect(dataService.getAIEndpoints).not.toHaveBeenCalled();
 });
