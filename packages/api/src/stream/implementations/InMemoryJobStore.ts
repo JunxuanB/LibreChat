@@ -153,6 +153,11 @@ export class InMemoryJobStore implements IJobStoreV2 {
   private jobs = new Map<string, SerializableJobData>();
   private contentState = new Map<string, ContentState>();
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private staleGenerationHandler?: (streamId: string, createdAt: number) => void;
+
+  setStaleGenerationHandler(handler?: (streamId: string, createdAt: number) => void): void {
+    this.staleGenerationHandler = handler;
+  }
 
   /** Maps userId -> Set of streamIds (conversationIds) for active jobs */
   private userJobMap = new Map<string, Set<string>>();
@@ -1105,6 +1110,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
         continue;
       }
       if (
+        job.preserveForScheduleReconcile !== true &&
         job.providerDrained === false &&
         job.completedAt != null &&
         now - job.completedAt >= PROVIDER_DRAIN_TIMEOUT_MS
@@ -1127,19 +1133,10 @@ export class InMemoryJobStore implements IJobStoreV2 {
 
   async getScheduleReconcileJobs(limit: number): Promise<SerializableJobData[]> {
     const held: SerializableJobData[] = [];
-    const now = Date.now();
     let remaining = this.jobs.size;
     for (const [stream, job] of this.jobs) {
       if (remaining-- <= 0) break;
       if (job.preserveForScheduleReconcile !== true) continue;
-      if (
-        job.status !== 'running' &&
-        job.status !== 'requires_action' &&
-        job.providerDrained === false &&
-        job.completedAt != null &&
-        now - job.completedAt >= PROVIDER_DRAIN_TIMEOUT_MS
-      )
-        job.providerDrained = true;
       held.push(job);
       // Rotate retry attempts so a failed first batch cannot starve later obligations.
       this.jobs.delete(stream);
@@ -1301,6 +1298,8 @@ export class InMemoryJobStore implements IJobStoreV2 {
             job.completedAt = now;
             job.error = 'Scheduled generation owner became unavailable';
             job.steersClosed = true;
+            // Cancel the exact local owner before readers can observe retirement.
+            this.staleGenerationHandler?.(streamId, job.createdAt);
             retainedRecovered++;
           } else toDelete.push({ streamId, createdAt: job.createdAt });
           staleRunning++;
@@ -1378,6 +1377,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
   }
 
   async destroy(): Promise<void> {
+    this.staleGenerationHandler = undefined;
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;

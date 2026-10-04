@@ -238,6 +238,24 @@ function getBodyText(body: unknown): string | null {
   return null;
 }
 
+function containsToolInvocation(body: unknown): boolean {
+  const text = getBodyText(body);
+  if (!text) return false;
+  try {
+    const value: unknown = JSON.parse(text);
+    const messages: unknown[] = Array.isArray(value) ? value : [value];
+    return messages.some(
+      (message) =>
+        message != null &&
+        typeof message === 'object' &&
+        'method' in message &&
+        message.method === 'tools/call',
+    );
+  } catch {
+    return false;
+  }
+}
+
 function getJSONRPCRequestIds(body: unknown): JSONRPCRequestId[] {
   const bodyText = getBodyText(body);
   if (!bodyText) {
@@ -1422,18 +1440,17 @@ export class MCPConnection extends EventEmitter {
       const { urlString, resolvedInit } = await resolveFetchInput(input, init);
 
       const isGet = (resolvedInit?.method ?? 'GET').toUpperCase() === 'GET';
-      const authorized =
-        authorizeHeaders && (resolvedInit?.method ?? 'GET').toUpperCase() !== 'DELETE'
-          ? await authorizeHeaders(resolvedInit?.signal ?? undefined)
-          : undefined;
-      const requestHeaders = authorized ? { ...getHeaders(), ...authorized } : getHeaders();
+      const requestHeaders = getHeaders();
+      const reauthorize =
+        authorizeHeaders && (resolvedInit?.method ?? 'GET').toUpperCase() !== 'DELETE';
+      let credentialsStripped = false;
       /**
        * Headers that originated from user/server configuration — runtime
        * `setRequestHeaders` plus any keys baked into the transport at
        * construction time (e.g. `serverConfig.headers` API keys). All are
        * treated as credentials and stripped on cross-origin redirect.
        */
-      const secretHeaderKeys: ReadonlySet<string> = new Set([
+      const secretHeaderKeys = new Set([
         ...Object.keys(requestHeaders ?? {}).map((key) => key.toLowerCase()),
         ...(configuredSecretHeaderKeys ?? []),
       ]);
@@ -1454,6 +1471,23 @@ export class MCPConnection extends EventEmitter {
           useSSRFProtection,
           currentAllowedAddresses,
         );
+        if (reauthorize) {
+          const authorized = await authorizeHeaders(resolvedInit?.signal ?? undefined);
+          if (!credentialsStripped) {
+            for (const key of Object.keys(authorized ?? {}))
+              secretHeaderKeys.add(key.toLowerCase());
+            currentInit = buildFetchInit(
+              currentInit,
+              getRequestDispatcher(
+                isGet,
+                currentUrlString,
+                currentAllowedAddresses,
+                forceRedirectSSRFConnect,
+              ),
+              { ...getHeaders(), ...authorized },
+            );
+          }
+        }
         const response = await undiciFetch(currentUrlString, currentInit);
         if (
           rejectDirectBearerAuthentication &&
@@ -1472,7 +1506,12 @@ export class MCPConnection extends EventEmitter {
           operationLimits: appOperationLimits,
         };
 
-        if (!isMethodPreservingRedirect || redirects >= MAX_REDIRECTS) {
+        // A redirected tool request is another dispatch, not proof the first was inert.
+        if (
+          !isMethodPreservingRedirect ||
+          redirects >= MAX_REDIRECTS ||
+          (reauthorize && containsToolInvocation(currentInit.body))
+        ) {
           return guardStreamableHTTPResponses
             ? guardMCPStreamableHTTPResponse(response, responseContext)
             : response;
@@ -1509,6 +1548,7 @@ export class MCPConnection extends EventEmitter {
 
         await response.body?.cancel().catch(() => undefined);
 
+        if (isCrossOriginRedirect) credentialsStripped = true;
         if (isCrossOriginRedirect && currentInit.headers != null) {
           currentInit = {
             ...currentInit,

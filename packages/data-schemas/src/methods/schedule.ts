@@ -1670,7 +1670,7 @@ export function createScheduleMethods(mongoose: typeof import('mongoose')): Sche
     if (settled == null && canOverride) {
       settled = await ScheduleRun()
         .findOneAndUpdate(
-          { ...runFilter, $or: receiptPredicates },
+          { $and: [runFilter, { $or: receiptPredicates }] },
           terminalUpdate('error', authError),
           { new: true },
         )

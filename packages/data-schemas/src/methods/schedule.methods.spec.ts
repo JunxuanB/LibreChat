@@ -3546,49 +3546,52 @@ it('does not apply a late MCP disable after a newer successful occurrence', asyn
 });
 
 describe('scheduled resource bearer denial receipts', () => {
-  it('does not terminalize a fresh resumed generation through a stale denied-pause snapshot', async () => {
-    const schedule = await methods.createSchedule(scheduleData());
-    const scheduledFor = new Date('2026-10-03T02:00:00.000Z');
-    await methods.reserveStartedRun(
-      runData(schedule, { scheduledFor, conversationId: 'resume-denial', capacitySlot: 1 }),
-    );
-    await methods.recordRunOutcome({
-      scheduleId: schedule.id,
-      scheduledFor,
-      status: 'requires_action',
-      autoDisableAfterFailures: Number.MAX_SAFE_INTEGER,
-    });
-    await methods.markRunResumeClaimed(schedule.id, scheduledFor, 4);
-    const before = await ScheduleRun.findOne({ scheduleId: schedule.id, scheduledFor }).lean();
-    await methods.recordMCPToolAuthFailure({
-      scheduleId: schedule.id,
-      scheduledFor,
-      conversationId: 'resume-denial',
-      server: 'Files',
-      outcome: {
+  it.each(['requires_action', 'error'] as const)(
+    'does not terminalize a fresh resumed generation through a stale denied-pause snapshot status=%s',
+    async (status) => {
+      const schedule = await methods.createSchedule(scheduleData());
+      const scheduledFor = new Date('2026-10-03T02:00:00.000Z');
+      await methods.reserveStartedRun(
+        runData(schedule, { scheduledFor, conversationId: 'resume-denial', capacitySlot: 1 }),
+      );
+      await methods.recordRunOutcome({
+        scheduleId: schedule.id,
+        scheduledFor,
+        status: 'requires_action',
+        autoDisableAfterFailures: Number.MAX_SAFE_INTEGER,
+      });
+      await methods.markRunResumeClaimed(schedule.id, scheduledFor, 4);
+      const before = await ScheduleRun.findOne({ scheduleId: schedule.id, scheduledFor }).lean();
+      await methods.recordMCPToolAuthFailure({
+        scheduleId: schedule.id,
+        scheduledFor,
+        conversationId: 'resume-denial',
         server: 'Files',
-        status: 'mcp_reauth_required',
-        reason: 'consent_revoked',
-        detail: 'unattended_auth_required',
-        recovery: 'authorize',
-        automaticReplay: false,
-      },
-    });
-    await methods.recordRunOutcome({
-      scheduleId: schedule.id,
-      scheduledFor,
-      status: 'requires_action',
-      resumeClaimStaleBefore: new Date(Date.now() - 10 * 60_000),
-      autoDisableAfterFailures: Number.MAX_SAFE_INTEGER,
-    });
-    const after = await ScheduleRun.findOne({ scheduleId: schedule.id, scheduledFor }).lean();
-    expect(after?.status).toBe('started');
-    expect(after?.capacitySlot).toBe(4);
-    expect(after?.resumeClaimedAt).toEqual(before?.resumeClaimedAt);
-    expect(after?.mcp).toEqual(
-      expect.arrayContaining([expect.objectContaining({ reason: 'consent_revoked' })]),
-    );
-  });
+        outcome: {
+          server: 'Files',
+          status: 'mcp_reauth_required',
+          reason: 'consent_revoked',
+          detail: 'unattended_auth_required',
+          recovery: 'authorize',
+          automaticReplay: false,
+        },
+      });
+      await methods.recordRunOutcome({
+        scheduleId: schedule.id,
+        scheduledFor,
+        status,
+        resumeClaimStaleBefore: new Date(Date.now() - 10 * 60_000),
+        autoDisableAfterFailures: Number.MAX_SAFE_INTEGER,
+      });
+      const after = await ScheduleRun.findOne({ scheduleId: schedule.id, scheduledFor }).lean();
+      expect(after?.status).toBe('started');
+      expect(after?.capacitySlot).toBe(4);
+      expect(after?.resumeClaimedAt).toEqual(before?.resumeClaimedAt);
+      expect(after?.mcp).toEqual(
+        expect.arrayContaining([expect.objectContaining({ reason: 'consent_revoked' })]),
+      );
+    },
+  );
 
   const outcome = {
     server: 'Files',

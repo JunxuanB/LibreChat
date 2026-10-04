@@ -62,7 +62,7 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
   });
 
   afterEach(async () => {
-    await GenerationJobManager.destroy();
+    await GenerationJobManager.destroy({ settlementBudgetMs: 0 });
     jest.restoreAllMocks();
   });
 
@@ -266,6 +266,68 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
       );
     },
   );
+
+  it.each(['manager', 'store'] as const)(
+    'cancels a retained stale local owner through %s cleanup but waits for its actual drain',
+    async (cleanup) => {
+      const job = await create();
+      const provider = job.metadata.providerExecutionId!;
+      await GenerationJobManager.beginProviderExecution(job.streamId, job.createdAt, provider);
+      await store.enqueueSteer(
+        job.streamId,
+        { steerId: 'queued', userId: 'owner', text: 'next', createdAt: Date.now() },
+        job.createdAt,
+      );
+      const subscription = await GenerationJobManager.subscribe(job.streamId, () => undefined);
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+      if (cleanup === 'manager') await GenerationJobManager['cleanup']();
+      else await store.cleanup();
+      expect(job.abortController.signal.aborted).toBe(true);
+      expect((await store.getJob(job.streamId))?.providerDrained).toBe(false);
+      clock.mockReturnValue(Date.now() + 60_000);
+      await service.reconcileRetainedJobs();
+      expect(record).not.toHaveBeenCalled();
+      expect((await store.getScheduleReconcileJobs(100))[0]).toMatchObject({
+        preserveForScheduleReconcile: true,
+        providerDrained: false,
+      });
+      expect((await store.getJob(job.streamId))?.scheduleOutcomeError).toContain('consent_revoked');
+      await GenerationJobManager.markProviderExecutionDrained(
+        job.streamId,
+        job.createdAt,
+        provider,
+      );
+      await service.reconcileRetainedJobs();
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+      expect(await store.getJob(job.streamId)).toBeNull();
+      expect(JSON.parse((await store.claimParkedSteers(job.streamId, 'owner'))!).steers).toEqual(
+        expect.arrayContaining([expect.objectContaining({ steerId: 'queued' })]),
+      );
+      subscription?.unsubscribe();
+    },
+  );
+
+  it('detaches stale-owner cancellation from a replaced store and never aborts the successor epoch', async () => {
+    const prior = await create();
+    const originalStore = store;
+    const retiredCallback = Reflect.get(originalStore, 'staleGenerationHandler') as (
+      stream: string,
+      epoch: number,
+    ) => void;
+    store = new InMemoryJobStore({ ttlAfterComplete: 0 });
+    GenerationJobManager.configure({
+      jobStore: store,
+      eventTransport: new InMemoryEventTransport(),
+      isRedis: false,
+      cleanupOnComplete: true,
+    });
+    GenerationJobManager.initialize();
+    const successor = await GenerationJobManager.createJob(prior.streamId, 'owner', prior.streamId);
+    retiredCallback(prior.streamId, prior.createdAt);
+    expect(successor.abortController.signal.aborted).toBe(false);
+    expect(Reflect.get(originalStore, 'staleGenerationHandler')).toBeUndefined();
+    await originalStore.destroy();
+  });
 
   it('recovers a crashed owner without dropping its denial or accepted steers', async () => {
     const job = await create();

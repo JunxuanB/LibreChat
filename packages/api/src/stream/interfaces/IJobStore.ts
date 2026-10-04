@@ -920,6 +920,10 @@ export interface IJobStore {
   /** Receipt evidence survives loss of the generation worker; absent is volatile. */
   readonly durableScheduleReceipts?: boolean;
 
+  /** Synchronous exact-epoch notification after a retained stale transition.
+   * Cancellation is not drain acknowledgement; provider owners still record drain. */
+  setStaleGenerationHandler?(handler?: (streamId: string, createdAt: number) => void): void;
+
   initialize(): Promise<void>;
 
   createJob(
