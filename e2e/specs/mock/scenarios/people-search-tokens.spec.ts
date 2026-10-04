@@ -1,5 +1,6 @@
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { promisify } from 'util';
+import { execFile } from 'child_process';
 import { expect, test } from '@playwright/test';
 import type { Page, Locator } from '@playwright/test';
 import { MOCK_ENDPOINTS, NEW_CHAT_PATH, getAccessToken, requestJson, uniqueName } from '../helpers';
@@ -73,12 +74,15 @@ async function openShareDialog(page: Page): Promise<{ dialog: Locator; agentId: 
   return { dialog, agentId: agent.id };
 }
 
-function runBackfill(): void {
-  execFileSync('node', ['config/migrate-search-tokens.js'], {
+const execFileAsync = promisify(execFile);
+
+/** Async so a stuck script fails the test on its timeout instead of blocking the worker. */
+async function runBackfill(): Promise<void> {
+  await execFileAsync('node', ['config/migrate-search-tokens.js'], {
     cwd: REPO_ROOT,
     env: { ...process.env, MONGO_URI: getMongoUri() },
-    stdio: 'pipe',
     timeout: 60000,
+    killSignal: 'SIGKILL',
   });
 }
 
@@ -167,7 +171,7 @@ test.describe('people search over word-prefix tokens', () => {
       expect(await emails(`gacy${id}`)).toContain(legacy.email);
       expect(await emails(`renamed${id}`)).not.toContain(renamed.email);
 
-      runBackfill();
+      await runBackfill();
 
       expect(await emails(`renamed${id}`)).toContain(renamed.email);
       expect(await emails(`original${id}`)).not.toContain(renamed.email);
