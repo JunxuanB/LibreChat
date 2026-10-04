@@ -13,6 +13,8 @@ const { findRoleByIdentifier } = require('~/models');
  * This runs at the end to ensure all systems are initialized
  */
 async function checkMigrations() {
+  /** Started first so it overlaps the permission checks; it logs its own failures. */
+  const searchTokens = warnOnMissingSearchTokens(mongoose.connection);
   try {
     const agentMigrationResult = await checkAgentPermissionsMigration({
       mongoose,
@@ -37,7 +39,7 @@ async function checkMigrations() {
   } catch (error) {
     logger.error('Failed to check prompt permissions migration:', error);
   }
-  await warnOnMissingSearchTokens(mongoose.connection);
+  await searchTokens;
 }
 
 module.exports = {
