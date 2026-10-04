@@ -41,7 +41,9 @@ import { processMCPEnv, isPluginSourced } from '~/utils/env';
 import { OAuthLifecycleRelay } from '~/mcp/oauth/pending';
 import { preProcessGraphTokens } from '~/utils/graph';
 import { detectOAuthRequirement } from '~/mcp/oauth';
+import { awaitOboOperation } from '~/mcp/oauth/obo';
 import { isMCPDomainAllowed } from '~/auth/domain';
+import { getMCPRequestSignal } from './request';
 import { MCPConnection } from './connection';
 import { mcpConfig } from './mcpConfig';
 import { isEnabled } from '~/utils';
@@ -488,6 +490,11 @@ export abstract class UserConnectionManager {
         throw new Error(`[MCP][User: ${userId}] Request-scoped connection context is closed`);
       }
       this.bindRequestScopedConnectionStore(requestScopedConnections);
+      const sharedCreation = requiresScheduledMCPBearerConnection(requestScopedConnections, config);
+      const creationSignal = sharedCreation
+        ? getMCPRequestSignal(requestScopedConnections)
+        : opts.signal;
+      opts.signal?.throwIfAborted();
       const requestConnectionKey = getUserConnectionKey(userId, serverName, capabilityProfile);
       const existing = requestScopedConnections.connections.get(requestConnectionKey) as
         | MCPConnection
@@ -530,7 +537,9 @@ export abstract class UserConnectionManager {
         | undefined;
       if (pending) {
         logger.debug(`[MCP][User: ${userId}] Joining in-flight request-scoped connection attempt`);
-        const connection = await pending;
+        const connection = sharedCreation
+          ? await awaitOboOperation(pending, opts.signal)
+          : await pending;
         if (this.requestPendingDirectBearerRecoveryStates.get(pending)?.attempted) {
           directBearerRecoveryState.attempted = true;
         }
@@ -549,6 +558,7 @@ export abstract class UserConnectionManager {
       const connectionPromise = this.createUserConnectionWithLifecycleRestarts(
         {
           ...opts,
+          signal: creationSignal,
           forceNew: true,
           ephemeralConnection: true,
           connectionTarget,
@@ -559,23 +569,29 @@ export abstract class UserConnectionManager {
         userId,
         forceNew === true,
         creationGuard,
-      ).then(async (connection) => {
-        try {
-          opts.signal?.throwIfAborted();
-          this.assertCreationNotCancelled(creationGuard, userId, serverName);
-          if (requestScopedConnections.cleanupStarted) {
-            throw new Error(`[MCP][User: ${userId}] Request-scoped connection context is closed`);
+      )
+        .then(async (connection) => {
+          try {
+            creationSignal?.throwIfAborted();
+            this.assertCreationNotCancelled(creationGuard, userId, serverName);
+            if (requestScopedConnections.cleanupStarted) {
+              throw new Error(`[MCP][User: ${userId}] Request-scoped connection context is closed`);
+            }
+          } catch (error) {
+            await this.disposeEvictedConnection(
+              connection,
+              `[MCP][Request-scoped: ${requestConnectionKey}] Invalidated during connection creation`,
+            );
+            throw error;
           }
-        } catch (error) {
-          await this.disposeEvictedConnection(
-            connection,
-            `[MCP][Request-scoped: ${requestConnectionKey}] Invalidated during connection creation`,
-          );
-          throw error;
-        }
-        requestScopedConnections.connections.set(requestConnectionKey, connection);
-        return connection;
-      });
+          requestScopedConnections.connections.set(requestConnectionKey, connection);
+          return connection;
+        })
+        .finally(() => {
+          this.unregisterConnectionCreation(requestConnectionKey, creationGuard);
+          if (requestScopedConnections.pending.get(requestConnectionKey) === connectionPromise)
+            requestScopedConnections.pending.delete(requestConnectionKey);
+        });
 
       requestScopedConnections.pending.set(
         requestConnectionKey,
@@ -586,14 +602,8 @@ export abstract class UserConnectionManager {
         directBearerRecoveryState,
       );
 
-      try {
-        return await connectionPromise;
-      } finally {
-        this.unregisterConnectionCreation(requestConnectionKey, creationGuard);
-        if (requestScopedConnections.pending.get(requestConnectionKey) === connectionPromise) {
-          requestScopedConnections.pending.delete(requestConnectionKey);
-        }
-      }
+      // The occurrence owns the shared attempt; callers leave only their own waiters.
+      return sharedCreation ? awaitOboOperation(connectionPromise, opts.signal) : connectionPromise;
     }
 
     const forceNewConnection = forceNew || ephemeralConnection;

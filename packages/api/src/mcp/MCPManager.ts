@@ -54,9 +54,13 @@ import {
   type MCPAppBindingSubject,
   type MCPAppRuntimeTarget,
 } from './apps/binding';
+import {
+  MCPAuthenticationRejectedError,
+  isMCPTransportAuthenticationError,
+  isMCPInitializationError,
+} from './errors';
 import { getMCPAppToolsPublicationGeneration, getMCPToolsChangedGeneration } from './toolsChanged';
 import { mcpOptionsContainGraphTokenPlaceholder, preProcessGraphTokens } from '~/utils/graph';
-import { MCPAuthenticationRejectedError, isMCPTransportAuthenticationError } from './errors';
 import { resolveDirectOpenIDBearerConfig, usesDirectOpenIDBearerRecovery } from './openid';
 import { createLazyOboUpstreamTokenProvider, awaitOboOperation } from '~/mcp/oauth/obo';
 import { MCPAppOperationBudget, getMCPAppOperationLimits } from './apps/budget';
@@ -2081,8 +2085,13 @@ Please follow these instructions when using tools from the respective MCP server
               requiresEphemeralUserConnection(rawConfig),
               options?.signal,
             );
-          } catch {
-            /* empty */
+          } catch (error) {
+            if (
+              isScheduledMCPBearer(requestScopedConnections) &&
+              (error instanceof ScheduledMCPPolicyError ||
+                isMCPInitializationError(error, options?.signal))
+            )
+              throw error;
           }
         }
         if (options?.signal?.aborted) {
@@ -2097,18 +2106,26 @@ Please follow these instructions when using tools from the respective MCP server
           const resourceUri = resourceMeta.uri;
           try {
             const limits = getMCPAppOperationLimits(mcpApps?.operationLimits);
-            const readResult = await this.appOperationBudget.run(
-              options?.signal ?? new AbortController().signal,
-              (signal) =>
-                appConnection.client.readResource(
-                  { uri: resourceUri },
-                  {
-                    timeout: Math.min(appConnection.timeout ?? limits.timeoutMs, limits.timeoutMs),
-                    maxTotalTimeout: limits.timeoutMs,
-                    signal,
-                  },
+            const readResult = await withMCPRequestSignal(
+              options?.signal,
+              (callerSignal) =>
+                this.appOperationBudget.run(
+                  callerSignal ?? new AbortController().signal,
+                  (signal) =>
+                    appConnection.client.readResource(
+                      { uri: resourceUri },
+                      {
+                        timeout: Math.min(
+                          appConnection.timeout ?? limits.timeoutMs,
+                          limits.timeoutMs,
+                        ),
+                        maxTotalTimeout: limits.timeoutMs,
+                        signal,
+                      },
+                    ),
+                  limits,
                 ),
-              limits,
+              isScheduledMCPBearer(requestScopedConnections) && directBearerRecovery,
             );
             if (!options?.signal?.aborted) {
               resolvedAppResource = selectResolvedAppResource(readResult.contents, resourceUri);
@@ -2119,6 +2136,12 @@ Please follow these instructions when using tools from the respective MCP server
               );
             }
           } catch (error) {
+            if (
+              isScheduledMCPBearer(requestScopedConnections) &&
+              (error instanceof ScheduledMCPPolicyError ||
+                isMCPInitializationError(error, options?.signal))
+            )
+              throw error;
             if (!options?.signal?.aborted) {
               logger.warn(
                 `[MCP][${serverName}][${toolName}] Could not resolve App resource "${resourceUri}"; retaining bound URI for a later read`,

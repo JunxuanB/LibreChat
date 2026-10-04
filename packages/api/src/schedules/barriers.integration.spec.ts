@@ -9,6 +9,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { AIMessage } from '@librechat/agents/langchain/messages';
 import { createModels, createMethods } from '@librechat/data-schemas';
+import { DEFAULT_MCP_APP_OPERATION_LIMITS } from 'librechat-data-provider';
 import type { ScheduledMCPTarget, ScheduledMCPReadOnlyPolicy } from 'librechat-data-provider';
 import type { IScheduleRun, IUser } from '@librechat/data-schemas';
 import type { IJobStoreV2, ScheduleProviderOwner } from '~/stream/interfaces/IJobStore';
@@ -39,6 +40,7 @@ import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { RedisJobStore } from '~/stream/implementations/RedisJobStore';
 import { GenerationJobManager } from '~/stream/GenerationJobManager';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
+import { MCP_APPS_CAPABILITY_PROFILE } from '~/mcp/capabilities';
 import { FlowStateManager } from '~/flow/manager';
 import { MCPConnection } from '~/mcp/connection';
 import { MCPManager } from '~/mcp/MCPManager';
@@ -1443,178 +1445,201 @@ it.each(['cooperative', 'ignores abort'] as const)(
   30_000,
 );
 
-it.each(['authority denial', 'HTTP rejection'] as const)(
-  'keeps a known %s behind durable admission after the real SDK deadline',
-  async (mode) => {
-    const f = await fixture();
-    let rejectTransport = false;
-    const server = await createOAuthMCPServer({
-      resourceFailure: () => (mode === 'HTTP rejection' && rejectTransport ? 401 : undefined),
-    });
-    const context = createMCPRequestContext();
-    const manager = new MCPManager();
-    const user = { id: f.owner, role: 'USER' } as IUser;
-    const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
-      ci: true,
-      ttl: 30_000,
-    });
-    let available = false,
-      modelReturned = false;
-    const failure = new ScheduledMCPBearerError(
-      mode === 'authority denial' ? 'consent_revoked' : 'credential_rejected',
-      'Files',
-    );
-    const input = {
-      error: failure,
-      identity: f.identity,
-      streamId: f.job.streamId,
-      jobCreatedAt: f.job.createdAt,
-      userId: f.owner,
-      serverName: 'Files',
-    };
-    const record = jest.fn((error: ScheduledMCPBearerError) =>
-      recordScheduledMCPToolAuthFailure(
-        { ...input, error },
-        () => f.service.recordMCPToolAuthFailure,
-      ),
-    );
-    const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
-      isAppServerConfig: async () => false,
-      resolveAllowlists: async () => ({
-        allowedDomains: ['127.0.0.1'],
-        allowedAddresses: [`127.0.0.1:${server.port}`],
-        useSSRFProtection: false,
-      }),
-    } as unknown as MCPServersRegistry);
-    let outcome: Promise<unknown> | undefined;
-    try {
-      const persist = f.service.engineDeps.methods.recordMCPToolAuthFailure;
-      jest
-        .spyOn(f.service.engineDeps.methods, 'recordMCPToolAuthFailure')
-        .mockImplementation(async (payload) => {
-          if (!available) throw new Error('Receipt storage unavailable');
-          return persist(payload);
-        });
-      attachScheduledMCPBearer(
-        context,
-        f.identity,
-        {
-          bind: (identity) => ({
-            identity,
-            reject: () => {},
-            resolve: async (payload) => {
-              if (payload.selection) rejectTransport = true;
-              else if (rejectTransport && mode === 'authority denial') throw failure;
-              return { ...payload.config, headers: { Authorization: 'Bearer sdk-denial-only' } };
-            },
-          }),
-        },
-        'invoke',
-        undefined,
-        { onFailure: record },
+describe.each(['tool', 'App SDK read', 'App budget read'] as const)('%s admission', (phase) => {
+  it.each(['authority denial', 'HTTP rejection'] as const)(
+    'keeps a known %s behind durable admission after the real SDK deadline',
+    async (mode) => {
+      const f = await fixture();
+      let rejectTransport = false;
+      const server = await createOAuthMCPServer({
+        ...(phase !== 'tool' && { appResourceUri: 'ui://admission' }),
+        resourceFailure: () => (mode === 'HTTP rejection' && rejectTransport ? 401 : undefined),
+      });
+      const context = createMCPRequestContext();
+      const manager = new MCPManager();
+      const user = { id: f.owner, role: 'USER' } as IUser;
+      const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
+        ci: true,
+        ttl: 30_000,
+      });
+      let available = false,
+        modelReturned = false;
+      const failure = new ScheduledMCPBearerError(
+        mode === 'authority denial' ? 'consent_revoked' : 'credential_rejected',
+        'Files',
       );
-      server.issuedTokens.add('sdk-denial-only');
-      server.tokenIssueTimes.set('sdk-denial-only', Date.now());
-      const definition: ParsedServerConfig = {
-        type: 'streamable-http',
-        url: server.url,
-        requiresOAuth: false,
-        source: 'yaml',
-        headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
-      };
-      const connection = await manager.getConnection({
-        user,
+      const input = {
+        error: failure,
+        identity: f.identity,
+        streamId: f.job.streamId,
+        jobCreatedAt: f.job.createdAt,
+        userId: f.owner,
         serverName: 'Files',
-        serverConfig: definition,
-        flowManager,
-        requestScopedConnections: context,
-      });
-      await connection.fetchToolsSnapshot();
-      let sdkTimeout: unknown;
-      const request = connection.client.request.bind(connection.client);
-      jest.spyOn(connection.client, 'request').mockImplementation((...args) =>
-        request(...args).catch((error) => {
-          sdkTimeout = error;
-          throw error;
-        }),
+      };
+      const record = jest.fn((error: ScheduledMCPBearerError) =>
+        recordScheduledMCPToolAuthFailure(
+          { ...input, error },
+          () => f.service.recordMCPToolAuthFailure,
+        ),
       );
-      let delivered: unknown;
-      const tool = new DynamicStructuredTool({
-        name: 'echo_mcp_Files',
-        description: 'Read',
-        schema: z.object({}),
-        func: async () => {
-          try {
-            return await manager.callTool({
-              user,
-              serverName: 'Files',
-              serverConfig: definition,
-              provider: 'openai',
-              flowManager,
-              toolName: 'echo',
-              toolArguments: { message: 'denied' },
-              requestScopedConnections: context,
-              scheduledBearerInvocation: bindScheduledMCPBearerInvocation(context, 'root', 'echo'),
-              options: { timeout: 40, maxTotalTimeout: 40 },
-            });
-          } catch (error) {
-            delivered = error;
-            await recordScheduledMCPToolAuthFailure(
-              { ...input, error },
-              () => f.service.recordMCPToolAuthFailure,
-            );
-            throw error;
-          }
-        },
-      });
-      outcome = new ToolNode({ agentId: 'root', tools: [tool] })
-        .invoke(
-          {
-            messages: [
-              new AIMessage({
-                content: '',
-                tool_calls: [{ id: 'deadline', name: tool.name, args: {} }],
-              }),
-            ],
+      const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+        isAppServerConfig: async () => false,
+        resolveAllowlists: async () => ({
+          allowedDomains: ['127.0.0.1'],
+          allowedAddresses: [`127.0.0.1:${server.port}`],
+          useSSRFProtection: false,
+          mcpApps: {
+            enabled: true,
+            legacyHtmlEnabled: true,
+            operationLimits: DEFAULT_MCP_APP_OPERATION_LIMITS,
           },
-          { configurable: { run_id: 'sdk-deadline', thread_id: f.job.streamId } },
-        )
-        .then((result) => {
-          modelReturned = true;
-          return result;
+        }),
+      } as unknown as MCPServersRegistry);
+      let outcome: Promise<unknown> | undefined;
+      try {
+        const persist = f.service.engineDeps.methods.recordMCPToolAuthFailure;
+        jest
+          .spyOn(f.service.engineDeps.methods, 'recordMCPToolAuthFailure')
+          .mockImplementation(async (payload) => {
+            if (!available) throw new Error('Receipt storage unavailable');
+            return persist(payload);
+          });
+        attachScheduledMCPBearer(
+          context,
+          f.identity,
+          {
+            bind: (identity) => ({
+              identity,
+              reject: () => {},
+              resolve: async (payload) => {
+                if (payload.selection && phase === 'tool') rejectTransport = true;
+                else if (rejectTransport && mode === 'authority denial') throw failure;
+                return { ...payload.config, headers: { Authorization: 'Bearer sdk-denial-only' } };
+              },
+            }),
+          },
+          'invoke',
+          undefined,
+          { onFailure: record },
+        );
+        server.issuedTokens.add('sdk-denial-only');
+        server.tokenIssueTimes.set('sdk-denial-only', Date.now());
+        const definition: ParsedServerConfig = {
+          type: 'streamable-http',
+          url: server.url,
+          requiresOAuth: false,
+          source: 'yaml',
+          headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+        };
+        const connection = await manager.getConnection({
+          user,
+          serverName: 'Files',
+          serverConfig: definition,
+          flowManager,
+          requestScopedConnections: context,
+          ...(phase !== 'tool' && { capabilityProfile: MCP_APPS_CAPABILITY_PROFILE }),
         });
-      const deadline = Date.now() + 2000;
-      while (!sdkTimeout && Date.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(sdkTimeout).toMatchObject({ code: -32001 });
-      expect(record).toHaveBeenCalledWith(expect.objectContaining({ failure: failure.failure }));
-      expect(modelReturned).toBe(false);
-      expect((await f.store.getJob(f.job.streamId))?.scheduleMCPFailure).toMatchObject({
-        reason: failure.failure.reason,
-      });
-      expect(
-        (await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor))?.mcp,
-      ).toBeUndefined();
-      available = true;
-      await outcome;
-      expect(delivered).toMatchObject({ failure: failure.failure });
-      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
-        {
+        await connection.fetchToolsSnapshot();
+        if (phase === 'App SDK read') connection.timeout = 40;
+        let sdkTimeout: unknown;
+        const request = connection.client.request.bind(connection.client);
+        jest.spyOn(connection.client, 'request').mockImplementation((...args) => {
+          if (phase !== 'tool' && args[0].method === 'resources/read') rejectTransport = true;
+          return request(...args).catch((error) => {
+            sdkTimeout = error;
+            throw error;
+          });
+        });
+        let delivered: unknown;
+        const tool = new DynamicStructuredTool({
+          name: 'echo_mcp_Files',
+          description: 'Read',
+          schema: z.object({}),
+          func: async () => {
+            try {
+              return await manager.callTool({
+                user,
+                serverName: 'Files',
+                serverConfig: definition,
+                provider: 'openai',
+                flowManager,
+                toolName: 'echo',
+                toolArguments: { message: 'denied' },
+                requestScopedConnections: context,
+                scheduledBearerInvocation: bindScheduledMCPBearerInvocation(
+                  context,
+                  'root',
+                  'echo',
+                ),
+                options: { timeout: phase === 'tool' ? 40 : 2000, maxTotalTimeout: 2000 },
+                mcpApps: {
+                  enabled: phase !== 'tool',
+                  legacyHtmlEnabled: true,
+                  operationLimits: {
+                    ...DEFAULT_MCP_APP_OPERATION_LIMITS,
+                    timeoutMs: phase === 'App budget read' ? 40 : 200,
+                  },
+                },
+              });
+            } catch (error) {
+              delivered = error;
+              await recordScheduledMCPToolAuthFailure(
+                { ...input, error },
+                () => f.service.recordMCPToolAuthFailure,
+              );
+              throw error;
+            }
+          },
+        });
+        outcome = new ToolNode({ agentId: 'root', tools: [tool] })
+          .invoke(
+            {
+              messages: [
+                new AIMessage({
+                  content: '',
+                  tool_calls: [{ id: 'deadline', name: tool.name, args: {} }],
+                }),
+              ],
+            },
+            { configurable: { run_id: 'sdk-deadline', thread_id: f.job.streamId } },
+          )
+          .then((result) => {
+            modelReturned = true;
+            return result;
+          });
+        const deadline = Date.now() + 2000;
+        while (!sdkTimeout && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(sdkTimeout).toMatchObject({ code: -32001 });
+        expect(record).toHaveBeenCalledWith(expect.objectContaining({ failure: failure.failure }));
+        expect(modelReturned).toBe(false);
+        expect((await f.store.getJob(f.job.streamId))?.scheduleMCPFailure).toMatchObject({
+          reason: failure.failure.reason,
+        });
+        expect(
+          (await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor))?.mcp,
+        ).toBeUndefined();
+        available = true;
+        await outcome;
+        expect(delivered).toMatchObject({ failure: failure.failure });
+        expect(
+          await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor),
+        ).toMatchObject({
           mcp: failure.outcomes,
-        },
-      );
-    } finally {
-      available = true;
-      await outcome?.catch(() => undefined);
-      await cleanupMCPRequestContext(context);
-      registry.mockRestore();
-      MCPConnection.clearCooldown('Files');
-      await server.close();
-      await f.close();
-    }
-  },
-  30_000,
-);
+        });
+      } finally {
+        available = true;
+        await outcome?.catch(() => undefined);
+        await cleanupMCPRequestContext(context);
+        registry.mockRestore();
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+        await f.close();
+      }
+    },
+    30_000,
+  );
+});
 
 it.each(['reused caller', 'creating caller', 'SDK deadline'] as const)(
   'isolates %s cutoff through the actual SDK send handoff',
@@ -1832,4 +1857,129 @@ redisDescribe('retained creation recovery across worker loss', () => {
       await redis.quit();
     }
   }, 30_000);
+});
+
+describe.each(['preparation', 'initialization'] as const)('%s ownership', (phase) => {
+  it.each(['creator', 'follower'] as const)(
+    'isolates %s cancellation during cold scheduled connection acquisition',
+    async (cancelledCaller) => {
+      const f = await fixture();
+      const server = await createOAuthMCPServer();
+      const context = createMCPRequestContext();
+      const manager = new MCPManager();
+      const user = { id: f.owner, role: 'USER' } as IUser;
+      const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
+        ci: true,
+        ttl: 30_000,
+      });
+      const creator = new AbortController(),
+        follower = new AbortController();
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const started = new Promise<void>((r) => {
+        entered = r;
+      });
+      let stall = phase === 'preparation',
+        held = false;
+      let sharedSignal: AbortSignal | undefined;
+      const failures = jest.fn(async () => true);
+      const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+        isAppServerConfig: async () => false,
+        resolveAllowlists: async () => ({
+          allowedDomains: ['127.0.0.1'],
+          allowedAddresses: [`127.0.0.1:${server.port}`],
+          useSSRFProtection: false,
+        }),
+      } as unknown as MCPServersRegistry);
+      const connect = MCPConnection.prototype.connect;
+      jest.spyOn(MCPConnection.prototype, 'connect').mockImplementation(function (
+        this: MCPConnection,
+        ...args
+      ) {
+        if (phase === 'initialization') stall = true;
+        return connect.apply(this, args);
+      });
+      let first: Promise<unknown> | undefined,
+        second: Promise<unknown> | undefined,
+        third: Promise<MCPConnection> | undefined;
+      try {
+        attachScheduledMCPBearer(
+          context,
+          f.identity,
+          {
+            bind: (identity) => ({
+              identity,
+              reject: () => {},
+              resolve: async (payload) => {
+                if (stall && !held) {
+                  held = true;
+                  sharedSignal = payload.signal;
+                  entered();
+                  await gate;
+                }
+                return { ...payload.config, headers: { Authorization: 'Bearer cold-only' } };
+              },
+            }),
+          },
+          'invoke',
+          undefined,
+          { onFailure: failures },
+        );
+        server.issuedTokens.add('cold-only');
+        server.tokenIssueTimes.set('cold-only', Date.now());
+        const definition: ParsedServerConfig = {
+          type: 'streamable-http',
+          url: server.url,
+          requiresOAuth: false,
+          source: 'yaml',
+          headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+        };
+        const acquire = (signal?: AbortSignal) =>
+          manager.getConnection({
+            user,
+            serverName: 'Files',
+            serverConfig: definition,
+            flowManager,
+            requestScopedConnections: context,
+            signal,
+          });
+        first = acquire(creator.signal).catch((e) => e);
+        await started;
+        second = acquire(follower.signal).catch((e) => e);
+        third = acquire();
+        await new Promise((r) => setImmediate(r));
+        expect(context.pending.size).toBe(1);
+        const cancelled = cancelledCaller === 'creator' ? first : second;
+        (cancelledCaller === 'creator' ? creator : follower).abort();
+        const cancellationResult = await Promise.race([
+          cancelled,
+          new Promise((r) => setTimeout(() => r('still waiting'), 100)),
+        ]);
+        expect(cancellationResult).not.toBe('still waiting');
+        expect(Reflect.get(cancellationResult as object, 'name')).toBe('AbortError');
+        expect(sharedSignal?.aborted).toBe(false);
+        expect(context.pending.size).toBe(1);
+        release();
+        const connection = await third;
+        expect(await (cancelledCaller === 'creator' ? second : first)).toBe(connection);
+        expect(await acquire()).toBe(connection);
+        expect(context.connections.size).toBe(1);
+        expect(context.pending.size).toBe(0);
+        expect(failures).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await first;
+        await second;
+        await third?.catch(() => undefined);
+        await cleanupMCPRequestContext(context);
+        registry.mockRestore();
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+        await f.close();
+      }
+    },
+    30_000,
+  );
 });

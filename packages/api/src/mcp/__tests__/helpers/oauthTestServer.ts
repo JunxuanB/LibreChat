@@ -88,6 +88,7 @@ export interface OAuthTestServerOptions {
   onResourceRequest?: (request: http.IncomingMessage) => void;
   /** Observes parsed resource RPC methods without consuming the SDK's request body. */
   onRPCRequest?: (method: string) => void;
+  appResourceUri?: string;
 }
 
 export interface OAuthTokenRequestRecord {
@@ -519,10 +520,28 @@ export async function createOAuthMCPServer(
         sessionIdGenerator: () => randomUUID(),
       });
       const mcp = new McpServer({ name: 'oauth-test-server', version: '0.0.1' });
-      mcp.tool('echo', { message: z.string() }, async (args) => {
-        const text = echoHandler ? await echoHandler(args.message) : `echo: ${args.message}`;
-        return { content: [{ type: 'text' as const, text }] };
-      });
+      mcp.registerTool(
+        'echo',
+        {
+          inputSchema: { message: z.string() },
+          ...(options.appResourceUri && { _meta: { ui: { resourceUri: options.appResourceUri } } }),
+        },
+        async (args) => {
+          const text = echoHandler ? await echoHandler(args.message) : `echo: ${args.message}`;
+          return { content: [{ type: 'text' as const, text }] };
+        },
+      );
+      if (options.appResourceUri)
+        mcp.registerResource(
+          'app',
+          options.appResourceUri,
+          { mimeType: 'text/html;profile=mcp-app' },
+          async (uri) => ({
+            contents: [
+              { uri: uri.href, mimeType: 'text/html;profile=mcp-app', text: '<p>Read only</p>' },
+            ],
+          }),
+        );
       await mcp.connect(transport);
       notifyToolsChanged.add(() => mcp.server.sendToolListChanged());
     }
