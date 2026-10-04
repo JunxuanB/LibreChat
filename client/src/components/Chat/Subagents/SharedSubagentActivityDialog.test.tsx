@@ -28,7 +28,9 @@ jest.mock('~/Providers', () => ({ useAgentsMapContext: () => ({}) }));
 jest.mock('~/components/Share/MessageIcon', () => ({ __esModule: true, default: () => null }));
 jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
   __esModule: true,
-  default: () => <span data-testid="author-face" />,
+  default: ({ iconData }: { iconData: { iconURL?: string } }) => (
+    <span data-testid="author-face" data-icon={iconData.iconURL} />
+  ),
 }));
 jest.mock('~/hooks/MCP', () => ({ useMCPServerNames: () => [] }));
 
@@ -115,6 +117,7 @@ const sharedMessages = [
     endpoint: 'agents',
     model: 'agent_parent',
     sender: 'Lia',
+    iconURL: '/lia.png',
     text: '',
   } as unknown as TMessage,
 ];
@@ -123,6 +126,7 @@ function renderSharedCall(input: {
   output?: string;
   persistedContent?: TMessageContentParts[];
   detached?: boolean;
+  subagentType?: string;
 }) {
   return render(
     <ChatSurfaceHarness>
@@ -138,7 +142,7 @@ function renderSharedCall(input: {
             toolCallId="shared-call"
             initialProgress={1}
             args={{
-              subagent_type: 'researcher',
+              subagent_type: input.subagentType ?? 'researcher',
               description: 'Review the release.',
               run_in_background: input.detached === true,
             }}
@@ -183,6 +187,14 @@ describe('SharedSubagentActivityDialog', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('reuses the historical parent avatar for a shared self-spawn', () => {
+    renderSharedCall({ subagentType: 'self', persistedContent: persistedContent('Self work.') });
+    fireEvent.click(screen.getByRole('button', { name: 'Ran agent' }));
+    expect(screen.getByRole('heading', { name: 'Lia' })).toBeInTheDocument();
+    expect(screen.getByTestId('author-face')).toHaveAttribute('data-icon', '/lia.png');
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', 'Lia');
   });
 
   it('renders detached persisted activity without performing the private durable query', () => {

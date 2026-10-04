@@ -16,9 +16,22 @@ export type TurnAuthor = { name: string; icon: ReactNode; agent?: Agent };
 export function readableSubagentType(
   subagentType?: string | null,
   agentId?: string,
+  kind?: 'agent' | 'graph',
 ): string | undefined {
   if (subagentType == null || subagentType === '' || subagentType === 'self') return undefined;
+  if (kind === 'graph') return subagentType;
   return isDocumentId(subagentType) || subagentType === agentId ? undefined : subagentType;
+}
+
+/** Stored display title, excluding legacy titles that contain storage keys. */
+export function readableSubagentTitle(
+  title: string | undefined,
+  agentId?: string,
+  kind?: 'agent' | 'graph',
+): string | undefined {
+  if (!title) return undefined;
+  const name = title.startsWith('Subagent: ') ? title.slice('Subagent: '.length) : title;
+  return readableSubagentType(name, agentId, kind);
 }
 
 /** The agent a child runs as: its own saved agent, or — for a self-spawn,

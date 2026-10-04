@@ -544,6 +544,24 @@ describe('SubagentThreadPanel', () => {
     },
   );
 
+  it('uses the durable title when the child agent is unavailable', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, agentId: 'agent_deleted', title: 'Historical Reviewer' },
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Historical Reviewer' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'com_endpoint_message_new: Historical Reviewer',
+    );
+  });
+
   it.each([undefined, { subagentKind: 'graph' as const, subagentAgentId: 'graph:agent-1' }])(
     'does not resolve graph or legacy panel types as saved agents',
     (subagentIdentity) => {

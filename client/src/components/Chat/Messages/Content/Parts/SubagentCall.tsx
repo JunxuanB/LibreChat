@@ -196,7 +196,7 @@ export default function SubagentCall({
 
   const subagentType = progress?.subagentType ?? extractSubagentType(args);
   const isSelfSpawn = subagentType === 'self';
-  const subagentAgentId = resolveSubagentAgentId(progress, subagentIdentity, subagentType);
+  const subagentAgentId = resolveSubagentAgentId(progress, subagentIdentity);
   const subagentAgent = subagentAgentId ? agentsMap?.[subagentAgentId] : undefined;
   /**
    * Tri-state status resolution, aligned with `ToolCall.tsx`:
@@ -287,6 +287,8 @@ export default function SubagentCall({
    *  the verb alone — the name would be the agent this card already sits
    *  under — as do agents the map cannot resolve. */
   const subagentNameLabel = !isSelfSpawn && subagentAgent?.name ? subagentAgent.name : '';
+
+  const cardLabel = subagentNameLabel ? `${subagentNameLabel}: ${headerText}` : headerText;
 
   const canOpenDetails = useMemo(() => {
     const fallbackActivity = adaptLivePersistedActivity({
@@ -409,12 +411,12 @@ export default function SubagentCall({
         data-subagent-part-index={partIndex}
         className={cn(
           'border-border-light bg-surface-secondary my-2 flex w-full flex-col gap-1 rounded-lg border px-3 py-2 text-left transition',
-          canOpenDetails ? 'group hover:bg-surface-tertiary' : 'cursor-default opacity-80',
+          canOpenDetails ? 'hover:bg-surface-tertiary group' : 'cursor-default opacity-80',
           running && !detachedStatusUnknown && 'animate-pulse-slow',
         )}
-        aria-label={subagentNameLabel ? `${subagentNameLabel}: ${headerText}` : headerText}
+        aria-label={detachedStatusUnknown ? undefined : cardLabel}
       >
-        <div className="text-text-primary flex items-center gap-2 text-sm font-medium">
+        <div className="text-text-primary flex w-full min-w-0 items-center gap-2 text-sm font-medium">
           <div
             className={cn(
               FOLD_GLYPH_CLASS,
@@ -439,12 +441,15 @@ export default function SubagentCall({
           </div>
           {subagentNameLabel ? (
             <>
-              <span className="min-w-0 shrink-0 truncate font-semibold" title={subagentNameLabel}>
+              <span
+                className="max-w-[50%] min-w-0 shrink truncate font-semibold"
+                title={subagentNameLabel}
+              >
                 {subagentNameLabel}
               </span>
               <span
                 className="text-text-secondary min-w-0 flex-1 truncate font-normal"
-                title={headerText}
+                title={detachedStatusUnknown ? undefined : headerText}
               >
                 {detachedStatusUnknown && backgroundHandle != null ? (
                   <DetachedTaskStatus
@@ -459,8 +464,19 @@ export default function SubagentCall({
             </>
           ) : (
             <>
-              <span className="min-w-0 truncate" title={headerText}>
-                {headerText}
+              <span
+                className="min-w-0 truncate"
+                title={detachedStatusUnknown ? undefined : headerText}
+              >
+                {detachedStatusUnknown && backgroundHandle != null ? (
+                  <DetachedTaskStatus
+                    threadId={backgroundHandle.subagent_thread_id}
+                    taskId={backgroundHandle.background_task_id}
+                    fallback={headerText}
+                  />
+                ) : (
+                  headerText
+                )}
               </span>
               <span className="flex-1" />
             </>

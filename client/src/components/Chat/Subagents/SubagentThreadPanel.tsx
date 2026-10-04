@@ -43,7 +43,13 @@ import {
   subagentProgressKey,
   useSubagentProgress,
 } from './state';
-import { agentAuthor, resolveChildAgent, readableSubagentType, useParentAuthor } from './author';
+import {
+  agentAuthor,
+  resolveChildAgent,
+  readableSubagentType,
+  readableSubagentTitle,
+  useParentAuthor,
+} from './author';
 import useSubagentActivityStream from '~/data-provider/Subagents/useSubagentActivityStream';
 import SubagentActivity, { SubagentActivityScrollSurface } from './SubagentActivity';
 import ApprovalProvider from '~/components/Chat/Messages/Content/ApprovalContext';
@@ -156,11 +162,7 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
     selection.parentMessageId,
     localize('com_ui_subagent_parent_agent'),
   );
-  const foregroundAgentId = resolveSubagentAgentId(
-    progress,
-    selection.subagentIdentity,
-    selection.subagentType,
-  );
+  const foregroundAgentId = resolveSubagentAgentId(progress, selection.subagentIdentity);
   const foregroundAgent = foregroundAgentId == null ? undefined : agentsMap?.[foregroundAgentId];
   /** Named the way main chat names an agent turn — never by its id. A
    *  self-spawn is the parent agent working on its own behalf. */
@@ -168,7 +170,11 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
     foregroundAgent?.name ||
     (isSelfSpawn
       ? parentAuthor.name
-      : readableSubagentType(selection.subagentType, foregroundAgentId)) ||
+      : readableSubagentType(
+          selection.subagentType,
+          foregroundAgentId,
+          progress?.subagentKind ?? selection.subagentIdentity?.subagentKind,
+        )) ||
     localize('com_ui_subagent_actor');
   const threadId = selection.durable?.threadId ?? '';
   const taskId = selection.durable?.taskId ?? '';
@@ -851,9 +857,17 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
     () =>
       agentAuthor(
         selectedActorAgent,
-        selection.event == null ? foregroundTitle : selectedEventActorName,
+        readableSubagentTitle(threadView?.title, selectedActorAgentId, threadView?.subagentKind) ||
+          (selection.event == null ? foregroundTitle : selectedEventActorName),
       ),
-    [foregroundTitle, selectedActorAgent, selectedEventActorName, selection.event],
+    [
+      foregroundTitle,
+      selectedActorAgent,
+      selectedActorAgentId,
+      selectedEventActorName,
+      selection.event,
+      threadView,
+    ],
   );
   const panelTitle = childAuthor.name;
   const actorOptions = useMemo<OptionWithIcon[]>(() => {

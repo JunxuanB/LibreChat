@@ -1,6 +1,8 @@
 import { RecoilRoot } from 'recoil';
+import { QueryKeys } from 'librechat-data-provider';
 import { render, screen } from '@testing-library/react';
-import type { TMessage } from 'librechat-data-provider';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ParentSubagentSummary, TMessage } from 'librechat-data-provider';
 import type { TMessageChatContext } from '~/common';
 import MessageRender from '../MessageRender';
 
@@ -8,6 +10,11 @@ const mockAgentsMap = {
   agent_reviewer: { id: 'agent_reviewer', name: 'Code Reviewer' },
   agent_lia: { id: 'agent_lia', name: 'Lia' },
 };
+
+let mockChildren = new Map<string, ParentSubagentSummary>();
+jest.mock('~/components/Chat/Subagents/ParentSubagentsProvider', () => ({
+  useParentSubagents: () => ({ byThreadId: mockChildren }),
+}));
 
 jest.mock('~/Providers', () => ({
   ...jest.requireActual('~/Providers/MessageContext'),
@@ -38,8 +45,8 @@ jest.mock('~/hooks', () => ({
 /** The author glyph reduced to whose face it is. */
 jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
   __esModule: true,
-  default: ({ agent }: { agent?: { name?: string } }) => (
-    <span data-testid="author-face" data-agent={agent?.name ?? ''} />
+  default: ({ agent, iconData }: { agent?: { name?: string }; iconData: { iconURL?: string } }) => (
+    <span data-testid="author-face" data-agent={agent?.name ?? ''} data-icon={iconData.iconURL} />
   ),
 }));
 jest.mock('~/components/Chat/Messages/Content/Wakeup', () => ({
@@ -90,7 +97,21 @@ const backgroundWakeup = [
   ]),
 ].join('\n');
 
-function renderMessage(text: string) {
+function renderMessage(text: string, parentModel = 'agent_lia') {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(
+    [QueryKeys.messages, 'conversation-1'],
+    [
+      {
+        messageId: 'dispatch',
+        isCreatedByUser: false,
+        endpoint: 'agents',
+        model: parentModel,
+        sender: 'Historical Parent',
+        iconURL: '/historical.png',
+      },
+    ],
+  );
   const message = {
     messageId: 'wake',
     parentMessageId: 'parent',
@@ -99,17 +120,34 @@ function renderMessage(text: string) {
     text,
   } as unknown as TMessage;
   return render(
-    <RecoilRoot>
-      <MessageRender message={message} chatContext={chatContext} currentEditId={null} />
-    </RecoilRoot>,
+    <QueryClientProvider client={queryClient}>
+      <RecoilRoot>
+        <MessageRender message={message} chatContext={chatContext} currentEditId={null} />
+      </RecoilRoot>
+    </QueryClientProvider>,
   );
 }
 
 describe('MessageRender wake-up rows', () => {
+  beforeEach(() => {
+    mockChildren = new Map([
+      [
+        'thread-1',
+        {
+          threadId: 'thread-1',
+          parentMessageId: 'dispatch',
+          subagentType: 'agent_reviewer',
+          subagentKind: 'agent',
+          agentId: 'agent_reviewer',
+          title: 'Stored Reviewer',
+        } as ParentSubagentSummary,
+      ],
+    ]);
+  });
   it('heads a subagent report with the subagent name and face instead of a system label', () => {
     renderMessage(subagentWakeup('agent_reviewer'));
 
-    const heading = screen.getByRole('heading', { name: /Code Reviewer$/ });
+    const heading = screen.getByRole('heading', { name: 'Code Reviewer' });
     expect(heading).not.toHaveClass('sr-only');
     expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', 'Code Reviewer');
     expect(screen.queryByText('com_ui_system_event')).not.toBeInTheDocument();
@@ -121,13 +159,51 @@ describe('MessageRender wake-up rows', () => {
   });
 
   it('names a self-spawned report after the agent it woke', () => {
+    mockChildren.set('thread-1', { ...mockChildren.get('thread-1')!, subagentType: 'self' });
     renderMessage(subagentWakeup('self'));
 
     expect(screen.getByRole('heading', { name: /Lia$/ })).toBeInTheDocument();
     expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', 'Lia');
   });
 
+  it('keeps historical self-spawn identity after switching the current agent', () => {
+    mockChildren.set('thread-1', { ...mockChildren.get('thread-1')!, subagentType: 'self' });
+    renderMessage(subagentWakeup('self'), 'agent_reviewer');
+    expect(screen.getByRole('heading', { name: 'Code Reviewer' })).toBeInTheDocument();
+    expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', 'Code Reviewer');
+  });
+
+  it('retains the historical avatar when the self-spawning agent is unavailable', () => {
+    mockChildren.set('thread-1', { ...mockChildren.get('thread-1')!, subagentType: 'self' });
+    renderMessage(subagentWakeup('self'), 'agent_deleted');
+    expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
+    expect(screen.getByTestId('author-face')).toHaveAttribute('data-icon', '/historical.png');
+  });
+
+  it.each(['agent_reviewer', 'agent_research_team'])(
+    'preserves the explicit graph alias %s without resolving a saved agent',
+    (subagentType) => {
+      mockChildren.set('thread-1', {
+        ...mockChildren.get('thread-1')!,
+        subagentType,
+        subagentKind: 'graph',
+        title: subagentType,
+      });
+      renderMessage(subagentWakeup(subagentType));
+      expect(screen.getByRole('heading', { name: subagentType })).toBeInTheDocument();
+      expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', '');
+    },
+  );
+
+  it('does not mistake an unindexed alias for a saved agent', () => {
+    mockChildren.clear();
+    renderMessage(subagentWakeup('agent_reviewer'));
+    expect(screen.getByRole('heading', { name: 'com_ui_subagent_actor' })).toBeInTheDocument();
+    expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', '');
+  });
+
   it('names an unresolvable subagent generically, never by its id', () => {
+    mockChildren.clear();
     renderMessage(subagentWakeup('agent_unknown'));
 
     expect(screen.getByRole('heading', { name: /com_ui_subagent_actor$/ })).toBeInTheDocument();

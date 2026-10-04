@@ -47,11 +47,7 @@ export default function SharedSubagentActivityDialog({
       ),
     [agentsMap, messages, parentFallback, parentMessageId],
   );
-  const childAgentId = resolveSubagentAgentId(
-    null,
-    selection?.subagentIdentity,
-    selection?.subagentType,
-  );
+  const childAgentId = resolveSubagentAgentId(null, selection?.subagentIdentity);
   const isSelfSpawn = selection?.subagentType === 'self';
   const childAgent = resolveChildAgent(
     childAgentId,
@@ -61,14 +57,17 @@ export default function SharedSubagentActivityDialog({
   );
   const childAuthor = useMemo(
     () =>
-      agentAuthor(
-        childAgent,
-        (isSelfSpawn
-          ? parentAuthor.name
-          : readableSubagentType(selection?.subagentType, childAgentId)) ||
-          localize('com_ui_subagent_actor'),
-      ),
-    [childAgent, childAgentId, isSelfSpawn, localize, parentAuthor.name, selection?.subagentType],
+      isSelfSpawn
+        ? parentAuthor
+        : agentAuthor(
+            childAgent,
+            readableSubagentType(
+              selection?.subagentType,
+              childAgentId,
+              selection?.subagentIdentity?.subagentKind,
+            ) || localize('com_ui_subagent_actor'),
+          ),
+    [childAgent, childAgentId, isSelfSpawn, localize, parentAuthor, selection],
   );
   const title = childAuthor.name;
   const activity = useMemo(

@@ -65,9 +65,9 @@ jest.mock('../Attachment', () => ({
 
 jest.mock('lucide-react', () => ({
   // eslint-disable-next-line i18next/no-literal-string
-  ChevronRight: () => <span>chevron</span>,
+  ChevronRight: () => <span aria-hidden="true">chevron</span>,
   // eslint-disable-next-line i18next/no-literal-string
-  Users: () => <span>users</span>,
+  Users: () => <span aria-hidden="true">users</span>,
 }));
 
 jest.mock('~/Providers', () => ({
@@ -541,20 +541,56 @@ describe('SubagentCall', () => {
         } as ParentSubagentSummary,
       ],
     ]);
-    /** No recorded identity: the type is the agent's id, read as a name. */
+    /** Saved identity disambiguates agent ids from graph aliases. */
     renderWithState({
       toolCallId: 'named-detached',
       initialProgress: 1,
+      subagentIdentity: { subagentKind: 'agent', subagentAgentId: 'agent_reviewer' },
       output,
       toolArgs: { subagent_type: 'agent_reviewer', run_in_background: true },
     });
 
-    const card = screen.getByRole('button', { name: 'Code Reviewer: Agent activity' });
+    const card = screen.getByRole('button', {
+      name: 'Code Reviewer com_ui_subagent_thread_status_completed',
+    });
     expect(within(card).getByText('Code Reviewer')).toBeInTheDocument();
     expect(within(card).getByRole('img', { hidden: true })).toHaveAttribute('src', '/reviewer.png');
     expect(within(card).getByText('com_ui_subagent_thread_status_completed')).toBeInTheDocument();
     expect(within(card).queryByText(/agent_reviewer/)).not.toBeInTheDocument();
   });
+
+  it.each(['self', 'researcher', 'agent_missing'])(
+    'exposes the indexed outcome for an unnamed detached %s child',
+    (subagentType) => {
+      mockIndexedChildren = new Map([
+        [
+          'child-thread-1',
+          {
+            threadId: 'child-thread-1',
+            latestTaskId: 'task-1',
+            status: 'failed',
+            tasks: [{ taskId: 'task-1', status: 'failed' }],
+          } as ParentSubagentSummary,
+        ],
+      ]);
+      renderWithState({
+        toolCallId: 'unnamed-detached',
+        initialProgress: 1,
+        toolArgs: { subagent_type: subagentType, run_in_background: true },
+        output: JSON.stringify({
+          background_task_id: 'task-1',
+          subagent_thread_id: 'child-thread-1',
+          tool: 'subagent',
+          subagent_type: subagentType,
+          status: 'running',
+          message: 'Started subagent background task. Poll with background_task_id task-1.',
+        }),
+      });
+      expect(
+        screen.getByRole('button', { name: 'com_ui_subagent_thread_status_failed' }),
+      ).not.toHaveAttribute('aria-label');
+    },
+  );
 
   it('keeps the neutral label for a detached child the index has not reported', () => {
     const output = JSON.stringify({
@@ -569,11 +605,12 @@ describe('SubagentCall', () => {
     renderWithState({
       toolCallId: 'unindexed-detached',
       initialProgress: 1,
+      subagentIdentity: { subagentKind: 'agent', subagentAgentId: 'agent_reviewer' },
       output,
       toolArgs: { subagent_type: 'agent_reviewer', run_in_background: true },
     });
 
-    const card = screen.getByRole('button', { name: 'Code Reviewer: Agent activity' });
+    const card = screen.getByRole('button', { name: 'Code Reviewer Agent activity' });
     expect(within(card).getByText('Agent activity')).toBeInTheDocument();
   });
 
