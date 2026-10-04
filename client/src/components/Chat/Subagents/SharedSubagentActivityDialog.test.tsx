@@ -127,6 +127,7 @@ function renderSharedCall(input: {
   persistedContent?: TMessageContentParts[];
   detached?: boolean;
   subagentType?: string;
+  subagentIdentity?: { subagentKind: 'graph'; subagentAgentId: 'graph:self' };
 }) {
   return render(
     <ChatSurfaceHarness>
@@ -147,6 +148,7 @@ function renderSharedCall(input: {
               run_in_background: input.detached === true,
             }}
             output={input.output}
+            subagentIdentity={input.subagentIdentity}
             persistedContent={input.persistedContent}
           />
           <SharedSubagentActivityDialog shareId="share-1" messages={sharedMessages} />
@@ -195,6 +197,18 @@ describe('SharedSubagentActivityDialog', () => {
     expect(screen.getByRole('heading', { name: 'Lia' })).toBeInTheDocument();
     expect(screen.getByTestId('author-face')).toHaveAttribute('data-icon', '/lia.png');
     expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', 'Lia');
+  });
+
+  it('preserves a shared graph alias named self instead of the parent author', () => {
+    renderSharedCall({
+      subagentType: 'self',
+      subagentIdentity: { subagentKind: 'graph', subagentAgentId: 'graph:self' },
+      persistedContent: persistedContent('Graph work.'),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Ran agent' }));
+    expect(screen.getByRole('heading', { name: 'self' })).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', 'self');
+    expect(screen.getByTestId('author-face')).not.toHaveAttribute('data-icon', '/lia.png');
   });
 
   it('renders detached persisted activity without performing the private durable query', () => {

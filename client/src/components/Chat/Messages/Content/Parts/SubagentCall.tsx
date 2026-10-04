@@ -15,6 +15,7 @@ import {
   useSubagentProgress,
 } from '~/components/Chat/Subagents/state';
 import { useParentSubagents } from '~/components/Chat/Subagents/ParentSubagentsProvider';
+import { isSelfSpawn as isSelfSpawnType } from '~/components/Chat/Subagents/author';
 import { adaptLivePersistedActivity } from '~/components/Chat/Subagents/adapters';
 import { resolveSubagentAgentId } from '~/components/Chat/Subagents/identity';
 import { subagentStatusLabelKey } from '~/components/Chat/Subagents/status';
@@ -195,7 +196,10 @@ export default function SubagentCall({
     isSharedConvo !== true && backgroundHandle != null && parentConversationId !== '';
 
   const subagentType = progress?.subagentType ?? extractSubagentType(args);
-  const isSelfSpawn = subagentType === 'self';
+  const isSelfSpawn = isSelfSpawnType(
+    subagentType,
+    progress?.subagentKind ?? subagentIdentity?.subagentKind,
+  );
   const subagentAgentId = resolveSubagentAgentId(progress, subagentIdentity);
   const subagentAgent = subagentAgentId ? agentsMap?.[subagentAgentId] : undefined;
   /**

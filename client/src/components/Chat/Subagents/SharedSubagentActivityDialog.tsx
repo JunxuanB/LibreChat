@@ -4,6 +4,7 @@ import { OGDialog, OGDialogContent, OGDialogHeader, OGDialogTitle } from '@libre
 import type { TMessage } from 'librechat-data-provider';
 import {
   agentAuthor,
+  isSelfSpawn as isSelfSpawnType,
   messageAuthor,
   resolveChildAgent,
   readableSubagentType,
@@ -48,12 +49,16 @@ export default function SharedSubagentActivityDialog({
     [agentsMap, messages, parentFallback, parentMessageId],
   );
   const childAgentId = resolveSubagentAgentId(null, selection?.subagentIdentity);
-  const isSelfSpawn = selection?.subagentType === 'self';
+  const isSelfSpawn = isSelfSpawnType(
+    selection?.subagentType,
+    selection?.subagentIdentity?.subagentKind,
+  );
   const childAgent = resolveChildAgent(
     childAgentId,
     selection?.subagentType,
     parentAuthor.agent,
     agentsMap,
+    selection?.subagentIdentity?.subagentKind,
   );
   const childAuthor = useMemo(
     () =>

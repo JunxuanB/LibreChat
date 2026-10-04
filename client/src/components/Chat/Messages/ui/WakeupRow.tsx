@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 import type { WakeupTask } from '../Content/Parts/wakeup';
 import {
   agentAuthor,
+  isSelfSpawn,
   useParentAuthor,
   readableSubagentType,
   readableSubagentTitle,
@@ -29,7 +30,7 @@ export default function WakeupRow({
   );
   const author = useMemo(() => {
     const subagentType = child?.subagentType ?? task?.subagentType;
-    if (subagentType === 'self' && child?.subagentKind !== 'graph') return parentAuthor;
+    if (isSelfSpawn(subagentType, child?.subagentKind)) return parentAuthor;
     const agent =
       child?.subagentKind === 'agent' && child.agentId != null
         ? agentsMap?.[child.agentId]

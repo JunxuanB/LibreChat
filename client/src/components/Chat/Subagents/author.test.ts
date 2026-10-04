@@ -1,6 +1,11 @@
 import { EModelEndpoint } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
-import { findAgentAuthorMessage } from './author';
+import {
+  isSelfSpawn,
+  resolveChildAgent,
+  readableSubagentType,
+  findAgentAuthorMessage,
+} from './author';
 
 function message(
   messageId: string,
@@ -44,4 +49,13 @@ it('shares one history traversal across multiple wake-up authors and indexes a n
   const added = message('added', 'new-wake');
   expect(findAgentAuthorMessage([...messages, added], 'new-wake')).toBe(added);
   expect(findAgentAuthorMessage(messages, 'new-wake')).toBeUndefined();
+});
+
+it('preserves self as an explicit graph alias across author resolution', () => {
+  expect(isSelfSpawn('self', 'graph')).toBe(false);
+  expect(isSelfSpawn('self', 'agent')).toBe(true);
+  expect(isSelfSpawn('self')).toBe(true);
+  expect(readableSubagentType('self', undefined, 'graph')).toBe('self');
+  expect(readableSubagentType('self')).toBeUndefined();
+  expect(resolveChildAgent('agent-1', 'self', undefined, {}, 'graph')).toBeUndefined();
 });

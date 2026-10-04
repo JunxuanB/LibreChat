@@ -629,6 +629,102 @@ describe('SubagentThreadPanel', () => {
     );
   });
 
+  it.each(['selection', 'durable'])(
+    'keeps a graph named self distinct from its parent (%s identity)',
+    (source) => {
+      queryClient.setQueryData<TMessage[]>(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            messageId: 'parent-message',
+            parentMessageId: null,
+            conversationId: 'parent-conversation',
+            isCreatedByUser: false,
+            endpoint: EModelEndpoint.agents,
+            model: 'agent_deleted',
+            sender: 'Historical Parent',
+            iconURL: '/historical-parent.png',
+            text: '',
+          },
+        ],
+      );
+      mockUseSubagentThreadQuery.mockReturnValue({
+        isLoading: false,
+        isError: false,
+        data: {
+          ...completedView,
+          agentId: undefined,
+          subagentType: 'self',
+          title: 'self',
+          subagentKind: source === 'durable' ? 'graph' : undefined,
+          turns: completedTurns,
+        },
+      });
+      const { container } = render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{
+              ...selection,
+              subagentType: 'self',
+              subagentIdentity:
+                source === 'selection'
+                  ? { subagentKind: 'graph', subagentAgentId: 'graph:self' }
+                  : undefined,
+            }}
+          />
+        </Root>,
+      );
+      expect(screen.getByRole('heading', { name: 'self' })).toBeInTheDocument();
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', 'self');
+      expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeNull();
+    },
+  );
+
+  it('resolves a missing historical parent after its reply arrives and retains that author', async () => {
+    queryClient.setQueryData<TMessage[]>([QueryKeys.messages, 'parent-conversation'], []);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, subagentType: 'self', turns: completedTurns },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+      </Root>,
+    );
+    expect(
+      screen.getByRole('heading', { name: 'com_ui_subagent_parent_agent' }),
+    ).toBeInTheDocument();
+    const reply: TMessage = {
+      messageId: 'reply',
+      parentMessageId: 'parent-message',
+      conversationId: 'parent-conversation',
+      isCreatedByUser: false,
+      endpoint: EModelEndpoint.agents,
+      model: 'agent_deleted',
+      sender: 'Late Parent',
+      iconURL: '/late.png',
+      text: '',
+    };
+    await act(async () => {
+      queryClient.setQueryData([QueryKeys.messages, 'parent-conversation'], [reply]);
+    });
+    expect(screen.getByRole('heading', { name: 'Late Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/late.png"]')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-author',
+      'Late Parent',
+    );
+    await act(async () => {
+      queryClient.setQueryData(
+        [QueryKeys.messages, 'parent-conversation'],
+        [{ ...reply, sender: 'Changed snapshot', iconURL: '/changed.png', text: 'Next chunk' }],
+      );
+    });
+    expect(screen.getByRole('heading', { name: 'Late Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/late.png"]')).toBeInTheDocument();
+  });
+
   it.each([true, false])(
     'names an unavailable event actor by its projected label (indexed: %s)',
     (indexed) => {

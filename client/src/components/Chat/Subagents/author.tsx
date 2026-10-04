@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EModelEndpoint, QueryKeys } from 'librechat-data-provider';
 import type { Agent, TMessage } from 'librechat-data-provider';
@@ -18,8 +18,9 @@ export function readableSubagentType(
   agentId?: string,
   kind?: 'agent' | 'graph',
 ): string | undefined {
-  if (subagentType == null || subagentType === '' || subagentType === 'self') return undefined;
+  if (subagentType == null || subagentType === '') return undefined;
   if (kind === 'graph') return subagentType;
+  if (subagentType === 'self') return undefined;
   return isDocumentId(subagentType) || subagentType === agentId ? undefined : subagentType;
 }
 
@@ -34,6 +35,11 @@ export function readableSubagentTitle(
   return readableSubagentType(name, agentId, kind);
 }
 
+/** Explicit graph identity takes precedence over the legacy self alias. */
+export function isSelfSpawn(subagentType?: string | null, kind?: 'agent' | 'graph'): boolean {
+  return kind !== 'graph' && subagentType === 'self';
+}
+
 /** The agent a child runs as: its own saved agent, or — for a self-spawn,
  *  which records none — the agent that spawned it. */
 export function resolveChildAgent(
@@ -41,9 +47,11 @@ export function resolveChildAgent(
   subagentType: string | null | undefined,
   spawningAgent: Agent | undefined,
   agentsMap: Record<string, Agent | undefined> | undefined,
+  kind?: 'agent' | 'graph',
 ): Agent | undefined {
+  if (kind === 'graph') return undefined;
   if (agentId != null) return agentsMap?.[agentId];
-  return subagentType === 'self' ? spawningAgent : undefined;
+  return isSelfSpawn(subagentType, kind) ? spawningAgent : undefined;
 }
 
 /** The author main chat draws for an agent turn: the agent's name and avatar,
@@ -119,12 +127,8 @@ export function messageAuthor(
   };
 }
 
-/**
- * The agent that dispatched a child, read once from the parent conversation's
- * loaded messages — the dispatching message is on screen whenever its child can
- * be opened. Deliberately not a cache subscription: a running parent rewrites
- * that cache on every streamed chunk, and its author never changes with it.
- */
+/** Wait for a missing historical author, then retain its snapshot so streamed
+ *  content updates do not rerender every wake-up or open activity panel. */
 export function useParentAuthor(
   conversationId: string,
   messageId: string,
@@ -132,14 +136,31 @@ export function useParentAuthor(
 ): TurnAuthor {
   const queryClient = useQueryClient();
   const agentsMap = useAgentsMapContext();
-  const message = useMemo(
-    () =>
-      findAgentAuthorMessage(
+  const store = useMemo(() => {
+    let message: TMessage | undefined;
+    const getSnapshot = () => {
+      message ??= findAgentAuthorMessage(
         queryClient.getQueryData<TMessage[]>([QueryKeys.messages, conversationId]),
         messageId,
-      ),
-    [conversationId, messageId, queryClient],
-  );
+      );
+      return message;
+    };
+    return {
+      getSnapshot,
+      subscribe: (onChange: () => void) => {
+        if (messageId === '' || getSnapshot() != null) return () => {};
+        const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+          const key = event.query.queryKey;
+          if (key[0] !== QueryKeys.messages || key[1] !== conversationId) return;
+          if (getSnapshot() == null) return;
+          unsubscribe();
+          onChange();
+        });
+        return unsubscribe;
+      },
+    };
+  }, [conversationId, messageId, queryClient]);
+  const message = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   return useMemo(
     () => messageAuthor(message, agentsMap, fallbackName),
     [agentsMap, fallbackName, message],
