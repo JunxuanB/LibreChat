@@ -212,6 +212,21 @@ describe('searchPrincipals word-prefix search', () => {
   });
 });
 
+describe('search token serialization', () => {
+  it('keeps token fields out of the JSON and object output of a freshly created document', async () => {
+    const [group] = await Group.create([{ name: 'Platform Team', source: 'local' }]);
+    const created = await User.create(user('Ana Lima', 'ana@x.io', 'ana'));
+    for (const doc of [group, created]) {
+      expect(doc.get('nameTokens')).toBeDefined();
+      expect(doc.toJSON()).not.toHaveProperty('nameTokens');
+      expect(doc.toObject()).not.toHaveProperty('nameTokens');
+      expect(doc.toObject()).not.toHaveProperty('emailTokens');
+    }
+    const stored = await Group.findById(group._id).select('+nameTokens').lean();
+    expect(stored?.nameTokens).toEqual(['platform', 'team']);
+  });
+});
+
 describe('search query plan', () => {
   const planStages = (plan: unknown): string[] => {
     const stages: string[] = [];

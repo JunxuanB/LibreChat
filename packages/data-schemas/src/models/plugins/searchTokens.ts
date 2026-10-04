@@ -8,7 +8,9 @@ import { withSearchTokens, searchTokenIndexes, computeSearchTokens } from '~/uti
  * update queries. `bulkWrite` runs no middleware: callers that change a source
  * field through it must apply `withSearchTokens` themselves.
  *
- * Token fields are `select: false`; they exist for the index, not for readers.
+ * Token fields are `select: false` and stripped from `toJSON`/`toObject`
+ * output (a freshly saved document still holds them); they exist for the
+ * index, not for readers.
  */
 export function applySearchTokens(schema: Schema, fields: readonly SearchTokenField[]): void {
   for (const field of fields) {
@@ -16,6 +18,18 @@ export function applySearchTokens(schema: Schema, fields: readonly SearchTokenFi
     for (const index of searchTokenIndexes(field)) {
       schema.index(index);
     }
+  }
+
+  for (const option of ['toJSON', 'toObject'] as const) {
+    schema.set(option, {
+      ...schema.get(option),
+      transform(_doc, ret: Record<string, unknown>) {
+        for (const field of fields) {
+          delete ret[field.tokens];
+        }
+        return ret;
+      },
+    });
   }
 
   schema.pre('save', function () {
