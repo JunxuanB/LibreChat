@@ -1915,23 +1915,26 @@ Please follow these instructions when using tools from the respective MCP server
             signal: options?.signal,
           });
           options?.signal?.throwIfAborted();
-          return withMCPRequestSignal(options?.signal, (signal) =>
-            connection!.client.request(
-              {
-                method: 'tools/call',
-                params: {
-                  name: toolName,
-                  arguments: toolArguments,
+          return withMCPRequestSignal(
+            options?.signal,
+            (signal) =>
+              connection!.client.request(
+                {
+                  method: 'tools/call',
+                  params: {
+                    name: toolName,
+                    arguments: toolArguments,
+                  },
                 },
-              },
-              CallToolResultSchema,
-              {
-                timeout: connection!.timeout,
-                resetTimeoutOnProgress: true,
-                ...options,
-                signal,
-              },
-            ),
+                CallToolResultSchema,
+                {
+                  timeout: connection!.timeout,
+                  resetTimeoutOnProgress: true,
+                  ...options,
+                  signal,
+                },
+              ),
+            isScheduledMCPBearer(requestScopedConnections) && directBearerRecovery,
           );
         };
 
