@@ -1,8 +1,10 @@
-import { DEFAULT_SCHEDULE_MCP_CONSENT_LIFETIME_HOURS } from 'librechat-data-provider';
-import { readScheduleMCPOutcomes, getScheduleMCPDisabledReason } from 'librechat-data-provider';
 import { logger, runAsSystem, tenantStorage, isRuntimeDisabled } from '@librechat/data-schemas';
 import { getRefillEligibilityDate, Permissions, PermissionTypes } from 'librechat-data-provider';
 import {
+  DEFAULT_SCHEDULE_MCP_CONSENT_LIFETIME_HOURS,
+  isScheduleMCPAuthorizationFailure,
+  readScheduleMCPOutcomes,
+  getScheduleMCPDisabledReason,
   projectScheduleMCPReceipt,
   readScheduleMCPReceipts,
   mergeScheduleMCPReceipts,
@@ -24,6 +26,7 @@ import type {
 } from './types';
 import type { SerializableJobData } from '../stream/interfaces/IJobStore';
 import type { AgentCheckpointGeneration } from '../agents/checkpointer';
+import type { ScheduleMCPExecution } from './authorization/execution';
 import type { BalanceUpdateFields } from '../types/balance';
 import type { GetAppConfigOptions } from '../app/service';
 import {
@@ -39,8 +42,10 @@ import {
   captureAgentCheckpointGeneration,
   checkpointStorageConfigs,
 } from '../agents/checkpointer';
+import { scheduleMCPFailurePriority } from '~/stream/scheduleFailure';
 import { fireSchedule, BALANCE_SKIP_DISABLE_THRESHOLD } from './fire';
 import { GenerationJobManager } from '../stream/GenerationJobManager';
+import { ScheduledMCPPolicyError } from './authorization/policy';
 import { isStopConfirmed } from '../stream/interfaces/IJobStore';
 import { buildBalanceUpdateFields } from '../middleware/balance';
 import { getAppConfigOptionsFromUser } from '../app/service';
@@ -318,7 +323,9 @@ export async function recordScheduledMCPToolAuthFailure(
   input: Parameters<SchedulesService['recordMCPToolAuthFailure']>[0],
   getRecorder: () => SchedulesService['recordMCPToolAuthFailure'],
 ): Promise<boolean> {
-  const bearer = input.error instanceof ScheduledMCPBearerError;
+  const bearer =
+    input.error instanceof ScheduledMCPBearerError ||
+    input.error instanceof ScheduledMCPPolicyError;
   const cause = input.error instanceof Error ? input.error.cause : undefined;
   const missing = input.error instanceof OboTokenResolutionError ? input.error : cause;
   if (
@@ -328,10 +335,18 @@ export async function recordScheduledMCPToolAuthFailure(
     !input.streamId ||
     input.jobCreatedAt == null ||
     !input.userId ||
-    (bearer && !input.identity)
+    (input.error instanceof ScheduledMCPBearerError && !input.identity)
   ) {
     if (bearer) throw new ScheduledMCPReceiptFencedError();
     return false;
+  }
+  if (input.error instanceof ScheduledMCPPolicyError) {
+    try {
+      return await getRecorder()(input);
+    } catch (error) {
+      logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
+      return false;
+    }
   }
   for (;;) {
     try {
@@ -350,6 +365,29 @@ export async function recordScheduledMCPToolAuthFailure(
   }
 }
 
+/** Captures host scope, never model arguments or mutable runnable config. */
+export function createScheduledMCPPolicyRecorder(
+  execution: ScheduleMCPExecution | undefined,
+  job: { streamId?: string | null; jobCreatedAt?: number; userId?: string; tenantId?: string },
+  record: SchedulesService['recordMCPToolAuthFailure'],
+): ((error: ScheduledMCPPolicyError) => Promise<boolean>) | undefined {
+  if (!execution) return;
+  const identity = Object.freeze({ ...execution.identity });
+  const scope = Object.freeze({ ...job });
+  return (error) => {
+    if (scope.userId !== identity.ownerId || (scope.tenantId ?? null) !== identity.tenantId)
+      return Promise.resolve(false);
+    return record({
+      error,
+      identity,
+      streamId: scope.streamId ?? undefined,
+      jobCreatedAt: scope.jobCreatedAt,
+      userId: identity.ownerId,
+      serverName: error.outcomes[0].server,
+    });
+  };
+}
+
 /** Test-only overrides for the service's bounded waits (drains, barriers). */
 export interface ScheduleServiceTimings {
   drainTimeoutMs?: number;
@@ -363,70 +401,14 @@ export interface ScheduleServiceTimings {
  * own engine singleton and job-store-shared flag, so state never leaks between
  * instances.
  */
-export function createSchedulesService(
-  deps: SchedulesServiceDeps,
-  timings?: ScheduleServiceTimings,
-): SchedulesService {
-  const { methods } = deps;
-
-  // Recovery evidence only: no authorization or bearer is cached here.
-  const pendingBearerFailures = new Map<
-    string,
-    Parameters<SchedulesService['recordMCPToolAuthFailure']>[0] & {
-      admitted: boolean;
-      outcomes: ScheduleMCPOutcome[];
-    }
-  >();
-  async function eraseSettledSchedule(scheduleId: string): Promise<boolean> {
-    for (const pending of pendingBearerFailures.values()) {
-      if (pending.identity?.scheduleId === scheduleId) return false;
-    }
-    return methods.eraseScheduleIfDrained(scheduleId);
-  }
-
-  const receiptKey = (stream: string, epoch: number): string => JSON.stringify([stream, epoch]);
-  const outcomeKey = (outcome: ScheduleMCPOutcome): string =>
-    JSON.stringify([
-      outcome.server,
-      outcome.agentId,
-      outcome.status,
-      outcome.reason,
-      outcome.recovery,
-      outcome.detail,
-      outcome.automaticReplay,
-    ]);
-  const mergeReceipts = mergeScheduleMCPReceipts;
-  const encodeReceipts = (outcomes: ScheduleMCPOutcome[]): string =>
-    `${getScheduleMCPDisabledReason(outcomes) ?? 'mcp_unavailable'}: ${JSON.stringify(outcomes)}`;
-
-  // Fail LOUDLY at construction, not per-fire. The JS adapter (api/server/services/
-  // Schedules) is not typechecked against SchedulesServiceDeps, so a missing dep would
-  // otherwise surface only as a `deps.X is not a function` deep inside a live fire —
-  // which is exactly how the deletion-barrier probe shipped unwired twice.
-  const REQUIRED_DEPS: Array<keyof SchedulesServiceDeps> = [
-    'methods',
-    'getAppConfig',
-    'findUserById',
-    'findBalance',
-    'upsertBalance',
-    'initializeNullBalance',
-    'resolveAgentFireAccess',
-    'getChatProject',
-    'isUserDeleting',
-    'enqueueAgentTrigger',
-    'getTriggerDelivery',
-  ];
-  for (const key of REQUIRED_DEPS) {
-    if (deps[key] == null) {
-      throw new Error(`createSchedulesService: missing required dependency "${key}"`);
-    }
-  }
-
+export function createScheduleLimitsResolver(
+  getAppConfig: SchedulesServiceDeps['getAppConfig'],
+): SchedulesService['getLimits'] {
   /**
    * Resolves schedule limits, honoring per-principal (role/user) config overrides
    * when a user is supplied (routes pass req.user, the fire path passes the owner).
    */
-  async function getLimits(user?: ScheduleUserContext): Promise<ScheduleLimits> {
+  return async function getLimits(user?: ScheduleUserContext): Promise<ScheduleLimits> {
     // The BASE `interface.schedules: false` is a global stop and must win over any
     // principal override. Without this a tenant/role/user override resolving to
     // enabled would let the sidebar and CRUD handlers admit schedules that
@@ -439,7 +421,7 @@ export function createSchedulesService(
     // the engine gate (isGloballyDisabled) already uses.
     if (
       user != null &&
-      isRuntimeDisabled((await deps.getAppConfig({ baseOnly: true }))?.interfaceConfig?.schedules)
+      isRuntimeDisabled((await getAppConfig({ baseOnly: true }))?.interfaceConfig?.schedules)
     ) {
       return { ...DEFAULT_SCHEDULE_LIMITS, enabled: false };
     }
@@ -451,8 +433,8 @@ export function createSchedulesService(
     // override as if it were the deployment-wide value, which is exactly what the
     // global cap exists to prevent an override from widening.
     const appConfig = user
-      ? await deps.getAppConfig(getAppConfigOptionsFromUser(user))
-      : await deps.getAppConfig({ baseOnly: true });
+      ? await getAppConfig(getAppConfigOptionsFromUser(user))
+      : await getAppConfig({ baseOnly: true });
     // The env kill switch is a GLOBAL stop and must be visible everywhere limits are
     // consulted (write handlers, fire path), not only at the engine tick.
     if (isEnabled(process.env.SCHEDULES_DISABLED)) {
@@ -497,8 +479,76 @@ export function createSchedulesService(
       requireProject: config.requireProject === true || projectId != null,
       ...(projectId != null && { projectId }),
     };
+  };
+}
+
+export function createSchedulesService(
+  deps: SchedulesServiceDeps,
+  timings?: ScheduleServiceTimings,
+): SchedulesService {
+  const { methods } = deps;
+
+  // Recovery evidence only: no authorization or bearer is cached here.
+  const pendingBearerFailures = new Map<
+    string,
+    Parameters<SchedulesService['recordMCPToolAuthFailure']>[0] & {
+      admitted: boolean;
+      outcomes: ScheduleMCPOutcome[];
+    }
+  >();
+  async function eraseSettledSchedule(scheduleId: string): Promise<boolean> {
+    for (const pending of pendingBearerFailures.values()) {
+      if (pending.identity?.scheduleId === scheduleId) return false;
+    }
+    return methods.eraseScheduleIfDrained(scheduleId);
   }
 
+  const receiptKey = (stream: string, epoch: number): string => JSON.stringify([stream, epoch]);
+  const outcomeKey = (outcome: ScheduleMCPOutcome): string =>
+    JSON.stringify([
+      outcome.server,
+      outcome.agentId,
+      outcome.status,
+      outcome.reason,
+      outcome.recovery,
+      outcome.detail,
+      outcome.automaticReplay,
+    ]);
+  const mergeReceipts = mergeScheduleMCPReceipts;
+  const preferFailure = (
+    previous: ScheduleMCPOutcome | undefined,
+    next: ScheduleMCPOutcome,
+  ): ScheduleMCPOutcome =>
+    scheduleMCPFailurePriority(next) > scheduleMCPFailurePriority(previous)
+      ? next
+      : (previous ?? next);
+  const encodeReceipts = (outcomes: ScheduleMCPOutcome[]): string =>
+    `${getScheduleMCPDisabledReason(outcomes) ?? 'mcp_unavailable'}: ${JSON.stringify(outcomes)}`;
+
+  // Fail LOUDLY at construction, not per-fire. The JS adapter (api/server/services/
+  // Schedules) is not typechecked against SchedulesServiceDeps, so a missing dep would
+  // otherwise surface only as a `deps.X is not a function` deep inside a live fire —
+  // which is exactly how the deletion-barrier probe shipped unwired twice.
+  const REQUIRED_DEPS: Array<keyof SchedulesServiceDeps> = [
+    'methods',
+    'getAppConfig',
+    'findUserById',
+    'findBalance',
+    'upsertBalance',
+    'initializeNullBalance',
+    'resolveAgentFireAccess',
+    'getChatProject',
+    'isUserDeleting',
+    'enqueueAgentTrigger',
+    'getTriggerDelivery',
+  ];
+  for (const key of REQUIRED_DEPS) {
+    if (deps[key] == null) {
+      throw new Error(`createSchedulesService: missing required dependency "${key}"`);
+    }
+  }
+
+  const getLimits = createScheduleLimitsResolver(deps.getAppConfig);
   const MANUAL_RUN_LEASE_MS = 5 * 60 * 1000;
   // Bounded wait for aborted scheduled runs to settle during account-deletion quiesce,
   // before the message/conversation cascade runs. Long enough to cover a generation that
@@ -670,6 +720,14 @@ export function createSchedulesService(
       if (job == null) {
         return null;
       }
+      const pending = pendingBearerFailures.get(receiptKey(conversationId, job.createdAt));
+      const retained =
+        pending?.identity &&
+        job.scheduleId === pending.identity.scheduleId &&
+        job.userId === pending.identity.ownerId &&
+        (job.tenantId ?? null) === pending.identity.tenantId
+          ? pending.outcomes.reduce(preferFailure, job.scheduleMCPFailure ?? pending.outcomes[0])
+          : job.scheduleMCPFailure;
       return {
         status: job.status,
         createdAt: job.createdAt,
@@ -685,6 +743,7 @@ export function createSchedulesService(
         ...(job.scheduleOutcomeError != null && {
           scheduleOutcomeError: job.scheduleOutcomeError,
         }),
+        ...(retained && { scheduleMCPFailure: retained }),
       };
     },
     abortScheduledJob: async (conversationId, identity, options) => {
@@ -973,7 +1032,8 @@ export function createSchedulesService(
     const { error, streamId, jobCreatedAt, userId, serverName, identity } = input;
     const cause = error instanceof Error ? error.cause : undefined;
     const missing = error instanceof OboTokenResolutionError ? error : cause;
-    const bearer = error instanceof ScheduledMCPBearerError;
+    const bearer =
+      error instanceof ScheduledMCPBearerError || error instanceof ScheduledMCPPolicyError;
     if (
       (!bearer &&
         (!(missing instanceof OboTokenResolutionError) ||
@@ -987,7 +1047,7 @@ export function createSchedulesService(
     if (bearer && identity && identity.ownerId === userId) {
       const previous = pendingBearerFailures.get(key);
       const priority = (value: unknown): number =>
-        value instanceof ScheduledMCPBearerError
+        value instanceof ScheduledMCPBearerError || value instanceof ScheduledMCPPolicyError
           ? {
               mcp_unavailable: 1,
               mcp_reauth_required: 2,
@@ -1014,15 +1074,31 @@ export function createSchedulesService(
       !job.scheduleId ||
       !job.scheduledFor ||
       !job.conversationId ||
-      (bearer &&
-        (!identity ||
+      (error instanceof ScheduledMCPBearerError && !identity) ||
+      (identity != null &&
+        (identity.ownerId !== job.userId ||
           identity.scheduleId !== job.scheduleId ||
           identity.tenantId !== (job.tenantId ?? null) ||
-          identity.agentId !== job.agent_id))
+          ((error instanceof ScheduledMCPBearerError || job.agent_id != null) &&
+            identity.agentId !== job.agent_id)))
     ) {
       pendingBearerFailures.delete(key);
-      if (bearer) throw new ScheduledMCPReceiptFencedError();
+      if (error instanceof ScheduledMCPBearerError) throw new ScheduledMCPReceiptFencedError();
       return false;
+    }
+    if (error instanceof ScheduledMCPPolicyError && !pendingBearerFailures.has(key)) {
+      pendingBearerFailures.set(key, {
+        ...input,
+        identity: identity ?? {
+          scheduleId: job.scheduleId,
+          ownerId: job.userId,
+          tenantId: job.tenantId ?? null,
+          agentId: job.agent_id ?? '',
+          invocationMode: 'delegated',
+        },
+        admitted: false,
+        outcomes: error.outcomes,
+      });
     }
     const payload = {
       scheduleId: job.scheduleId,
@@ -1035,7 +1111,11 @@ export function createSchedulesService(
     const pendingReceipt = pendingBearerFailures.get(key);
     if (pendingReceipt?.admitted) return true;
     const pendingError = pendingReceipt?.error;
-    const receiptError = pendingError instanceof ScheduledMCPBearerError ? pendingError : error;
+    const receiptError =
+      pendingError instanceof ScheduledMCPBearerError ||
+      pendingError instanceof ScheduledMCPPolicyError
+        ? pendingError
+        : error;
     const admittedOutcomes = mergeReceipts(
       pendingReceipt?.outcomes ?? receiptError.outcomes,
       error.outcomes,
@@ -1049,6 +1129,7 @@ export function createSchedulesService(
       methods.recordMCPToolAuthFailure({
         ...payload,
         outcomes: admittedOutcomes,
+        ...(error instanceof ScheduledMCPPolicyError && { outcome: receiptError.outcomes[0] }),
       }),
       GenerationJobManager.updateMetadata(
         streamId,
@@ -1056,6 +1137,13 @@ export function createSchedulesService(
           preserveForScheduleReconcile: true,
           scheduleOutcome: 'error',
           scheduleOutcomeError: encoded,
+          scheduleMCPFailure: admittedOutcomes.reduce(
+            (previous, next) =>
+              scheduleMCPFailurePriority(next) > scheduleMCPFailurePriority(previous)
+                ? next
+                : previous,
+            job.scheduleMCPFailure ?? admittedOutcomes[0],
+          ),
         },
         jobCreatedAt,
       ),
@@ -1169,7 +1257,7 @@ export function createSchedulesService(
       ) {
         // Cleared to settle: no Stop owns the run, it acknowledged, or its owner is past
         // the stale cutoff and is presumed dead (the bounded recovery path).
-        return state?.mcp?.filter((item) => item.detail === 'unattended_auth_required') ?? [];
+        return state?.mcp?.filter(isScheduleMCPAuthorizationFailure) ?? [];
       }
       if (Date.now() >= deadline) {
         // Still an UNACKNOWLEDGED, FRESH Stop. The poll budget expiring proves nothing about
@@ -1203,10 +1291,34 @@ export function createSchedulesService(
     const receipt =
       streamId && jobCreatedAt != null ? receiptKey(streamId, jobCreatedAt) : undefined;
     const pending = receipt && pendingBearerFailures.get(receipt);
+    let retiredPolicyGeneration = false;
     if (pending && pending.identity?.scheduleId === scheduleId) {
       if (!pending.admitted) {
         try {
-          if (!(await recordMCPToolAuthFailure(pending))) return false;
+          const current = await GenerationJobManager.getJobStore()?.getJob(streamId!);
+          retiredPolicyGeneration =
+            pending.error instanceof ScheduledMCPPolicyError &&
+            terminal &&
+            current != null &&
+            current.createdAt > jobCreatedAt! &&
+            current.userId === pending.identity.ownerId &&
+            (current.tenantId ?? null) === pending.identity.tenantId;
+          if (retiredPolicyGeneration) {
+            // A trusted denial may outlive its worker epoch; persist it only to the
+            // old occurrence, never to the successor's generation metadata.
+            if (
+              !(await methods.recordMCPToolAuthFailure({
+                scheduleId,
+                scheduledFor: new Date(scheduledFor),
+                conversationId: streamId!,
+                ...(pending.identity.tenantId && { tenantId: pending.identity.tenantId }),
+                server: pending.serverName,
+                outcomes: pending.outcomes,
+              }))
+            )
+              return false;
+            pending.admitted = true;
+          } else if (!(await recordMCPToolAuthFailure(pending))) return false;
         } catch {
           return false;
         }
@@ -1223,7 +1335,11 @@ export function createSchedulesService(
           job.scheduleId === scheduleId &&
           new Date(job.scheduledFor ?? '').getTime() === new Date(scheduledFor).getTime()
         ) {
-          mcp = mergeReceipts(mcp, readScheduleMCPReceipts(job.scheduleOutcomeError));
+          mcp = mergeReceipts(
+            mcp,
+            readScheduleMCPReceipts(job.scheduleOutcomeError),
+            job.scheduleMCPFailure ? [job.scheduleMCPFailure] : [],
+          );
         }
       } catch {
         return false;
@@ -1237,9 +1353,7 @@ export function createSchedulesService(
         pauseState = await methods.getScheduleRunAbortState(scheduleId, new Date(scheduledFor));
         mcp = mergeReceipts(
           mcp,
-          pauseState?.mcp?.filter(
-            (item) => item.detail === 'unattended_auth_required' && item.status !== 'ready',
-          ) ?? [],
+          pauseState?.mcp?.filter((item) => isScheduleMCPAuthorizationFailure(item)) ?? [],
         );
       } catch {
         return false;
@@ -1259,6 +1373,7 @@ export function createSchedulesService(
       }
       mcp = mergeReceipts(mcp, observed);
     }
+    const retained = mcp.length > 0 ? mcp.reduce(preferFailure, mcp[0]) : undefined;
     const missingAuth = mcp.length > 0;
     if (missingAuth) terminal = true;
     const effectiveStatus = missingAuth ? 'error' : status;
@@ -1267,12 +1382,13 @@ export function createSchedulesService(
       effectiveError = mcp.some((item) => item.reason)
         ? encodeReceipts(mcp)
         : 'MCP unattended authorization unavailable';
-    if (terminal && streamId && jobCreatedAt != null) {
+    if (terminal && streamId && jobCreatedAt != null && !retiredPolicyGeneration) {
       try {
         await GenerationJobManager.updateMetadata(
           streamId,
           {
             preserveForScheduleReconcile: true,
+            ...(retained && { scheduleMCPFailure: retained }),
             scheduleOutcome:
               effectiveStatus === 'success' ||
               effectiveStatus === 'error' ||
@@ -1291,7 +1407,7 @@ export function createSchedulesService(
     }
     if (missingAuth && status === 'requires_action' && (!streamId || jobCreatedAt == null))
       return false;
-    if (missingAuth && streamId && jobCreatedAt != null) {
+    if (missingAuth && streamId && jobCreatedAt != null && !retiredPolicyGeneration) {
       try {
         const live = await GenerationJobManager.getJobStore()?.getJob(streamId);
         if (
@@ -1336,7 +1452,7 @@ export function createSchedulesService(
           autoDisableAfterFailures: limits.autoDisableAfterFailures,
           balanceSkipDisableThreshold: BALANCE_SKIP_DISABLE_THRESHOLD,
         });
-        if (terminal && streamId && jobCreatedAt != null) {
+        if (terminal && streamId && jobCreatedAt != null && !retiredPolicyGeneration) {
           try {
             await GenerationJobManager.updateMetadata(
               streamId,

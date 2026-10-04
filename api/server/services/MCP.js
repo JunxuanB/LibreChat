@@ -54,6 +54,8 @@ const {
   resolveMCPClientCapabilityProfile,
   getMCPConnectionPoolKey,
   getMCPUserConnectionPoolKey,
+  bindScheduledMCPInvocation,
+  ScheduledMCPPolicyError,
 } = require('@librechat/api');
 const {
   Time,
@@ -1224,6 +1226,7 @@ async function createMCPTool({
       agentId,
       toolName,
     ),
+    scheduledMCPInvocation: bindScheduledMCPInvocation(requestScopedConnections, agentId, toolName),
     res,
     mcpPermissionContext,
     user,
@@ -1256,6 +1259,7 @@ async function createMCPTool({
 
 function createToolInstance({
   scheduledBearerInvocation,
+  scheduledMCPInvocation,
   res,
   mcpPermissionContext,
   user: capturedUser = null,
@@ -1368,6 +1372,7 @@ function createToolInstance({
        */
       const result = await mcpManager.callTool({
         scheduledBearerInvocation,
+        scheduledMCPInvocation,
         serverName,
         serverConfig: capturedServerConfig,
         /** The upstream server never sees stripped names — a key that dropped
@@ -1436,7 +1441,7 @@ function createToolInstance({
       // recording a durable tool failure; other tool errors are a cheap no-op.
       await require('~/server/services/Schedules').recordMCPToolAuthFailure({
         error,
-        ...(scheduledBearerInvocation && { identity: scheduledBearerInvocation.identity }),
+        identity: scheduledMCPInvocation?.identity ?? scheduledBearerInvocation?.identity,
         streamId,
         jobCreatedAt,
         userId,
@@ -1446,6 +1451,7 @@ function createToolInstance({
       /** Carries the actionable re-auth message; the substring heuristic below would misreport it as an OAuth configuration problem */
       if (
         error instanceof ScheduledMCPBearerError ||
+        error instanceof ScheduledMCPPolicyError ||
         error instanceof OpenIDReauthRequiredError ||
         error instanceof MCPAuthenticationRefreshError ||
         error instanceof MCPAuthenticationRejectedError

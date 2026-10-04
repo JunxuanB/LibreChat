@@ -45,6 +45,7 @@ import {
 } from '~/stream/SteerRecovery';
 import { retainedScheduleReceipt } from '~/stream/internal/scheduleReceipts';
 import { createCheckpointNamespace } from '~/stream/checkpoints';
+import { retainScheduleMCPFailure } from '../scheduleFailure';
 import { toPendingSteer } from '~/stream/SteeringLifecycle';
 
 /** Recovery window for parked steers (mirrors Redis's completed-job TTL). */
@@ -727,7 +728,8 @@ export class InMemoryJobStore implements IJobStoreV2 {
     }
     // Plain field writer. Membership-aware status transitions
     // (running ⇄ requires_action) go solely through transitionStatus.
-    Object.assign(job, updates, retainedScheduleReceipt(job, updates));
+    const patch = retainScheduleMCPFailure(job, updates);
+    Object.assign(job, patch, retainedScheduleReceipt(job, updates));
   }
 
   async markProviderExecutionDrained(
@@ -803,8 +805,9 @@ export class InMemoryJobStore implements IJobStoreV2 {
       this.parkQueuedSteers(streamId, job, Date.now());
     }
     job.status = args.to;
+    const patch = retainScheduleMCPFailure(job, args.patch ?? {});
     const receipt = retainedScheduleReceipt(job, args.patch ?? {}, args.clear ?? []);
-    if (args.patch) Object.assign(job, args.patch);
+    Object.assign(job, patch);
     for (const field of args.clear ?? []) delete job[field];
     Object.assign(job, receipt);
     const receiptEntries = this.steerReceipts.get(streamId)?.values() ?? [];

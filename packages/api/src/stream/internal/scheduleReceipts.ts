@@ -1,5 +1,6 @@
 import { scheduledMCPFailureReasonSchema } from 'librechat-data-provider';
 import { readScheduleMCPReceipts, projectScheduleMCPReceipt } from 'librechat-data-provider';
+import type { ScheduleMCPOutcome } from 'librechat-data-provider';
 
 /** Only settlement acknowledgement releases the receipt's hash lifetime. */
 export const SCHEDULE_RETENTION_LUA: string = `
@@ -15,7 +16,7 @@ end
 export const SCHEDULE_MCP_RECEIPT_LUA: string =
   SCHEDULE_RETENTION_LUA +
   `
-local function retainScheduleReceipt(hset, current, force)
+local function retainScheduleReceipt(hset, current, force, original)
   local allowed = cjson.decode('${JSON.stringify(Object.fromEntries(scheduledMCPFailureReasonSchema.options.map((reason) => [reason, true])))}')
   local incoming = nil
   local touched = false
@@ -36,9 +37,9 @@ local function retainScheduleReceipt(hset, current, force)
     if not ok or type(decoded) ~= 'table' then return end
     for _, row in ipairs(decoded) do
       if type(row) == 'table' and type(row.server) == 'string' and priority[row.status]
-        and row.detail == 'unattended_auth_required' and (row.reason == nil or allowed[row.reason])
+        and (row.detail == 'unattended_auth_required' or (allowed[row.reason] and row.automaticReplay == false)) and (row.reason == nil or allowed[row.reason])
         and (row.automaticReplay == nil or row.automaticReplay == false) then
-        local item = { server = row.server, status = row.status, detail = row.detail }
+        local item = { server = row.server, status = row.status } if row.detail == 'unattended_auth_required' then item.detail = row.detail end
         if type(row.agentId) == 'string' then item.agentId = row.agentId end
         if allowed[row.reason] then item.reason = row.reason end
         if row.recovery == 'authorize' or row.recovery == 'configure' or row.recovery == 'restore_permission' or row.recovery == 'retry_later' then item.recovery = row.recovery end
@@ -49,7 +50,7 @@ local function retainScheduleReceipt(hset, current, force)
       end
     end
   end
-  collect(current) collect(incoming)
+  collect(current) collect(incoming) collect(original)
   if #rows == 0 then return hset end
   local output = {}
   for i = 1, #hset, 2 do
@@ -64,19 +65,26 @@ end
 `;
 
 export function retainedScheduleReceipt(
-  current: { scheduleOutcomeError?: string },
-  patch: { scheduleOutcome?: string; scheduleOutcomeError?: string },
+  current: { scheduleOutcomeError?: string; scheduleMCPFailure?: ScheduleMCPOutcome },
+  patch: {
+    scheduleOutcome?: string;
+    scheduleOutcomeError?: string;
+    scheduleMCPFailure?: ScheduleMCPOutcome;
+  },
   clear: readonly string[] = [],
 ): { scheduleOutcome?: string; scheduleOutcomeError?: string } {
   if (
     patch.scheduleOutcome === undefined &&
     patch.scheduleOutcomeError === undefined &&
+    patch.scheduleMCPFailure === undefined &&
     !clear.some((field) => field === 'scheduleOutcome' || field === 'scheduleOutcomeError')
   )
     return {};
   const receipts = [
     ...readScheduleMCPReceipts(current.scheduleOutcomeError),
     ...readScheduleMCPReceipts(patch.scheduleOutcomeError),
+    ...(current.scheduleMCPFailure ? [current.scheduleMCPFailure] : []),
+    ...(patch.scheduleMCPFailure ? [patch.scheduleMCPFailure] : []),
   ];
   if (!receipts.length) return {};
   const projection = projectScheduleMCPReceipt({ status: 'error' }, receipts);

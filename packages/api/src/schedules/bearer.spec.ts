@@ -20,9 +20,11 @@ import {
   bindScheduledMCPBearerInvocation,
   rejectScheduledMCPBearer,
 } from './bearer';
+import { createScheduleMCPExecution, bindScheduledMCPInvocation } from './authorization/execution';
 import { MockKeyv, createOAuthMCPServer } from '~/mcp/__tests__/helpers/oauthTestServer';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
 import { createMCPRequestContext, cleanupMCPRequestContext } from '~/mcp/request';
+import { getScheduledMCPToolDefinitionDigest } from './authorization/policy';
 import { createScheduleMCPConsentService } from './authorization/service';
 import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
@@ -138,6 +140,7 @@ async function bearerFixture(serverConfig = config) {
     input,
     call,
     consent,
+    storage,
     resolveBearer,
     resolveEnrollment,
     snapshot,
@@ -683,6 +686,80 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
         await cleanupMCPRequestContext(restored);
         await manager.disconnectUserConnections(user.id);
         registry.mockRestore();
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+      }
+    },
+  );
+
+  it.each(['invoke', 'resume'] as const)(
+    'enforces the merged A3 ceiling with a B2 bearer at %s',
+    async (stage) => {
+      let calls = 0;
+      const server = await createOAuthMCPServer({
+        echoHandler: (message) => {
+          calls++;
+          return message;
+        },
+      });
+      const definition: ParsedServerConfig = { ...config, url: server.url, requiresOAuth: false };
+      const f = await bearerFixture(definition);
+      server.issuedTokens.add('resource-only');
+      server.tokenIssueTimes.set('resource-only', Date.now());
+      const manager = new MCPManager();
+      const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+        isAppServerConfig: async () => false,
+        resolveAllowlists: async () => ({
+          allowedDomains: ['127.0.0.1'],
+          allowedAddresses: [`127.0.0.1:${server.port}`],
+          useSSRFProtection: false,
+        }),
+      } as unknown as MCPServersRegistry);
+      const flowManager = new FlowStateManager<MCPOAuthTokens | null>(
+        new MockKeyv() as unknown as Keyv,
+        { ci: true, ttl: 30000 },
+      );
+      try {
+        const input = {
+          user,
+          serverName: 'Files',
+          serverConfig: definition,
+          requestScopedConnections: f.context,
+          flowManager,
+        };
+        const connected = await manager.getConnection(input);
+        const catalog = await connected.fetchToolsSnapshot();
+        const echo = catalog.tools.find((tool) => tool.name === 'echo')!;
+        let digest = getScheduledMCPToolDefinitionDigest(echo);
+        const execution = createScheduleMCPExecution({
+          storage: f.storage,
+          loadAuthorization: async () => ({
+            authority: f.consent.authority,
+            policy: {
+              Files: { tools: { echo: { effect: 'read_only', definitionSha256: digest } } },
+            },
+          }),
+        });
+        await execution.attach(f.context, identity, stage, true);
+        const call = () =>
+          manager.callTool({
+            ...input,
+            provider: 'openai',
+            toolName: 'echo',
+            toolArguments: { message: 'guarded' },
+            scheduledBearerInvocation: bindScheduledMCPBearerInvocation(f.context, 'child', 'echo'),
+            scheduledMCPInvocation: bindScheduledMCPInvocation(f.context, 'child', 'echo'),
+          });
+        await call();
+        expect(calls).toBe(1);
+        digest = '0'.repeat(64);
+        await expect(call()).rejects.toMatchObject({ failure: { reason: 'tool_policy_denied' } });
+        expect(calls).toBe(1);
+        expect(server.tokenRequests).toEqual([]);
+        expect(manager.getUserConnections(user.id)).toBeUndefined();
+      } finally {
+        registry.mockRestore();
+        await cleanupMCPRequestContext(f.context);
         MCPConnection.clearCooldown('Files');
         await server.close();
       }

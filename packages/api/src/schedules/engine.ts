@@ -97,7 +97,10 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
               const projection = projectScheduleMCPReceipt(
                 { status, error, mcp: run.mcp },
                 jobIdentityMatches(jobState, run)
-                  ? readScheduleMCPReceipts(jobState?.scheduleOutcomeError)
+                  ? [
+                      ...readScheduleMCPReceipts(jobState?.scheduleOutcomeError),
+                      ...(jobState?.scheduleMCPFailure ? [jobState.scheduleMCPFailure] : []),
+                    ]
                   : [],
               );
               await deps.methods.recordRunOutcome({
@@ -123,7 +126,8 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
               continue;
             }
             jobState = run.conversationId ? await deps.getJobStatus(run.conversationId) : null;
-            const jobStatus = jobIdentityMatches(jobState, run) ? jobState!.status : null;
+            if (!jobIdentityMatches(jobState, run)) jobState = null;
+            const jobStatus = jobState?.status ?? null;
             const ageMs = Date.now() - (run.firedAt?.getTime() ?? 0);
             // The clear runs AFTER finalize (the retained job is the only evidence if
             // the finalize write fails), which means a clear that keeps failing has no

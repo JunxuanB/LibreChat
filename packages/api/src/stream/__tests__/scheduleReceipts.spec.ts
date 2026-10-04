@@ -64,6 +64,32 @@ async function verify(store: IJobStoreV2): Promise<string> {
   expect(readScheduleMCPReceipts((await store.getJob(stream))?.scheduleOutcomeError)).toEqual(
     expect.arrayContaining([denial, other]),
   );
+  const policy = {
+    server: 'Policy',
+    agentId: 'child',
+    status: 'mcp_permission_denied' as const,
+    reason: 'tool_policy_denied' as const,
+    recovery: 'configure' as const,
+    automaticReplay: false as const,
+  };
+  const mixed = [denial, other, policy];
+  await store.updateJob(
+    stream,
+    {
+      scheduleMCPFailure: policy,
+      scheduleOutcomeError: `mcp_permission_denied: ${JSON.stringify(mixed)}`,
+    },
+    created.createdAt,
+  );
+  await store.updateJob(
+    stream,
+    { scheduleMCPFailure: denial, scheduleOutcomeError: encoded },
+    created.createdAt,
+  );
+  expect(readScheduleMCPReceipts((await store.getJob(stream))?.scheduleOutcomeError)).toEqual(
+    expect.arrayContaining(mixed),
+  );
+  expect((await store.getJob(stream))?.scheduleMCPFailure).toEqual(policy);
   await store.updateJob(stream, { preserveForScheduleReconcile: true }, created.createdAt);
   await expect(store.createJob(stream, 'owner', 'conversation', 'tenant')).rejects.toMatchObject({
     name: 'JobPredecessorMismatchError',

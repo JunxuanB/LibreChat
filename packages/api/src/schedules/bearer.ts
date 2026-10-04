@@ -18,11 +18,13 @@ import type { ScheduleMCPEnrollmentResolver } from './authorization/service';
 import type { ScheduledTokenContext } from './context';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
 import { readScheduleFireContext, isScheduleFireRequest } from './trigger';
+import { getScheduleMCPExecution } from './authorization/execution';
 import { ScheduleMCPConsentError } from './authorization/service';
 import { usesDirectOpenIDBearerRecovery } from '~/mcp/openid';
 import { ScheduledMCPBearerError } from '~/mcp/errors';
 import { getMCPRequestContext } from '~/mcp/request';
 import { awaitOboOperation } from '~/mcp/oauth/obo';
+import { isOwnedAbortError } from '~/utils/errors';
 import { applyRequestHeaders } from '~/mcp/utils';
 
 export { ScheduledMCPBearerError } from '~/mcp/errors';
@@ -313,10 +315,14 @@ export function prepareScheduledMCPBearer(input: {
   host?: ScheduledMCPBearerHost;
   signal?: AbortSignal;
 }): void {
-  if (!isScheduleFireRequest(input.req)) return;
+  const context = input.context ?? getMCPRequestContext(input.req);
+  const execution = getScheduleMCPExecution(context);
+  if (!isScheduleFireRequest(input.req) && !execution) return;
+  input.signal?.throwIfAborted();
   const fire = readScheduleFireContext(input.req);
   const root = input.restoredContext;
   const identity =
+    execution?.identity ??
     root ??
     (fire && typeof input.req.body?.agent_id === 'string'
       ? {
@@ -327,7 +333,6 @@ export function prepareScheduledMCPBearer(input: {
           invocationMode: 'delegated' as const,
         }
       : undefined);
-  const context = input.context ?? getMCPRequestContext(input.req);
   if (context && !identity) {
     attachScheduledMCPBearer(context, {
       scheduleId: '',
@@ -349,9 +354,24 @@ export function prepareScheduledMCPBearer(input: {
     context,
     { ...identity, tenantId: identity.tenantId ?? null },
     input.host,
-    root ? 'resume' : 'invoke',
+    execution?.stage ?? (root ? 'resume' : 'invoke'),
     input.signal,
   );
+}
+
+/** A3 establishes execution identity before credential scope is attached. */
+export function initializeWithScheduledMCPBearer<T>(
+  input: Parameters<typeof prepareScheduledMCPBearer>[0],
+  initialize: () => Promise<T>,
+): Promise<T> {
+  try {
+    prepareScheduledMCPBearer(input);
+  } catch (error) {
+    if (isOwnedAbortError(error, input.signal) || error instanceof ScheduledMCPBearerError)
+      throw error;
+    throw new ScheduledMCPBearerError('dependency_unavailable', '');
+  }
+  return initialize();
 }
 
 /** Capture outside runnable/model config, just like the occurrence identity. */

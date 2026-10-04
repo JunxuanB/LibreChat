@@ -23,6 +23,22 @@ const safeUrl = z
     }
   });
 
+/** Service policy for tools whose every admitted operation is read-only. Never inferred from MCP hints. */
+export const scheduledMCPReadOnlyPolicySchema = z
+  .object({
+    tools: z.record(
+      identifier,
+      z
+        .object({
+          effect: z.literal('read_only'),
+          definitionSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type ScheduledMCPReadOnlyPolicy = z.infer<typeof scheduledMCPReadOnlyPolicySchema>;
+
 export const scheduledMCPFailureReasonSchema = z.enum([
   'consent_missing',
   'consent_expired',

@@ -33,6 +33,7 @@ function createMCPPreflight(options = {}) {
     findPluginAuthsByKeys: methods.findPluginAuthsByKeys,
     resolveUpstreamTokenProvider: options.resolveUpstreamTokenProvider,
     scheduledBearerHost: options.scheduledBearerHost,
+    execution: require('./consent').execution,
     connect: (connectionOptions) =>
       getMCPManager().getConnection({
         ...connectionOptions,

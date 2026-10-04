@@ -308,6 +308,7 @@ export interface JobState {
    *  owner left it. See SerializableJobData.scheduleOutcome. */
   scheduleOutcome?: string;
   scheduleOutcomeError?: string;
+  scheduleMCPFailure?: ScheduleMCPOutcome;
   preserveForScheduleReconcile?: boolean;
 }
 
@@ -338,5 +339,13 @@ export type FireableSchedule = ISchedule;
 export type ScheduleMCPPreflight = (
   agentId: string,
   user: ScheduleUserContext,
-  options: { concurrency: number; signal?: AbortSignal; deadlineMs?: number; scheduleId?: string },
+  options: {
+    concurrency: number;
+    signal?: AbortSignal;
+    deadlineMs?: number;
+    scheduleId?: string;
+    stage?: 'activation' | 'invoke' | 'resume';
+    /** Trusted fire host provenance, never a body-provided permission. */
+    manual?: boolean;
+  },
 ) => Promise<ScheduleMCPOutcome[]>;

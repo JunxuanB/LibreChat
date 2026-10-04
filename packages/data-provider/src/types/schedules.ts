@@ -196,6 +196,14 @@ export type TScheduleRunNowResponse = {
   status: 'started';
 };
 
+/** A durable invocation receipt, not a readiness snapshot or an arbitrary tool error. */
+export function isScheduleMCPAuthorizationFailure(outcome: ScheduleMCPOutcome): boolean {
+  return (
+    outcome.detail === 'unattended_auth_required' ||
+    (outcome.status !== 'ready' && outcome.reason != null && outcome.automaticReplay === false)
+  );
+}
+
 /** Only structured schedule preflight failures may request immediate suspension. */
 export function getScheduleMCPDisabledReason(
   outcomes?: ScheduleMCPOutcome[],
@@ -246,9 +254,7 @@ export function readScheduleMCPOutcomes(error?: string): ScheduleMCPOutcome[] {
 
 /** Verified generation evidence only; never infer authorization from this projection. */
 export function readScheduleMCPReceipts(error?: string): ScheduleMCPOutcome[] {
-  return readScheduleMCPOutcomes(error).filter(
-    (outcome) => outcome.detail === 'unattended_auth_required' && outcome.status !== 'ready',
-  );
+  return readScheduleMCPOutcomes(error).filter(isScheduleMCPAuthorizationFailure);
 }
 export function mergeScheduleMCPReceipts(
   ...groups: readonly ScheduleMCPOutcome[][]
@@ -286,9 +292,7 @@ export function projectScheduleMCPReceipt<S extends ScheduleMCPReceiptProjection
   ...receipts: readonly ScheduleMCPOutcome[][]
 ): Omit<ScheduleMCPReceiptProjection, 'status'> & { status: S | 'error' } {
   const mcp = mergeScheduleMCPReceipts(outcome.mcp ?? [], ...receipts);
-  const denied = mcp.some(
-    (item) => item.detail === 'unattended_auth_required' && item.status !== 'ready',
-  );
+  const denied = mcp.some(isScheduleMCPAuthorizationFailure);
   if (!denied) return { ...outcome, ...(mcp.length > 0 && { mcp }) };
   return {
     status: 'error',

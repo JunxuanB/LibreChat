@@ -43,7 +43,11 @@ const {
   encodeAndFormatVideos,
   extractFileContext,
   createScheduleUpstreamTokenProviderResolver,
-  prepareScheduledMCPBearer,
+  initializeWithScheduledMCPBearer,
+  initializeWithScheduleMCPExecution,
+  retainScheduleMCPCompletion,
+  getScheduleMCPExecution,
+  getMCPRequestContext,
 } = require('@librechat/api');
 const {
   ResourceType,
@@ -442,6 +446,7 @@ const initializeClientWithProvider = async ({
 
   const invokedSkillIdentities = new Map();
   const toolExecuteOptions = {
+    scheduledMCPExecution: getScheduleMCPExecution(getMCPRequestContext(req, res)),
     // Keep foreground cancellation owned by this request even when the agents
     // SDK rebuilds a graph for approval resume. The SDK event's breaker signal
     // is composed with this authoritative job signal by the handler.
@@ -1644,7 +1649,10 @@ const initializeClientWithProvider = async ({
               ? { tenantId: req.user.tenantId }
               : {}),
           },
-          { completionWakeups: completionWakeupsEnabled },
+          {
+            completionWakeups: completionWakeupsEnabled,
+            scheduleMCPIdentity: getScheduleMCPExecution(getMCPRequestContext(req, res))?.identity,
+          },
         )
       : undefined;
   let hasExistingSubagentTask = false;
@@ -1919,19 +1927,45 @@ const initializeClientWithProvider = async ({
  */
 function createInitializeClient(dependencies = {}) {
   return async (params) => {
-    prepareScheduledMCPBearer({
-      req: params.req,
-      restoredContext: params.scheduledTokenContext,
-      host: dependencies.scheduledBearerHost,
-      signal: params.signal,
-    });
     const upstreamTokenProviderResolver = createScheduleUpstreamTokenProviderResolver(
       params.req,
       dependencies.resolveUpstreamTokenProvider,
       params.signal,
       params.scheduledTokenContext,
     );
-    return initializeClientWithProvider({ ...params, upstreamTokenProviderResolver });
+    return initializeWithScheduleMCPExecution(
+      {
+        req: params.req,
+        signal: params.signal,
+        context: require('~/server/services/MCPRequestContext').getMCPRequestContext(
+          params.req,
+          params.res,
+        ),
+        restoredContext: params.scheduledTokenContext,
+        restoredJob: params.scheduleJobIdentity,
+      },
+      () => require('~/server/services/Schedules/consent'),
+      () =>
+        initializeWithScheduledMCPBearer(
+          {
+            req: params.req,
+            context: getMCPRequestContext(params.req),
+            restoredContext: params.scheduledTokenContext,
+            host: dependencies.scheduledBearerHost,
+            signal: params.signal,
+          },
+          () => initializeClientWithProvider({ ...params, upstreamTokenProviderResolver }),
+        ),
+      (identity) =>
+        retainScheduleMCPCompletion(
+          identity,
+          {
+            streamId: params.req._resumableStreamId,
+            createdAt: params.jobCreatedAt,
+          },
+          GenerationJobManager.getJobStore(),
+        ),
+    );
   };
 }
 
