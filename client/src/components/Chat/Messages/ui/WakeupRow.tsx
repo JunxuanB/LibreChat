@@ -5,6 +5,7 @@ import {
   agentAuthor,
   isSelfSpawn,
   messageAuthor,
+  resolveSelfAuthor,
   findAgentAuthorMessage,
   useParentAuthor,
   readableSubagentType,
@@ -42,6 +43,7 @@ export default function WakeupRow({
     conversationId,
     isSharedConvo === true ? '' : parentMessageId,
     fallbackName,
+    child?.parentToolCallId,
   );
   const parentAuthor = useMemo(
     () =>
@@ -50,25 +52,34 @@ export default function WakeupRow({
             findAgentAuthorMessage(getMessages(), parentMessageId),
             agentsMap,
             fallbackName,
+            sharedDispatch?.agentId,
           )
         : privateParentAuthor,
-    [agentsMap, fallbackName, getMessages, isSharedConvo, parentMessageId, privateParentAuthor],
+    [
+      agentsMap,
+      fallbackName,
+      getMessages,
+      isSharedConvo,
+      parentMessageId,
+      privateParentAuthor,
+      sharedDispatch,
+    ],
   );
   const author = useMemo(() => {
     const subagentType = child?.subagentType ?? sharedDispatch?.subagentType ?? task?.subagentType;
     const kind = child?.subagentKind ?? sharedDispatch?.identity?.subagentKind;
-    if (isSelfSpawn(subagentType, kind)) return parentAuthor;
-    const agent =
-      kind === 'agent'
-        ? agentsMap?.[child?.agentId ?? sharedDispatch?.identity?.subagentAgentId ?? '']
-        : undefined;
+    const agentId = child?.agentId ?? sharedDispatch?.identity?.subagentAgentId;
+    if (isSelfSpawn(subagentType, kind)) {
+      return resolveSelfAuthor(parentAuthor, agentId, agentsMap, fallbackName);
+    }
+    const agent = kind === 'agent' ? agentsMap?.[agentId ?? ''] : undefined;
     return agentAuthor(
       agent,
       readableSubagentTitle(child?.title, child?.agentId, child?.subagentKind) ??
         readableSubagentType(subagentType, child?.agentId, kind) ??
         localize('com_ui_subagent_actor'),
     );
-  }, [agentsMap, child, localize, parentAuthor, sharedDispatch, task?.subagentType]);
+  }, [agentsMap, child, fallbackName, localize, parentAuthor, sharedDispatch, task?.subagentType]);
   return (
     <MessageRow
       {...props}

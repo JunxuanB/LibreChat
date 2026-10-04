@@ -6,6 +6,7 @@ type Dispatch = {
   message: TMessage;
   subagentType: string;
   identity?: SubagentIdentity;
+  agentId?: string;
 };
 
 const indexes = new WeakMap<TMessage[], Map<string, Dispatch>>();
@@ -44,6 +45,7 @@ export function findSubagentDispatch(
           message,
           subagentType: handle.subagent_type,
           identity: call.subagentIdentity,
+          agentId: part.agentId,
         });
       }
     }

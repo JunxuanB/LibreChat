@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { EModelEndpoint, QueryKeys } from 'librechat-data-provider';
+import { EModelEndpoint, QueryKeys, ContentTypes } from 'librechat-data-provider';
 import type { Agent, TMessage } from 'librechat-data-provider';
 import type { ReactNode } from 'react';
 import { isDocumentId } from '~/components/Chat/Messages/ui/HeaderLabel';
@@ -8,7 +8,7 @@ import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import { useAgentsMapContext } from '~/Providers';
 
 /** Who wrote a turn, in the form main chat's message header shows an author. */
-export type TurnAuthor = { name: string; icon: ReactNode; agent?: Agent };
+export type TurnAuthor = { name: string; icon: ReactNode; agent?: Agent; agentId?: string };
 
 /** A subagent type worth showing on its own: a graph node's name, never an
  *  agent id — including `agentId`, the one the child's identity resolved to —
@@ -54,12 +54,40 @@ export function resolveChildAgent(
   return isSelfSpawn(subagentType, kind) ? spawningAgent : undefined;
 }
 
+/** Match the parallel lane that wrote the dispatch rather than its enclosing
+ *  message's default author. */
+export function findAgentLaneId(
+  message: TMessage | undefined,
+  toolCallId?: string,
+): string | undefined {
+  if (!toolCallId) return undefined;
+  const part = message?.content?.find(
+    (part) => part?.type === ContentTypes.TOOL_CALL && part.tool_call.id === toolCallId,
+  );
+  return part?.agentId;
+}
+
+/** A validated self-child identity wins when it belongs to another lane;
+ *  matching identities retain the historical name/avatar snapshot. */
+export function resolveSelfAuthor(
+  parent: TurnAuthor,
+  agentId: string | undefined,
+  agentsMap: Record<string, Agent | undefined> | undefined,
+  fallbackName: string,
+): TurnAuthor {
+  if (agentId == null || agentId === parent.agentId) return parent;
+  const agent = agentsMap?.[agentId];
+  if (parent.agentId == null && agent == null) return parent;
+  return agentAuthor(agent, fallbackName);
+}
+
 /** The author main chat draws for an agent turn: the agent's name and avatar,
  *  or the agents endpoint icon when it has none or is not resolvable. */
 export function agentAuthor(agent: Agent | undefined, fallbackName: string): TurnAuthor {
   const name = agent?.name || fallbackName;
   return {
     agent,
+    agentId: agent?.id,
     name,
     icon: (
       <MessageIcon
@@ -105,19 +133,23 @@ export function messageAuthor(
   message: TMessage | undefined,
   agentsMap: Record<string, Agent | undefined> | undefined,
   fallbackName: string,
+  laneId?: string,
 ): TurnAuthor {
   if (message == null) return agentAuthor(undefined, fallbackName);
-  const agent = message.model == null ? undefined : agentsMap?.[message.model];
-  const name = agent?.name || message.sender || fallbackName;
+  const agentId = laneId ?? message.model ?? undefined;
+  const differentLane = laneId != null && laneId !== message.model;
+  const agent = agentId == null ? undefined : agentsMap?.[agentId];
+  const name = agent?.name || (differentLane ? undefined : message.sender) || fallbackName;
   return {
     agent,
+    agentId,
     name,
     icon: (
       <MessageIcon
         iconData={{
           endpoint: message.endpoint,
-          model: message.model,
-          iconURL: message.iconURL,
+          model: agentId,
+          iconURL: differentLane ? undefined : message.iconURL,
           modelLabel: name,
           isCreatedByUser: false,
         }}
@@ -133,6 +165,7 @@ export function useParentAuthor(
   conversationId: string,
   messageId: string,
   fallbackName: string,
+  toolCallId?: string,
 ): TurnAuthor {
   const queryClient = useQueryClient();
   const agentsMap = useAgentsMapContext();
@@ -162,7 +195,7 @@ export function useParentAuthor(
   }, [conversationId, messageId, queryClient]);
   const message = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   return useMemo(
-    () => messageAuthor(message, agentsMap, fallbackName),
-    [agentsMap, fallbackName, message],
+    () => messageAuthor(message, agentsMap, fallbackName, findAgentLaneId(message, toolCallId)),
+    [agentsMap, fallbackName, message, toolCallId],
   );
 }

@@ -10,7 +10,7 @@ import {
   getHeaderPrefixForScreenReader,
 } from '~/utils';
 import { revealOnRowHoverClasses, messageFooterClasses } from '~/components/Chat/Messages/styles';
-import { parseWakeupText } from '~/components/Chat/Messages/Content/Parts/wakeup';
+import { parseWakeupMessage } from '~/components/Chat/Messages/Content/Parts/wakeup';
 import Elapsed, { shouldShowElapsed } from '~/components/Chat/Messages/Elapsed';
 import { getHeaderHoverLabel } from '~/components/Chat/Messages/ui/HeaderLabel';
 import MessageContent from '~/components/Chat/Messages/Content/MessageContent';
@@ -140,10 +140,7 @@ const MessageRender = memo(function MessageRender({
   );
 
   const { hasParallelContent } = useContentMetadata(msg);
-  const wakeupDisplay = useMemo(
-    () => (msg?.isCreatedByUser === true ? parseWakeupText(msg.text) : null),
-    [msg?.isCreatedByUser, msg?.text],
-  );
+  const wakeupDisplay = useMemo(() => parseWakeupMessage(msg), [msg]);
   const messageId = msg?.messageId ?? '';
   const messageContextValue = useMemo(
     () => ({

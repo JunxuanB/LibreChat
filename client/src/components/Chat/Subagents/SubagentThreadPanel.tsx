@@ -30,20 +30,21 @@ import {
   retainBoundedMovingWindowTurns,
 } from './adapters';
 import {
-  ACTIVE_THREAD_REFRESH_MS,
-  subagentThreadHasTaskEvidence,
-  useForkConvoMutation,
-  useSubagentControlMutation,
-  useSubagentThreadQuery,
-} from '~/data-provider';
-import {
   agentAuthor,
+  resolveSelfAuthor,
   isSelfSpawn as isSelfSpawnType,
   resolveChildAgent,
   readableSubagentType,
   readableSubagentTitle,
   useParentAuthor,
 } from './author';
+import {
+  ACTIVE_THREAD_REFRESH_MS,
+  subagentThreadHasTaskEvidence,
+  useForkConvoMutation,
+  useSubagentControlMutation,
+  useSubagentThreadQuery,
+} from '~/data-provider';
 import {
   activeSubagentPanel,
   subagentControlStateByTask,
@@ -161,6 +162,7 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
     selection.parentConversationId,
     selection.parentMessageId,
     localize('com_ui_subagent_parent_agent'),
+    selection.toolCallId,
   );
   const threadId = selection.durable?.threadId ?? '';
   const taskId = selection.durable?.taskId ?? '';
@@ -861,7 +863,14 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
   /** One author for the header, the composer and every child turn, so the three
    *  can never name the child differently. */
   const childAuthor = useMemo(() => {
-    if (isSelfSpawn && selection.event == null) return parentAuthor;
+    if (isSelfSpawn && selection.event == null) {
+      return resolveSelfAuthor(
+        parentAuthor,
+        selectedActorAgentId,
+        agentsMap,
+        localize('com_ui_subagent_actor'),
+      );
+    }
     const fallbackName =
       selection.event != null
         ? selectedEventActorName
@@ -872,6 +881,8 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
           ) || foregroundTitle;
     return agentAuthor(selectedActorAgent, fallbackName);
   }, [
+    agentsMap,
+    localize,
     foregroundTitle,
     isSelfSpawn,
     parentAuthor,
@@ -1410,7 +1421,7 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
         <SubagentConversation
           turns={conversationTurns}
           author={childAuthor}
-          parentAuthor={parentAuthor}
+          parentAuthor={isSelfSpawn && selection.event == null ? childAuthor : parentAuthor}
           conversationId={threadId || selection.parentConversationId}
           stateByTask={conversationStateByTask}
           controllableTaskId={

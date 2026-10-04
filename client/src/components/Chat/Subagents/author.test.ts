@@ -2,6 +2,9 @@ import { EModelEndpoint } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
 import {
   isSelfSpawn,
+  messageAuthor,
+  resolveSelfAuthor,
+  findAgentLaneId,
   resolveChildAgent,
   readableSubagentType,
   findAgentAuthorMessage,
@@ -58,4 +61,17 @@ it('preserves self as an explicit graph alias across author resolution', () => {
   expect(readableSubagentType('self', undefined, 'graph')).toBe('self');
   expect(readableSubagentType('self')).toBeUndefined();
   expect(resolveChildAgent('agent-1', 'self', undefined, {}, 'graph')).toBeUndefined();
+});
+
+it('retains matching historical snapshots and never borrows an enclosing avatar for a missing lane', () => {
+  const snapshot = message('dispatch', null);
+  snapshot.model = 'agent_deleted';
+  snapshot.sender = 'Historical Parent';
+  snapshot.iconURL = '/historical.png';
+  const parent = messageAuthor(snapshot, undefined, 'Agent');
+  expect(resolveSelfAuthor(parent, 'agent_deleted', undefined, 'Agent')).toBe(parent);
+  expect(resolveSelfAuthor(parent, undefined, undefined, 'Agent')).toBe(parent);
+  expect(resolveSelfAuthor(parent, 'agent_missing_lane', undefined, 'Agent').name).toBe('Agent');
+  expect(messageAuthor(snapshot, undefined, 'Agent', 'agent_missing_lane').name).toBe('Agent');
+  expect(findAgentLaneId(snapshot, 'missing')).toBeUndefined();
 });

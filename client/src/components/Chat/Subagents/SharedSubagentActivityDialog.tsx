@@ -6,6 +6,8 @@ import {
   agentAuthor,
   isSelfSpawn as isSelfSpawnType,
   messageAuthor,
+  findAgentLaneId,
+  resolveSelfAuthor,
   resolveChildAgent,
   readableSubagentType,
   findAgentAuthorMessage,
@@ -39,15 +41,16 @@ export default function SharedSubagentActivityDialog({
   const parentFallback = localize('com_ui_subagent_parent_agent');
   /** Resolved only while a child is open: the shared thread is never scanned for
    *  a dialog nobody is looking at. */
-  const parentAuthor = useMemo(
-    () =>
-      messageAuthor(
-        parentMessageId === '' ? undefined : findAgentAuthorMessage(messages, parentMessageId),
-        agentsMap,
-        parentFallback,
-      ),
-    [agentsMap, messages, parentFallback, parentMessageId],
-  );
+  const parentAuthor = useMemo(() => {
+    const message =
+      parentMessageId === '' ? undefined : findAgentAuthorMessage(messages, parentMessageId);
+    return messageAuthor(
+      message,
+      agentsMap,
+      parentFallback,
+      findAgentLaneId(message, selection?.toolCallId),
+    );
+  }, [agentsMap, messages, parentFallback, parentMessageId, selection?.toolCallId]);
   const childAgentId = resolveSubagentAgentId(null, selection?.subagentIdentity);
   const isSelfSpawn = isSelfSpawnType(
     selection?.subagentType,
@@ -63,7 +66,12 @@ export default function SharedSubagentActivityDialog({
   const childAuthor = useMemo(
     () =>
       isSelfSpawn
-        ? parentAuthor
+        ? resolveSelfAuthor(
+            parentAuthor,
+            childAgentId,
+            agentsMap,
+            localize('com_ui_subagent_actor'),
+          )
         : agentAuthor(
             childAgent,
             readableSubagentType(
@@ -72,7 +80,7 @@ export default function SharedSubagentActivityDialog({
               selection?.subagentIdentity?.subagentKind,
             ) || localize('com_ui_subagent_actor'),
           ),
-    [childAgent, childAgentId, isSelfSpawn, localize, parentAuthor, selection],
+    [agentsMap, childAgent, childAgentId, isSelfSpawn, localize, parentAuthor, selection],
   );
   const title = childAuthor.name;
   const activity = useMemo(
@@ -136,7 +144,7 @@ export default function SharedSubagentActivityDialog({
           <SubagentActivityScrollSurface padded={false}>
             <SubagentConversation
               author={childAuthor}
-              parentAuthor={parentAuthor}
+              parentAuthor={isSelfSpawn ? childAuthor : parentAuthor}
               turns={[
                 {
                   taskId:

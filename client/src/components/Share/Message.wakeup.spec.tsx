@@ -3,8 +3,9 @@ import { RecoilRoot } from 'recoil';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ContentTypes, dataService, EModelEndpoint } from 'librechat-data-provider';
-import type { TMessage } from 'librechat-data-provider';
+import type { TMessage, TAgentsMap } from 'librechat-data-provider';
 import { ShareMessagesProvider } from './ShareMessagesProvider';
+import { AgentsMapContext } from '~/Providers/AgentsMapContext';
 import { ShareContext } from '~/Providers/ShareContext';
 import MessagesView from './MessagesView';
 
@@ -62,12 +63,19 @@ const prompt = (status = 'completed', subagentType = 'self') =>
     },
   )}`;
 
-function renderShared(text: string, content = false, dispatch?: TMessage) {
+function renderShared(
+  text: string,
+  content = false,
+  dispatch?: TMessage,
+  submitted = false,
+  agentsMap?: TAgentsMap,
+) {
   const wake: TMessage = {
     messageId: 'wake',
     parentMessageId: null,
     conversationId: 'original',
     isCreatedByUser: true,
+    isUserSubmitted: submitted,
     text,
     ...(content ? { content: [{ type: ContentTypes.TEXT, text }] } : {}),
   };
@@ -88,11 +96,13 @@ function renderShared(text: string, content = false, dispatch?: TMessage) {
       <Provider>
         <RecoilRoot>
           <ShareContext.Provider value={{ isSharedConvo: true, shareId: 'share' }}>
-            <ShareMessagesProvider
-              messages={[...(dispatch == null ? [] : [dispatch]), wake, reply]}
-            >
-              <MessagesView messagesTree={[wake]} conversationId="shared-view" />
-            </ShareMessagesProvider>
+            <AgentsMapContext.Provider value={agentsMap}>
+              <ShareMessagesProvider
+                messages={[...(dispatch == null ? [] : [dispatch]), wake, reply]}
+              >
+                <MessagesView messagesTree={[wake]} conversationId="shared-view" />
+              </ShareMessagesProvider>
+            </AgentsMapContext.Provider>
           </ShareContext.Provider>
         </RecoilRoot>
       </Provider>
@@ -209,5 +219,76 @@ it.each([
     expect(screen.getByRole('img', { hidden: true })).toHaveAttribute('src', '/dispatch.png');
   }
   expect(screen.queryByRole('heading', { name: 'Historical Parent' })).not.toBeInTheDocument();
+  expect(dataService.getAIEndpoints).not.toHaveBeenCalled();
+});
+
+it.each(['self', 'reviewer'])(
+  'keeps a user-submitted %s wake-up lookalike as a prompt',
+  (alias) => {
+    const text = prompt('completed', alias);
+    renderShared(text, false, undefined, true);
+    expect(screen.getByTestId('message-body')).toHaveTextContent(text.replace(/\s+/g, ' '));
+    expect(screen.queryByTestId('wakeup-panel')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'com_ui_prompt: com_ui_user', hidden: true }),
+    ).toHaveClass('sr-only');
+  },
+);
+
+it('attributes a public parallel-lane self-spawn to its validated lane', () => {
+  const dispatch: TMessage = {
+    messageId: 'dispatch',
+    parentMessageId: null,
+    conversationId: 'original',
+    isCreatedByUser: false,
+    text: '',
+    sender: 'Outer Parent',
+    model: 'agent_outer',
+    endpoint: EModelEndpoint.agents,
+    iconURL: '/outer.png',
+    content: [
+      {
+        type: ContentTypes.TOOL_CALL,
+        agentId: 'agent_lane',
+        tool_call: {
+          id: 'call',
+          name: 'subagent',
+          args: { run_in_background: true },
+          output: JSON.stringify({
+            background_task_id: 'task',
+            subagent_thread_id: 'thread',
+            tool: 'subagent',
+            subagent_type: 'self',
+            status: 'running',
+            message: 'Poll with background_task_id task.',
+          }),
+          subagentIdentity: { subagentKind: 'agent', subagentAgentId: 'agent_lane' },
+        },
+      },
+    ],
+  };
+  renderShared(prompt(), false, dispatch, false, {
+    agent_lane: {
+      id: 'agent_lane',
+      name: 'Lane Parent',
+      description: null,
+      created_at: 0,
+      avatar: { filepath: '/lane.png', source: 'local' },
+      provider: EModelEndpoint.openAI,
+      model: 'test',
+      model_parameters: {
+        temperature: 1,
+        maxContextTokens: 4096,
+        max_context_tokens: 4096,
+        max_output_tokens: 1024,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+      },
+    },
+  });
+  expect(screen.getByRole('heading', { name: 'Lane Parent' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Outer Parent' })).not.toBeInTheDocument();
+  expect(screen.getByRole('img', { hidden: true })).toHaveAttribute('src', '/lane.png');
   expect(dataService.getAIEndpoints).not.toHaveBeenCalled();
 });

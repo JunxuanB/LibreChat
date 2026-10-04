@@ -526,7 +526,10 @@ describe('SubagentThreadPanel', () => {
         ...selection,
         durable: undefined,
         subagentType,
-        subagentIdentity: { subagentKind: 'agent' as const, subagentAgentId: subagentType },
+        subagentIdentity: {
+          subagentKind: 'agent' as const,
+          subagentAgentId: subagentType === 'self' ? 'agent-2' : subagentType,
+        },
       };
       /** The dispatching agent, as main chat holds it: a self-spawn is that
        *  agent working on its own behalf, so it takes the parent's name. */
@@ -723,12 +726,55 @@ describe('SubagentThreadPanel', () => {
     },
   );
 
+  it('attributes restored parallel-lane self turns to the validated spawning agent', () => {
+    queryClient.setQueryData<TMessage[]>(
+      [QueryKeys.messages, 'parent-conversation'],
+      [
+        {
+          messageId: 'parent-message',
+          parentMessageId: null,
+          conversationId: 'parent-conversation',
+          isCreatedByUser: false,
+          text: '',
+          endpoint: EModelEndpoint.agents,
+          model: 'agent-2',
+          sender: 'Analyst Two',
+        },
+      ],
+    );
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, subagentType: 'self', agentId: 'agent-1', turns: completedTurns },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Analyst One' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/analyst.png"]')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-author',
+      'Analyst One',
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst One',
+    );
+  });
+
   it('resolves a missing historical parent after its reply arrives and retains that author', async () => {
     queryClient.setQueryData<TMessage[]>([QueryKeys.messages, 'parent-conversation'], []);
     mockUseSubagentThreadQuery.mockReturnValue({
       isLoading: false,
       isError: false,
-      data: { ...completedView, subagentType: 'self', turns: completedTurns },
+      data: {
+        ...completedView,
+        agentId: 'agent_deleted',
+        subagentType: 'self',
+        turns: completedTurns,
+      },
     });
     const { container } = render(
       <Root>

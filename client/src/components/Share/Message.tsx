@@ -3,7 +3,7 @@ import type { TMessageProps } from '~/common';
 import SearchContent, {
   rendersMarkdownLite,
 } from '~/components/Chat/Messages/Content/SearchContent';
-import { parseWakeupText } from '~/components/Chat/Messages/Content/Parts/wakeup';
+import { parseWakeupMessage } from '~/components/Chat/Messages/Content/Parts/wakeup';
 import AuthorHeader from '~/components/Chat/Messages/Content/Parts/AuthorHeader';
 import MinimalHoverButtons from '~/components/Chat/Messages/MinimalHoverButtons';
 import { getHeaderHoverLabel } from '~/components/Chat/Messages/ui/HeaderLabel';
@@ -36,10 +36,7 @@ export default function Message(props: TMessageProps) {
     messageId: message?.messageId,
     attachments: message?.attachments,
   });
-  const wakeupDisplay = useMemo(
-    () => (message?.isCreatedByUser === true ? parseWakeupText(message.text) : null),
-    [message?.isCreatedByUser, message?.text],
-  );
+  const wakeupDisplay = useMemo(() => parseWakeupMessage(message), [message]);
 
   if (!message) {
     return null;

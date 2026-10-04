@@ -99,7 +99,7 @@ const backgroundWakeup = [
   ]),
 ].join('\n');
 
-function renderMessage(text: string, parentModel = 'agent_lia', shared = false) {
+function renderMessage(text: string, parentModel = 'agent_lia', shared = false, submitted = false) {
   const queryClient = new QueryClient();
   queryClient.setQueryData(
     [QueryKeys.messages, 'conversation-1'],
@@ -119,6 +119,7 @@ function renderMessage(text: string, parentModel = 'agent_lia', shared = false) 
     parentMessageId: 'parent',
     conversationId: 'conversation-1',
     isCreatedByUser: true,
+    isUserSubmitted: submitted,
     text,
   } as unknown as TMessage;
   const row = <MessageRender message={message} chatContext={chatContext} currentEditId={null} />;
@@ -179,7 +180,11 @@ describe('MessageRender wake-up rows', () => {
   });
 
   it('names a self-spawned report after the agent it woke', () => {
-    mockChildren.set('thread-1', { ...mockChildren.get('thread-1')!, subagentType: 'self' });
+    mockChildren.set('thread-1', {
+      ...mockChildren.get('thread-1')!,
+      subagentType: 'self',
+      agentId: 'agent_lia',
+    });
     renderMessage(subagentWakeup('self'));
 
     expect(screen.getByRole('heading', { name: /Lia$/ })).toBeInTheDocument();
@@ -194,7 +199,11 @@ describe('MessageRender wake-up rows', () => {
   });
 
   it('retains the historical avatar when the self-spawning agent is unavailable', () => {
-    mockChildren.set('thread-1', { ...mockChildren.get('thread-1')!, subagentType: 'self' });
+    mockChildren.set('thread-1', {
+      ...mockChildren.get('thread-1')!,
+      subagentType: 'self',
+      agentId: 'agent_deleted',
+    });
     renderMessage(subagentWakeup('self'), 'agent_deleted');
     expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
     expect(screen.getByTestId('author-face')).toHaveAttribute('data-icon', '/historical.png');
@@ -258,4 +267,23 @@ describe('MessageRender wake-up rows', () => {
     expect(screen.getByRole('heading', { hidden: true })).toHaveClass('sr-only');
     expect(screen.getByTestId('message-body')).toHaveClass('bg-surface-tertiary');
   });
+});
+
+it('keeps user-submitted wake-up lookalikes as ordinary chat prompts', () => {
+  const text = subagentWakeup('self');
+  renderMessage(text, 'agent_lia', false, true);
+  expect(screen.getByTestId('message-content')).toBeInTheDocument();
+  expect(screen.queryByTestId('wakeup-card')).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { hidden: true })).toHaveClass('sr-only');
+});
+
+it('uses the validated spawning lane for a private self wake-up', () => {
+  mockChildren.set('thread-1', {
+    ...mockChildren.get('thread-1')!,
+    subagentType: 'self',
+    agentId: 'agent_reviewer',
+  });
+  renderMessage(subagentWakeup('self'), 'agent_lia');
+  expect(screen.getByRole('heading', { name: 'Code Reviewer' })).toBeInTheDocument();
+  expect(screen.getByTestId('author-face')).toHaveAttribute('data-agent', 'Code Reviewer');
 });
