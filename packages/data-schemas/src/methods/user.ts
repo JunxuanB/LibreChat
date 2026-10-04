@@ -8,7 +8,7 @@ import {
 import type { IUser, BalanceConfig, CreateUserRequest, UserDeleteResult } from '~/types';
 import type { TwoFactorEnrollmentGuard, TwoFactorEnrollmentUpdate } from '~/types';
 import type { CacheStore } from '~/types';
-import { buildUserSearchFilter } from '~/utils/search';
+import { normalizeSearchText, buildUserSearchFilter } from '~/utils/search';
 import { evictAuthUserDocs } from '~/utils/eviction';
 import { signPayload } from '~/crypto';
 import logger from '~/config/winston';
@@ -856,7 +856,7 @@ export function createUserMethods(
     const users = await query.lean<IUser[]>();
 
     // Score results by relevance
-    const startsWithPattern = trimmedPattern.toLowerCase();
+    const startsWithPattern = normalizeSearchText(trimmedPattern);
 
     const scoredUsers = users.map((user) => {
       const searchableFields = [user.name, user.email, user.username].filter(
@@ -865,7 +865,7 @@ export function createUserMethods(
       let maxScore = 0;
 
       for (const field of searchableFields) {
-        const fieldLower = field.toLowerCase();
+        const fieldLower = normalizeSearchText(field);
         let score = 0;
 
         // Exact match gets highest score

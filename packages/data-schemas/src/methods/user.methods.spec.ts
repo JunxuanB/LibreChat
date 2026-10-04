@@ -1582,6 +1582,18 @@ describe('User Methods - Database Tests', () => {
       expect(results.length).toBeGreaterThan(0);
     });
 
+    test('should rank an accent-folded exact match above a prefix match', async () => {
+      await User.create([
+        { name: 'Zoe Adams', email: 'zadams@test.com', username: 'zadams', provider: 'local' },
+        { name: 'Zoë', email: 'zoe-umlaut@test.com', username: 'zumlaut', provider: 'local' },
+      ]);
+
+      const results = await methods.searchUsers({ searchPattern: 'zoe', limit: 1 });
+
+      expect(results).toHaveLength(1);
+      expect((results[0] as unknown as t.IUser).name).toBe('Zoë');
+    });
+
     test('should respect limit', async () => {
       const results = await methods.searchUsers({ searchPattern: 'example', limit: 2 });
 
