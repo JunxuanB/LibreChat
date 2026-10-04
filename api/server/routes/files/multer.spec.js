@@ -629,6 +629,34 @@ describe('Multer Configuration', () => {
       expect(multerInstance).toBeDefined();
     });
 
+    it('stages concurrent same-name uploads at separate paths when asked to', async () => {
+      const upload = await createMulterInstance({ fileConfig: {}, uniqueTempPath: true });
+      const app = express();
+      app.use((req, _res, next) => {
+        req.user = { id: 'test-user-123' };
+        req.config = { paths: { uploads: tempDir } };
+        next();
+      });
+      app.post('/upload', upload.single('file'), (req, res) => {
+        res.json({ path: req.file.path, bytes: fs.readFileSync(req.file.path, 'utf8') });
+      });
+
+      const [first, second] = await Promise.all(
+        ['first body', 'second body'].map((body) =>
+          request(app).post('/upload').attach('file', Buffer.from(body), {
+            filename: 'notes.txt',
+            contentType: 'text/plain',
+          }),
+        ),
+      );
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(first.body.path).not.toBe(second.body.path);
+      expect(first.body.bytes).toBe('first body');
+      expect(second.body.bytes).toBe('second body');
+    });
+
     it('should create multer instance with expected interface', async () => {
       const multerInstance = await createMulterInstance();
 
