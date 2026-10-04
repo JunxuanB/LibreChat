@@ -37,7 +37,7 @@ RUN \
     # Allow mounting of these files, which have no default
     touch .env ; \
     # Create directories for the volumes to inherit the correct permissions
-    mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data ; \
+    mkdir -p /app/client/public/images /app/logs /app/uploads /app/skill /app/data/sub2api ; \
     chmod 1777 /app/data ; \
     npm config set fetch-retry-maxtimeout 600000 ; \
     npm config set fetch-retries 5 ; \
@@ -73,6 +73,9 @@ ARG BUILD_DATE=
 ENV BUILD_COMMIT=${BUILD_COMMIT}
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 ENV BUILD_DATE=${BUILD_DATE}
+LABEL org.opencontainers.image.source="https://github.com/JunxuanB/LibreChat" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.revision=${BUILD_COMMIT}
 
 # Node API setup
 EXPOSE 3080

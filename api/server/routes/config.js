@@ -24,6 +24,7 @@ const { getRumConfig } = require('~/server/services/Config/rum');
 const { getAppConfig } = require('~/server/services/Config/app');
 
 const router = express.Router();
+const sub2api = require('~/server/services/sub2api');
 const emailLoginEnabled =
   process.env.ALLOW_EMAIL_LOGIN === undefined || isEnabled(process.env.ALLOW_EMAIL_LOGIN);
 const passwordResetEnabled = isEnabled(process.env.ALLOW_PASSWORD_RESET);
@@ -212,7 +213,7 @@ function buildCloudFrontStartupConfig() {
 
 router.get('/', async function (req, res) {
   try {
-    const preLoginPayload = buildPreLoginPayload();
+    const preLoginPayload = { ...buildPreLoginPayload(), ...(await sub2api.startup()) };
     const publicSharePayload = buildPublicSharePayload();
     const rum = getRumConfig();
 

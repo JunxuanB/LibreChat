@@ -9,7 +9,7 @@ import {
   OGDialogTrigger,
   OGDialogContent,
 } from '@librechat/client';
-import { useGetEndpointsQuery } from '~/data-provider';
+import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import useProviderKeys from './useProviderKeys';
 import ProviderKeyRow from './ProviderKeyRow';
 import { useLocalize } from '~/hooks';
@@ -20,11 +20,25 @@ export default function ProviderKeys() {
   const contentRef = useRef<HTMLDivElement>(null);
   const { data: endpointsConfig } = useGetEndpointsQuery();
   const endpoints = useProviderKeys();
+  const { data: startupConfig } = useGetStartupConfig();
 
   const handleOpenAutoFocus = (event: Event) => {
     event.preventDefault();
     contentRef.current?.focus();
   };
+
+  if (startupConfig?.sub2api?.enabled) {
+    return (
+      <a
+        href={`${startupConfig.sub2api.siteUrl}/keys`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sm text-accent-primary underline"
+      >
+        {localize('com_auth_sub2api_manage')}
+      </a>
+    );
+  }
 
   return (
     <div className="flex items-center justify-between">

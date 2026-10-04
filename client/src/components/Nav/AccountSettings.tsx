@@ -171,9 +171,22 @@ function AccountSettings({ collapsed = false }: { collapsed?: boolean }) {
           {localize('com_nav_settings')}
         </Menu.MenuItem>
         <DropdownMenuSeparator />
+        {startupConfig?.sub2api?.enabled && (
+          <Menu.MenuItem
+            onClick={() =>
+              window.open(`${startupConfig.sub2api?.siteUrl}/keys`, '_blank', 'noopener,noreferrer')
+            }
+            className="select-item text-sm"
+          >
+            <GearIcon className="icon-md" aria-hidden="true" />
+            {localize('com_auth_sub2api_manage')}
+          </Menu.MenuItem>
+        )}
         <Menu.MenuItem onClick={() => logout()} className="select-item text-sm">
           <LogOut className="icon-md" aria-hidden="true" />
-          {localize('com_nav_log_out')}
+          {localize(
+            startupConfig?.sub2api?.enabled ? 'com_auth_sub2api_switch' : 'com_nav_log_out',
+          )}
         </Menu.MenuItem>
       </Menu.Menu>
       {showArchived && (

@@ -61,9 +61,13 @@ export default function StartupLayout({ isAuthenticated }: { isAuthenticated?: b
     isFetching,
   };
 
+  const header = startupConfig?.sub2api?.enabled
+    ? startupConfig.appTitle
+    : localize(headerText || headerMap[location.pathname]);
+
   return (
     <AuthLayout
-      header={headerText ? localize(headerText) : localize(headerMap[location.pathname])}
+      header={header}
       isFetching={isFetching}
       startupConfig={startupConfig}
       startupConfigError={startupConfigError}

@@ -25,6 +25,7 @@ const { loginController } = require('~/server/controllers/auth/LoginController')
 const { findBalanceByUser, upsertBalanceFields } = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
 const middleware = require('~/server/middleware');
+const sub2api = require('~/server/services/sub2api');
 
 const setBalanceConfig = createSetBalanceConfig({
   getAppConfig,
@@ -56,7 +57,7 @@ router.post(
   middleware.loginLimiter,
   middleware.checkBan,
   middleware.validateEmailLogin,
-  ldapAuth ? middleware.requireLdapAuth : middleware.requireLocalAuth,
+  sub2api.authenticate(ldapAuth ? middleware.requireLdapAuth : middleware.requireLocalAuth),
   setBalanceConfig,
   loginController,
 );

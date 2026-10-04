@@ -61,6 +61,12 @@ const userSchema: Schema<IUser> = new Schema<IUser>(
       required: true,
       default: 'local',
     },
+    sub2apiIdentity: {
+      type: String,
+      unique: true,
+      sparse: true,
+      immutable: true,
+    },
     role: {
       type: String,
       default: SystemRoles.USER,

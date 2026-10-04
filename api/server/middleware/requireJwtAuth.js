@@ -1,5 +1,6 @@
 const cookies = require('cookie');
 const passport = require('passport');
+const sub2api = require('~/server/services/sub2api');
 const { logger } = require('@librechat/data-schemas');
 const {
   isEnabled,
@@ -189,7 +190,10 @@ const requireJwtAuth = (req, res, next) => {
         if (tenantErr) {
           return next(tenantErr);
         }
-        refreshCloudFrontCookies(req, res, next);
+        sub2api.authorize(req, res, (error) => {
+          if (error) return next(error);
+          refreshCloudFrontCookies(req, res, next);
+        });
       });
     })(req, res, next);
   };

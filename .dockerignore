@@ -15,3 +15,15 @@ docs
 
 # Ignore all hidden files
 .*
+
+# Local runtime files and test reports must never enter a published image.
+data
+logs
+uploads
+**/.test-results
+**/coverage
+**/junit.xml
+e2e
+deploy/sub2api/tests
+playwright-report
+test-results

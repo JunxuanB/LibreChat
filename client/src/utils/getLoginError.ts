@@ -9,6 +9,10 @@ const getLoginError = (errorText: string): TranslationKeys => {
   }
 
   switch (true) {
+    case errorText === 'SUB2API_INVALID_KEY':
+      return 'com_auth_sub2api_invalid';
+    case errorText === 'SUB2API_UNAVAILABLE':
+      return 'com_auth_sub2api_unavailable';
     case errorText === ErrorTypes.AUTH_CROSS_ORIGIN:
       return 'com_auth_error_login_cross_origin';
     case errorText.includes('429'):

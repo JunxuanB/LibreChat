@@ -111,12 +111,16 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
     { select: selectAgents },
   );
 
-  const { mappedEndpoints, endpointRequiresUserKey } = useEndpoints({
+  const { mappedEndpoints, endpointRequiresUserKey: requiresUserKey } = useEndpoints({
     agents,
     assistantsMap,
     startupConfig,
     endpointsConfig,
   });
+  const endpointRequiresUserKey = useCallback(
+    (value: string) => (startupConfig?.sub2api?.enabled ? false : requiresUserKey(value)),
+    [startupConfig?.sub2api?.enabled, requiresUserKey],
+  );
 
   const getModelDisplayName = useCallback(
     (endpoint: Endpoint, model: string): string => {

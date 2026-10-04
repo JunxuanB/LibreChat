@@ -1,5 +1,23 @@
 # LibreChat contributor and agent guidance
 
+## JunxuanB sub2api fork
+
+This fork's deployment branch is `sub2api`, based on upstream released `main`.
+For this fork, the instructions in this section take precedence over upstream branching
+and English-only translation instructions below. Keep upstream as a separate remote;
+do not publish this customization to upstream branches.
+
+Preserve the Chinese default, single sub2api provider, API-Key-only login, one Key per
+history space, and encrypted persistent credentials. Update English and Simplified
+Chinese strings for this integration. Ordinary Key users must never become admins.
+Keep the identity secret and encryption secrets stable across upgrades and do not
+commit or print credentials. Document deployment in `deploy/sub2api/README_CN.md`.
+
+Custom version source: `deploy/sub2api/VERSION`. Publish to Docker Hub
+`junxuanb/librechat` for Linux amd64 and arm64 only when the user requests publishing;
+use unique version tags. Do not deploy to the user's server or modify sub2api's
+database. Preserve upstream licenses and existing upstream release workflows.
+
 `AGENTS.md` is the repository's contributor guidance. Backend code lives in `packages/api`
 (TypeScript) and `packages/data-schemas` (database methods); `api` is legacy Express wiring.
 Shared API types and services live in `packages/data-provider`, and the React app lives in
@@ -109,7 +127,7 @@ unsuccessful outcome as an exception:
   successful lookup with no record), never to hide a query failure.
 - For an expected failure the caller can handle without aborting the operation, prefer a typed
   discriminated result such as `{ ok: true; value: T } | { ok: false; error: { code: string;
-  message?: string } }`. Keep an existing domain-specific result shape when changing it would
+message?: string } }`. Keep an existing domain-specific result shape when changing it would
   break callers; do not introduce interchangeable `ok`, `valid`, and bare `{ message }` contracts
   in the same service. Codes should be stable, machine-readable identifiers when the caller
   needs to distinguish failures. Internal validation helpers may use the existing local pattern.

@@ -3,6 +3,7 @@ import {
   createOpenIDRefreshFlightMethods,
   type OpenIDRefreshFlightMethods,
 } from './openidRefreshFlight';
+import { createSub2APIMethods } from './sub2api';
 export {
   createMCPAuthorizationFenceRetryStorage,
   type MCPAuthorizationFenceRetryStorage,
@@ -483,6 +484,7 @@ export function createMethods(
     ...createToolCallMethods(mongoose),
     ...createCategoriesMethods(mongoose),
     ...createPresetMethods(mongoose),
+    ...createSub2APIMethods(mongoose),
     /* Tier 2 */
     ...createConversationTagMethods(mongoose),
     ...createConversationImportMethods(mongoose),

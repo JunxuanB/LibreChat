@@ -1,3 +1,5 @@
+> **JunxuanB sub2api 定制版**：默认中文，仅输入 sub2api API Key 即可聊天，同 Key 共享历史。查看 [中文部署说明](deploy/sub2api/README_CN.md) 或下载 [单文件 Compose YAML](deploy/sub2api/compose.yaml)。本分支为 `sub2api`，以下保留上游介绍。
+
 <p align="center">
   <a href="https://librechat.ai">
     <img src="client/public/assets/logo.svg" height="256">

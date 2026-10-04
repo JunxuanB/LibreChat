@@ -1,0 +1,86 @@
+name: sub2api-chat
+
+# 保存此文件为 compose.yaml，执行 docker compose up -d。
+# 和 sub2api 部署在同一台机器；只需调整下面的三个地址/端口。
+services:
+  init:
+    image: junxuanb/librechat:1.0.0
+    command: ['node', '/app/deploy/sub2api/init.cjs']
+    environment:
+      SUB2API_URL: http://host.docker.internal:7777
+      SUB2API_PUBLIC_URL: http://192.168.2.29:7777
+    volumes:
+      - config:/app/data/sub2api
+    restart: 'no'
+
+  chat:
+    image: junxuanb/librechat:1.0.0
+    entrypoint: ['/bin/sh', '/app/deploy/sub2api/start.sh']
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      mongodb:
+        condition: service_healthy
+    ports:
+      - '3080:3080'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3080'
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongodb:27017/LibreChat
+      CONFIG_PATH: /app/data/sub2api/librechat.yaml
+      DOMAIN_CLIENT: http://192.168.2.29:3080
+      DOMAIN_SERVER: http://192.168.2.29:3080
+      APP_TITLE: 氛围土豆
+      ENDPOINTS: custom
+      ALLOW_EMAIL_LOGIN: 'true'
+      ALLOW_REGISTRATION: 'false'
+      ALLOW_SOCIAL_LOGIN: 'false'
+      ALLOW_PASSWORD_RESET: 'false'
+      ALLOW_SHARED_LINKS: 'false'
+      ALLOW_SHARED_LINKS_PUBLIC: 'false'
+      ALLOW_ACCOUNT_DELETION: 'false'
+      SEARCH: 'false'
+      AUTH_USER_CACHE_MODE: 'on'
+      DEBUG_LOGGING: 'false'
+      DEBUG_CONSOLE: 'false'
+      SCARF_ANALYTICS: 'false'
+    volumes:
+      - config:/app/data/sub2api:ro
+      - uploads:/app/uploads
+      - images:/app/client/public/images
+      - logs:/app/logs
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3080/api/config').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 15s
+      start_period: 90s
+      retries: 3
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:8.0
+    command: ['mongod', '--bind_ip_all']
+    volumes:
+      - mongodb:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  config:
+  mongodb:
+  uploads:
+  images:
+  logs:

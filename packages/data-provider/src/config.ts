@@ -1744,11 +1744,16 @@ export const endpointSchema = baseEndpointSchema.merge(
      * reads can show which key is configured without returning the secret. */
     apiKeyPreview: z.string().optional(),
     baseURL: z.string(),
-    models: z.object({
-      default: z.array(modelItemSchema).min(1),
-      fetch: z.boolean().optional(),
-      userIdQuery: z.boolean().optional(),
-    }),
+    models: z
+      .object({
+        default: z.array(modelItemSchema),
+        fetch: z.boolean().optional(),
+        userIdQuery: z.boolean().optional(),
+      })
+      .refine((models) => models.default.length > 0 || models.fetch === true, {
+        message:
+          'At least one default model is required unless models are fetched from the provider',
+      }),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
     /**
@@ -2512,6 +2517,12 @@ export type EndpointsDropParamsMap = Record<string, string[] | Record<string, st
 
 export type TStartupConfig = {
   appTitle: string;
+  sub2api?: {
+    enabled: boolean;
+    siteUrl: string;
+    subtitle?: string;
+    logo?: string;
+  };
   socialLogins?: string[];
   langfuseFanoutEnabled?: boolean;
   langfuseConnectionAccess?: boolean;
@@ -3124,6 +3135,17 @@ export const permissionWriteAttemptsSchema = z.number().int().min(1).max(100).de
 
 export const configSchema = z.object({
   version: z.string(),
+  sub2api: z
+    .object({
+      enabled: z.boolean().default(false),
+      baseURL: z.string().default('${SUB2API_URL}'),
+      publicURL: z.string().default('${SUB2API_PUBLIC_URL}'),
+      timeoutMs: z.number().int().min(1000).max(60000).default(8000),
+      validationTtlMs: z.number().int().min(0).max(60000).default(30000),
+      settingsTtlMs: z.number().int().min(1000).max(300000).default(60000),
+      cacheLimit: z.number().int().min(1).max(100000).default(10000),
+    })
+    .optional(),
   permissions: z.object({ maxWriteAttempts: permissionWriteAttemptsSchema }).optional(),
   cache: z.boolean().default(true),
   ocr: ocrSchema.optional(),

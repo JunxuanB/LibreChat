@@ -3,6 +3,8 @@ import getLoginError from './getLoginError';
 
 describe('getLoginError', () => {
   it.each([
+    ['SUB2API_INVALID_KEY', 'com_auth_sub2api_invalid'],
+    ['SUB2API_UNAVAILABLE', 'com_auth_sub2api_unavailable'],
     [ErrorTypes.AUTH_CROSS_ORIGIN, 'com_auth_error_login_cross_origin'],
     ['Request failed with status code 403', 'com_auth_error_login_ban'],
     ['Request failed with status code 429', 'com_auth_error_login_rl'],

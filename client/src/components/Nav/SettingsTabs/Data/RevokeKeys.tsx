@@ -8,6 +8,7 @@ import {
   OGDialogTrigger,
   Spinner,
 } from '@librechat/client';
+import { useAuthContext } from '~/hooks/AuthContext';
 import { useLocalize } from '~/hooks';
 
 export const RevokeKeys = ({
@@ -20,6 +21,7 @@ export const RevokeKeys = ({
   const localize = useLocalize();
   const [open, setOpen] = useState(false);
   const revokeKeysMutation = useRevokeAllUserKeysMutation();
+  const { user } = useAuthContext();
 
   const handleSuccess = () => {
     if (!setDialogOpen) {
@@ -34,6 +36,10 @@ export const RevokeKeys = ({
   };
 
   const isLoading = revokeKeysMutation.isLoading;
+
+  if (user?.provider === 'sub2api') {
+    return null;
+  }
 
   return (
     <div className="flex items-center justify-between">

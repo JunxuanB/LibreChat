@@ -149,7 +149,11 @@ const AuthContextProvider = ({
     onError: (error: TResError | unknown) => {
       const resError = error as TResError;
       const code = resError.response?.data?.code;
-      doSetError(code === ErrorTypes.AUTH_CROSS_ORIGIN ? code : resError.message);
+      doSetError(
+        code === ErrorTypes.AUTH_CROSS_ORIGIN || code?.startsWith('SUB2API_')
+          ? code
+          : resError.message,
+      );
       // Preserve a valid redirect_to across login failures so the deep link survives retries.
       // Cannot use buildLoginRedirectUrl() here — it reads the current pathname (already /login)
       // and would return plain /login, dropping the redirect_to destination.
@@ -208,6 +212,7 @@ const AuthContextProvider = ({
   const userQuery = useGetUserQuery({ enabled: !!(token ?? '') });
 
   const login = (data: t.TLoginUser) => {
+    setError(undefined);
     loginUser.mutate(data);
   };
 

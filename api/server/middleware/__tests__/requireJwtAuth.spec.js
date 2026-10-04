@@ -10,6 +10,8 @@
 
 const jwt = require('jsonwebtoken');
 
+jest.mock('~/server/services/sub2api', () => ({ authorize: (_req, _res, next) => next() }));
+
 // ── Mocks ──────────────────────────────────────────────────────────────
 
 let mockPassportError = null;

@@ -69,6 +69,7 @@ async function authenticate(config: FullConfig, user: User) {
     });
     console.log('🤖: ✔️  localStorage: set Nav as Visible', storageState);
 
+    await page.addInitScript(() => localStorage.setItem('lang', JSON.stringify('en')));
     await page.goto(baseURL, { timeout });
     await register(page, user);
     try {

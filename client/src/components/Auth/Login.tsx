@@ -10,6 +10,7 @@ import SocialButton from '~/components/Auth/SocialButton';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { useLocalize } from '~/hooks';
 import LoginForm from './LoginForm';
+import KeyLogin from './KeyLogin';
 
 interface LoginLocationState {
   redirect_to?: string;
@@ -114,7 +115,10 @@ function Login() {
   return (
     <>
       {error != null && <ErrorMessage>{localize(getLoginError(error))}</ErrorMessage>}
-      {startupConfig?.emailLoginEnabled === true && (
+      {startupConfig?.sub2api?.enabled && (
+        <KeyLogin login={login} startupConfig={startupConfig} error={error} />
+      )}
+      {!startupConfig?.sub2api?.enabled && startupConfig?.emailLoginEnabled === true && (
         <LoginForm
           onSubmit={login}
           startupConfig={startupConfig}
