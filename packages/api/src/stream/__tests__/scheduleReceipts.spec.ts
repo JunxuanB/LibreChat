@@ -161,7 +161,9 @@ redisDescribe('real Redis receipt retention', () => {
     await redis.connect();
     const store = new RedisJobStore(redis, { runningTtl: 1 });
     const stream = 'schedule-outbox-crash';
-    const job = await store.createJob(stream, 'owner', stream);
+    const job = await store.createJob(stream, 'owner', stream, undefined, {
+      providerExecutionId: 'owner-segment',
+    });
     try {
       await store.enqueueSteer(
         stream,
@@ -194,7 +196,13 @@ redisDescribe('real Redis receipt retention', () => {
       expect(
         (await restarted.getScheduleReconcileJobs(100)).find((item) => item.streamId === stream)
           ?.providerDrained,
-      ).toBe(true);
+      ).toBe(false);
+      await expect(
+        restarted.markProviderExecutionDrained(stream, job.createdAt, 'wrong-segment'),
+      ).resolves.toBe(false);
+      await expect(
+        restarted.markProviderExecutionDrained(stream, job.createdAt, 'owner-segment'),
+      ).resolves.toBe(true);
       // Mongo can already be bookkept. The job's obligation is still discoverable.
       expect(
         (await new RedisJobStore(redis).getScheduleReconcileJobs(100)).map((item) => item.streamId),

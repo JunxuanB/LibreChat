@@ -706,11 +706,11 @@ const PROVIDER_DRAIN_LUA =
   'if redis.call("HGET", KEYS[1], "providerExecutionId") ~= ARGV[2] then return 0 end ' +
   'redis.call("HSET", KEYS[1], "providerDrained", "1") return 1';
 
-/** Recover a terminal host action whose provider-owning process disappeared
- * after the terminal CAS. `completedAt` is immutable for this generation, so
- * the deadline cannot be extended by retry enumeration. */
+/** Legacy host-action recovery. Scheduled obligations require exact segment
+ * acknowledgement; elapsed time is not evidence that their provider drained. */
 const RECOVER_TERMINAL_PROVIDER_DRAIN_LUA =
   'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" or redis.call("HEXISTS", KEYS[1], "scheduleId") == 1 then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "terminalHostActionPending") ~= "1" and redis.call("HGET", KEYS[1], "detachedAgentEventTerminalHostActionPending") ~= "1" and redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") ~= "1" then return 0 end ' +
   'if redis.call("HGET", KEYS[1], "providerDrained") ~= "0" then return 0 end ' +
   'local completedAt = tonumber(redis.call("HGET", KEYS[1], "completedAt") or "") ' +
@@ -3313,7 +3313,6 @@ export class RedisJobStore implements IJobStoreV2 {
       this.scheduleReconcileMembers = members;
     }
     const members = this.scheduleReconcileMembers.splice(0, limit);
-    const cutoff = Date.now() - PROVIDER_DRAIN_TIMEOUT_MS;
     const held = await Promise.all(
       members.map(async (member) => {
         const { streamId, createdAt } = parseTerminalHostActionMember(member);
@@ -3327,23 +3326,6 @@ export class RedisJobStore implements IJobStoreV2 {
         if (job.status === 'running') {
           if (await this.deleteStaleRunningJob(streamId, job, Date.now()))
             job = await this.getJob(streamId);
-        }
-        if (
-          job &&
-          job.status !== 'running' &&
-          job.status !== 'requires_action' &&
-          job.providerDrained === false &&
-          job.completedAt != null &&
-          job.completedAt <= cutoff
-        ) {
-          await this.redis.eval(
-            RECOVER_TERMINAL_PROVIDER_DRAIN_LUA,
-            1,
-            KEYS.job(streamId),
-            String(job.createdAt),
-            String(cutoff),
-          );
-          job = await this.getJob(streamId);
         }
         return job;
       }),
@@ -3412,6 +3394,8 @@ export class RedisJobStore implements IJobStoreV2 {
           migrate.push(terminalHostActionMember(job.streamId, job.createdAt));
         }
         if (
+          !job.scheduleId &&
+          job.preserveForScheduleReconcile !== true &&
           job.providerDrained === false &&
           job.completedAt != null &&
           job.completedAt <= providerLossCutoff

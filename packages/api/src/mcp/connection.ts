@@ -1352,6 +1352,9 @@ export class MCPConnection extends EventEmitter {
     const authorizeHeaders = this.resolveRequestHeaders
       ? this.authorizeRequestHeaders.bind(this)
       : undefined;
+    const reportRejection = this.resolveRequestHeaders?.recordFailure
+      ? this.failRequestAuthorization.bind(this)
+      : undefined;
     const thisAppProfile = this.capabilityProfile === MCP_APPS_CAPABILITY_PROFILE;
     const appOperationLimits = this.operationLimits;
     const effectiveTimeout = timeout || DEFAULT_TIMEOUT;
@@ -1490,11 +1493,13 @@ export class MCPConnection extends EventEmitter {
         }
         const response = await undiciFetch(currentUrlString, currentInit);
         if (
-          rejectDirectBearerAuthentication &&
+          (rejectDirectBearerAuthentication || (reportRejection && reauthorize)) &&
           (response.status === 401 || response.status === 403)
         ) {
           await response.body?.cancel().catch(() => undefined);
-          throw new MCPTransportAuthenticationError(response.status);
+          const error = new MCPTransportAuthenticationError(response.status);
+          if (reportRejection && reauthorize) return reportRejection(error);
+          throw error;
         }
         const isMethodPreservingRedirect = response.status === 307 || response.status === 308;
         const responseContext = {
@@ -1607,13 +1612,22 @@ export class MCPConnection extends EventEmitter {
       if (this.requestAuthorization.closed) throw new Error('MCP connection is closed');
       return headers;
     } catch (error) {
-      // A fresh checkout may authorize later; transport/OAuth retries cannot bypass denial.
-      this.requestAuthorization.error = error;
-      this.shouldStopReconnecting = true;
-      if (this.resolveRequestHeaders.recordFailure)
-        await this.resolveRequestHeaders.recordFailure(error);
-      throw error;
+      return this.failRequestAuthorization(error);
     }
+  }
+
+  private async failRequestAuthorization(error: unknown): Promise<never> {
+    // Stop retries before receipt admission waits; failure evidence outlives SDK deadlines.
+    this.requestAuthorization.error = error;
+    this.shouldStopReconnecting = true;
+    try {
+      if (this.resolveRequestHeaders?.recordFailure)
+        await this.resolveRequestHeaders.recordFailure(error);
+    } catch (reported) {
+      this.requestAuthorization.error = reported;
+      throw reported;
+    }
+    throw error;
   }
 
   private emitError(_error: unknown, errorContext: string): void {
@@ -1789,6 +1803,15 @@ export class MCPConnection extends EventEmitter {
                   dispatcher: getSSEDispatcher(urlString),
                   headers: fetchHeaders,
                 });
+                if (
+                  this.resolveRequestHeaders?.recordFailure &&
+                  (response.status === 401 || response.status === 403)
+                ) {
+                  await response.body?.cancel().catch(() => undefined);
+                  return this.failRequestAuthorization(
+                    new MCPTransportAuthenticationError(response.status),
+                  );
+                }
                 return this.capabilityProfile === MCP_APPS_CAPABILITY_PROFILE
                   ? guardMCPStreamableHTTPResponse(response, {
                       logPrefix: this.getLogPrefix(),
@@ -2754,9 +2777,8 @@ export class MCPConnection extends EventEmitter {
           this.resolveRequestHeaders?.recordFailure &&
           (isMCPInitializationError(error) || isMCPTransportAuthenticationError(error))
         ) {
-          this.shouldStopReconnecting = true;
           try {
-            await this.resolveRequestHeaders.recordFailure(error);
+            await this.failRequestAuthorization(error);
           } catch (reported) {
             error = reported;
           }

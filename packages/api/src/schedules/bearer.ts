@@ -327,6 +327,7 @@ export function createScheduledMCPBearerHeaderResolver(
         // The recorder registers exact-owner pending evidence before its first await.
         admission = onFailure(error);
         reports.set(key, admission);
+        reports.set(error, admission);
         pending.add(admission);
         const receipt = admission;
         void admission.then(

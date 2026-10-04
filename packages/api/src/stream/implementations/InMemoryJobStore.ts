@@ -1110,6 +1110,7 @@ export class InMemoryJobStore implements IJobStoreV2 {
         continue;
       }
       if (
+        !job.scheduleId &&
         job.preserveForScheduleReconcile !== true &&
         job.providerDrained === false &&
         job.completedAt != null &&

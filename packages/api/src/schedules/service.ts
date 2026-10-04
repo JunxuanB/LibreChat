@@ -788,7 +788,8 @@ export function createSchedulesService(
         current?.createdAt !== job.createdAt ||
         !jobMatchesIdentity(current, identity) ||
         current.providerDrained === false ||
-        current.terminalPersistencePending === true
+        current.terminalPersistencePending === true ||
+        current.terminalHostActionPending === true
       )
         return false;
       if (
