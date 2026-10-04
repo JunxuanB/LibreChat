@@ -372,6 +372,7 @@ const REPLACEMENT_RECEIPT_ACK_LUA =
  *   evidence expired, the finite expected epoch is echoed with verified=false.
  */
 const JOB_CREATE_LUA =
+  SCHEDULE_RETENTION_LUA +
   'if ARGV[8] ~= "" then local claimRaw = redis.call("GET", KEYS[10]) ' +
   'if not claimRaw then return { "", "", "0", "claim_lost" } end ' +
   'local ok, claim = pcall(cjson.decode, claimRaw) ' +
@@ -598,7 +599,7 @@ const JOB_CREATE_LUA =
   'if replacedConversationId then redis.call("HSET", KEYS[1], "__replacedConversationId", replacedConversationId) end end ' +
   'if #replacementChain > 0 then redis.call("HSET", KEYS[1], "__replacedGenerations", cjson.encode(replacementChain)) end ' +
   'if ARGV[10] ~= "2" then redis.call("HDEL", KEYS[1], "checkpointNamespace") end ' +
-  'redis.call("EXPIRE", KEYS[1], ttl) ' +
+  'expireScheduleJob(KEYS[1], ttl) ' +
   'redis.call("SET", KEYS[7], tostring(createdAt), "EX", ttl + generationEpochGraceTtl) ' +
   'if ARGV[8] ~= "" then local claimRaw = redis.call("GET", KEYS[10]) ' +
   'local claimTtl = redis.call("PTTL", KEYS[10]) local ok, claim = pcall(cjson.decode, claimRaw) ' +
@@ -2643,7 +2644,8 @@ export class RedisJobStore implements IJobStoreV2 {
       left.tenantId === right.tenantId &&
       left.providerDrained === right.providerDrained &&
       left.terminalPersistencePending === right.terminalPersistencePending &&
-      left.terminalHostActionPending === right.terminalHostActionPending
+      left.terminalHostActionPending === right.terminalHostActionPending &&
+      left.preserveForScheduleReconcile === right.preserveForScheduleReconcile
     );
   }
 
@@ -2728,6 +2730,8 @@ export class RedisJobStore implements IJobStoreV2 {
           ? this.redis.sadd(KEYS.requiresActionJobs, streamId)
           : this.redis.srem(KEYS.requiresActionJobs, streamId),
       ];
+      if (job?.preserveForScheduleReconcile === true)
+        operations.push(this.redis.sadd(KEYS.scheduleReconcileJobs, terminalMember!));
       if (job?.terminalHostActionPending === true) {
         operations.push(this.redis.sadd(terminalHostActionIndex, terminalMember!));
         operations.push(this.redis.srem(otherTerminalHostActionIndex, terminalMember!));
@@ -2770,6 +2774,8 @@ export class RedisJobStore implements IJobStoreV2 {
     }
 
     const pipeline = this.redis.pipeline();
+    if (job?.preserveForScheduleReconcile === true)
+      pipeline.sadd(KEYS.scheduleReconcileJobs, terminalMember!);
     if (statusKey === KEYS.runningJobs) {
       pipeline.sadd(KEYS.runningJobs, streamId);
     } else {
@@ -3252,6 +3258,10 @@ export class RedisJobStore implements IJobStoreV2 {
     observedJob: SerializableJobData,
     now: number,
   ): Promise<boolean> {
+    // The cross-slot hint must exist before stale recovery retires running membership.
+    // Failed index writes leave the running generation available for a later cleanup pass.
+    if (observedJob.preserveForScheduleReconcile === true)
+      await this.retainScheduleReconcile(streamId, observedJob.createdAt);
     const deleted = await this.redis.eval(
       STALE_JOB_DELETE_LUA,
       9,

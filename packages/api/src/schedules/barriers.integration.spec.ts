@@ -23,7 +23,10 @@ import { GenerationJobManager } from '~/stream/GenerationJobManager';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
 import { MCPConnection } from '~/mcp/connection';
 
-async function fixture(store: IJobStoreV2 = new InMemoryJobStore({ ttlAfterComplete: 0 })) {
+async function fixture(
+  store: IJobStoreV2 = new InMemoryJobStore({ ttlAfterComplete: 0 }),
+  retainInitially = false,
+) {
   const mongo = await MongoMemoryServer.create({ instance: { args: ['--nounixsocket'] } });
   const database = new mongoose.Mongoose();
   await database.connect(mongo.getUri(), { autoIndex: false });
@@ -62,6 +65,7 @@ async function fixture(store: IJobStoreV2 = new InMemoryJobStore({ ttlAfterCompl
       scheduleId: schedule.id,
       scheduledFor: scheduledFor.toISOString(),
       agent_id: 'root',
+      ...(retainInitially && { preserveForScheduleReconcile: true }),
     },
   });
   const identity = {
@@ -442,109 +446,121 @@ redisDescribe('real Redis scheduled provider drain', () => {
 });
 
 redisDescribe('host-confirmed Redis provider owner loss', () => {
-  it('recovers a terminated disposable worker without treating a live or unknown owner as drained', async () => {
-    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
-    await redis.connect();
-    const f = await fixture(new RedisJobStore(redis, { runningTtl: 1 }));
-    let worker: ReturnType<typeof spawn> | undefined;
-    let stopped = false;
-    try {
-      const error = new ScheduledMCPBearerError('consent_revoked', 'Files');
-      await f.service.recordMCPToolAuthFailure({
-        error,
-        identity: f.identity,
-        streamId: f.job.streamId,
-        jobCreatedAt: f.job.createdAt,
-        userId: f.owner,
-        serverName: 'Files',
-      });
-      const segment = f.job.metadata.providerExecutionId!;
-      // This disposable process owns the provider segment. Only its observed exit proves loss.
-      worker = spawn(
-        process.execPath,
-        [
-          '-e',
-          `const Redis=require('ioredis');const {RedisJobStore}=require('./dist/index.cjs');
+  it.each(['receipt', 'initial retention'] as const)(
+    'recovers a terminated worker from %s without treating a live or unknown owner as drained',
+    async (mode) => {
+      const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+      await redis.connect();
+      const f = await fixture(
+        new RedisJobStore(redis, { runningTtl: 1 }),
+        mode === 'initial retention',
+      );
+      let worker: ReturnType<typeof spawn> | undefined;
+      let stopped = false;
+      try {
+        const error = new ScheduledMCPBearerError('consent_revoked', 'Files');
+        if (mode === 'receipt')
+          await f.service.recordMCPToolAuthFailure({
+            error,
+            identity: f.identity,
+            streamId: f.job.streamId,
+            jobCreatedAt: f.job.createdAt,
+            userId: f.owner,
+            serverName: 'Files',
+          });
+        const segment = f.job.metadata.providerExecutionId!;
+        // This disposable process owns the provider segment. Only its observed exit proves loss.
+        worker = spawn(
+          process.execPath,
+          [
+            '-e',
+            `const Redis=require('ioredis');const {RedisJobStore}=require('./dist/index.cjs');
         const client=new Redis({path:process.argv[1]});const store=new RedisJobStore(client);
         store.beginProviderExecution(process.argv[2],Number(process.argv[3]),process.argv[4]).then(started=>{
           if(!started)process.exit(2);process.stdout.write('started\\n');setInterval(()=>{},1000);
         }).catch(()=>process.exit(3));`,
-          process.env.B2_REDIS_SOCKET!,
-          f.job.streamId,
-          String(f.job.createdAt),
-          segment,
-        ],
-        { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] },
-      );
-      await new Promise<void>((resolve, reject) => {
-        worker!.stdout!.once('data', () => resolve());
-        worker!.once('error', reject);
-        worker!.once('exit', (code) => {
-          if (code !== null) reject(new Error('Provider worker failed to start'));
+            process.env.B2_REDIS_SOCKET!,
+            f.job.streamId,
+            String(f.job.createdAt),
+            segment,
+          ],
+          { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        await new Promise<void>((resolve, reject) => {
+          worker!.stdout!.once('data', () => resolve());
+          worker!.once('error', reject);
+          worker!.once('exit', (code) => {
+            if (code !== null) reject(new Error('Provider worker failed to start'));
+          });
         });
-      });
-      const proveLoss = jest.fn(async (owner: ScheduleProviderOwner) => (stopped ? owner : null));
-      const recovering = createSchedulesService({
-        ...f.dependencies,
-        confirmScheduleProviderOwnerLoss: proveLoss,
-      });
-      await redis.hset(`stream:{${f.job.streamId}}:job`, 'lastActiveAt', String(Date.now() - 5000));
-      await recovering.reconcileRetainedJobs();
-      expect((await f.store.getJob(f.job.streamId))?.providerDrained).toBe(false);
-      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
-        { status: 'started' },
-      );
-      const old = (await f.store.getJob(f.job.streamId))!;
-      const proof = {
-        streamId: old.streamId,
-        createdAt: old.createdAt,
-        providerExecutionId: segment,
-        scheduleId: f.schedule.id,
-        scheduledFor: old.scheduledFor!,
-        userId: f.owner,
-        tenantId: null,
-        lastActiveAt: old.lastActiveAt ?? old.createdAt,
-      };
-      const exited = once(worker, 'exit');
-      worker.kill('SIGKILL');
-      await exited;
-      stopped = true;
-      // Renewed liveness invalidates an earlier proof even at the same stream and epoch.
-      await redis.hset(
-        `stream:{${f.job.streamId}}:job`,
-        'lastActiveAt',
-        String(proof.lastActiveAt + 1),
-      );
-      await expect(f.store.recoverScheduleProviderOwnerLoss!(proof)).resolves.toBe(false);
-      await expect(
-        f.store.recoverScheduleProviderOwnerLoss!({ ...proof, userId: 'foreign' }),
-      ).resolves.toBe(false);
-      await recovering.reconcileRetainedJobs();
-      expect(proveLoss).toHaveBeenCalledWith(
-        expect.objectContaining({ providerExecutionId: segment, createdAt: f.job.createdAt }),
-      );
-      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
-        { status: 'error', mcp: error.outcomes },
-      );
-      expect(
-        (
-          await f.database
-            .model('ScheduleRun')
-            .findOne({ scheduleId: f.schedule.id })
-            .lean<IScheduleRun>()
-        )?.capacitySlot,
-      ).toBeUndefined();
-      expect(await f.store.getJob(f.job.streamId)).toBeNull();
-    } finally {
-      if (worker && !stopped) {
+        const proveLoss = jest.fn(async (owner: ScheduleProviderOwner) => (stopped ? owner : null));
+        const recovering = createSchedulesService({
+          ...f.dependencies,
+          confirmScheduleProviderOwnerLoss: proveLoss,
+        });
+        await redis.hset(
+          `stream:{${f.job.streamId}}:job`,
+          'lastActiveAt',
+          String(Date.now() - 5000),
+        );
+        await recovering.reconcileRetainedJobs();
+        expect((await f.store.getJob(f.job.streamId))?.providerDrained).toBe(false);
+        expect(
+          await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor),
+        ).toMatchObject({ status: 'started' });
+        const old = (await f.store.getJob(f.job.streamId))!;
+        const proof = {
+          streamId: old.streamId,
+          createdAt: old.createdAt,
+          providerExecutionId: segment,
+          scheduleId: f.schedule.id,
+          scheduledFor: old.scheduledFor!,
+          userId: f.owner,
+          tenantId: null,
+          lastActiveAt: old.lastActiveAt ?? old.createdAt,
+        };
         const exited = once(worker, 'exit');
         worker.kill('SIGKILL');
         await exited;
+        stopped = true;
+        // Renewed liveness invalidates an earlier proof even at the same stream and epoch.
+        await redis.hset(
+          `stream:{${f.job.streamId}}:job`,
+          'lastActiveAt',
+          String(proof.lastActiveAt + 1),
+        );
+        await expect(f.store.recoverScheduleProviderOwnerLoss!(proof)).resolves.toBe(false);
+        await expect(
+          f.store.recoverScheduleProviderOwnerLoss!({ ...proof, userId: 'foreign' }),
+        ).resolves.toBe(false);
+        await recovering.reconcileRetainedJobs();
+        expect(proveLoss).toHaveBeenCalledWith(
+          expect.objectContaining({ providerExecutionId: segment, createdAt: f.job.createdAt }),
+        );
+        expect(
+          await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor),
+        ).toMatchObject({ status: 'error', ...(mode === 'receipt' && { mcp: error.outcomes }) });
+        expect(
+          (
+            await f.database
+              .model('ScheduleRun')
+              .findOne({ scheduleId: f.schedule.id })
+              .lean<IScheduleRun>()
+          )?.capacitySlot,
+        ).toBeUndefined();
+        expect(await f.store.getJob(f.job.streamId)).toBeNull();
+      } finally {
+        if (worker && !stopped) {
+          const exited = once(worker, 'exit');
+          worker.kill('SIGKILL');
+          await exited;
+        }
+        await f.close();
+        await redis.quit();
       }
-      await f.close();
-      await redis.quit();
-    }
-  }, 30_000);
+    },
+    30_000,
+  );
 });
 
 it.each([401, 403] as const)(

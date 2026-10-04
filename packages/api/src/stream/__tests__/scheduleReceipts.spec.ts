@@ -245,6 +245,92 @@ redisDescribe('real Redis receipt retention', () => {
     }
   });
 
+  it('indexes initial retention at the actual CAS epoch and preserves its hash lifetime', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis, { runningTtl: 1 });
+    const stream = 'initial-schedule-retention';
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);
+    let epoch: number | undefined;
+    try {
+      const old = await store.createJob(stream, 'owner');
+      await store.deleteJob(stream, old.createdAt);
+      const job = await store.createJob(stream, 'owner', stream, undefined, {
+        scheduleId: 'scheduled',
+        scheduledFor: '2026-10-04T00:00:00Z',
+        preserveForScheduleReconcile: true,
+        providerExecutionId: 'initial-segment',
+      });
+      epoch = job.createdAt;
+      expect(epoch).toBeGreaterThan(old.createdAt);
+      expect(
+        await redis.sismember('stream:schedule_reconcile:v1', JSON.stringify([stream, epoch])),
+      ).toBe(1);
+      expect(
+        await redis.sismember(
+          'stream:schedule_reconcile:v1',
+          JSON.stringify([stream, old.createdAt]),
+        ),
+      ).toBe(0);
+      expect(await redis.ttl(`stream:{${stream}}:job`)).toBe(-1);
+      expect(
+        (await new RedisJobStore(redis).getScheduleReconcileJobs(100)).find(
+          (item) => item.streamId === stream,
+        ),
+      ).toMatchObject({
+        createdAt: epoch,
+        preserveForScheduleReconcile: true,
+        providerDrained: true,
+      });
+      await expect(
+        store.createJob(stream, 'owner', stream, undefined, { preserveForScheduleReconcile: true }),
+      ).rejects.toMatchObject({ name: 'JobPredecessorMismatchError' });
+      expect(await redis.smembers('stream:schedule_reconcile:v1')).toEqual([
+        JSON.stringify([stream, epoch]),
+      ]);
+    } finally {
+      clock.mockRestore();
+      await store.deleteJob(stream, epoch);
+      await redis.quit();
+    }
+  });
+
+  it('repairs initial-retention hints before stale cleanup removes running membership', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const store = new RedisJobStore(redis, { runningTtl: 1 });
+    const stream = 'stale-initial-schedule';
+    const job = await store.createJob(stream, 'owner', stream, undefined, {
+      scheduleId: 'scheduled',
+      scheduledFor: '2026-10-04T00:00:00Z',
+      preserveForScheduleReconcile: true,
+      providerExecutionId: 'initial-segment',
+    });
+    const member = JSON.stringify([stream, job.createdAt]);
+    try {
+      await store.beginProviderExecution(stream, job.createdAt, 'initial-segment');
+      await redis.srem('stream:schedule_reconcile:v1', member);
+      await redis.hset(`stream:{${stream}}:job`, 'lastActiveAt', String(Date.now() - 5000));
+      const index = jest.spyOn(redis, 'sadd').mockRejectedValueOnce(new Error('Index unavailable'));
+      await store.cleanup();
+      expect((await store.getJob(stream))?.status).toBe('running');
+      expect(await redis.sismember('stream:running', stream)).toBe(1);
+      index.mockRestore();
+      await store.cleanup();
+      expect((await store.getJob(stream))?.status).toBe('error');
+      expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(1);
+      expect(
+        (await new RedisJobStore(redis).getScheduleReconcileJobs(100)).find(
+          (item) => item.streamId === stream,
+        ),
+      ).toMatchObject({ createdAt: job.createdAt, providerDrained: false });
+    } finally {
+      jest.restoreAllMocks();
+      await store.deleteJob(stream, job.createdAt);
+      await redis.quit();
+    }
+  });
+
   it('recovers stale owner evidence and indexes post-settlement release across store restarts', async () => {
     const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
     await redis.connect();

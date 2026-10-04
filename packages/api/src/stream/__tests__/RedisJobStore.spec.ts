@@ -1373,3 +1373,47 @@ it('does not treat a stale cleanup hint as a successor obligation or a failed re
     'Unavailable',
   );
 });
+
+it('confirms initial retention in Cluster membership before returning a created generation', async () => {
+  const create = jest
+    .fn()
+    .mockImplementation((...args: unknown[]) => ['', '', args[Number(args[1]) + 3]]);
+  const redis = {
+    isCluster: true,
+    eval: create,
+    hgetall: jest.fn(() => jobHashFromCreationCall(create.mock.calls[0])),
+    sadd: jest.fn().mockResolvedValue(1),
+    srem: jest.fn().mockResolvedValue(1),
+  } as unknown as Cluster;
+  const store = new RedisJobStore(redis);
+  const job = await store.createJob('initial-cluster', 'owner', 'initial-cluster', undefined, {
+    preserveForScheduleReconcile: true,
+  });
+  expect(redis.sadd).toHaveBeenCalledWith(
+    'stream:schedule_reconcile:v1',
+    JSON.stringify([job.streamId, job.createdAt]),
+  );
+  expect(create.mock.calls[0][0]).toContain('expireScheduleJob(KEYS[1], ttl)');
+});
+
+it('withholds a newly retained provider when its recovery index cannot be confirmed', async () => {
+  const create = jest
+    .fn()
+    .mockImplementation((...args: unknown[]) => ['', '', args[Number(args[1]) + 3]]);
+  const redis = {
+    isCluster: true,
+    eval: create,
+    hgetall: jest.fn(() => jobHashFromCreationCall(create.mock.calls[0])),
+    sadd: jest.fn(async (key: string) => {
+      if (key === 'stream:schedule_reconcile:v1') throw new Error('Index unavailable');
+      return 1;
+    }),
+    srem: jest.fn().mockResolvedValue(1),
+  } as unknown as Cluster;
+  const store = new RedisJobStore(redis);
+  await expect(
+    store.createJob('unexposed-retention', 'owner', undefined, undefined, {
+      preserveForScheduleReconcile: true,
+    }),
+  ).rejects.toThrow('Created job membership could not be verified');
+});
