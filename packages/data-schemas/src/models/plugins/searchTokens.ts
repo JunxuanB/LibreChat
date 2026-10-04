@@ -1,10 +1,10 @@
 import type { Schema, Query } from 'mongoose';
 import type { SearchTokenField } from '~/utils/search';
-import { computeSearchTokens, withSearchTokens } from '~/utils/search';
+import { withSearchTokens, searchTokenIndexes, computeSearchTokens } from '~/utils/search';
 
 /**
  * Adds the derived search-token arrays of `fields` to `schema`, indexes each
- * with `tenantId`, and keeps them in sync on `save`, `insertMany` and the
+ * with `tenantId` in both key orders (see `searchTokenIndexes`), and keeps them in sync on `save`, `insertMany` and the
  * update queries. `bulkWrite` runs no middleware: callers that change a source
  * field through it must apply `withSearchTokens` themselves.
  *
@@ -13,9 +13,9 @@ import { computeSearchTokens, withSearchTokens } from '~/utils/search';
 export function applySearchTokens(schema: Schema, fields: readonly SearchTokenField[]): void {
   for (const field of fields) {
     schema.add({ [field.tokens]: { type: [String], default: undefined, select: false } });
-    /* Token first: the search is the only seek, and `tenantId` after it serves
-       both tenant-scoped queries and single-tenant deployments that send none. */
-    schema.index({ [field.tokens]: 1, tenantId: 1 });
+    for (const index of searchTokenIndexes(field)) {
+      schema.index(index);
+    }
   }
 
   schema.pre('save', function () {

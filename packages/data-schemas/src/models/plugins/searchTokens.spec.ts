@@ -266,10 +266,38 @@ describe('search query plan', () => {
   it('uses index scans under a tenant scope', async () => {
     const filter = buildUserSearchFilter('john')!;
     const explain = (await tenantStorage.run({ tenantId: 'tenant-a' }, () =>
-      User.find(filter).limit(10).explain('queryPlanner'),
+      User.find(filter).limit(10).explain('queryPlanner').exec(),
     )) as unknown as { queryPlanner: { winningPlan: unknown } };
     const stages = planStages(explain.queryPlanner.winningPlan);
     expect(stages).toContain('IXSCAN');
     expect(stages).not.toContain('COLLSCAN');
+  });
+
+  it('seeks only the scoped tenant keys when every tenant shares the prefix', async () => {
+    /** The scoped tenant is large with two matches; every other tenant is all matches,
+     *  so neither a tenant-only nor a token-first seek can stay small. */
+    const doc = (name: string, i: number, tenant: string) => ({
+      name: `${name} ${i}`,
+      email: `${name.toLowerCase()}${i}@${tenant}.io`,
+      tenantId: tenant,
+      nameTokens: [name.toLowerCase(), String(i)],
+      emailTokens: [
+        `${name.toLowerCase()}${i}@${tenant}.io`,
+        `${name.toLowerCase()}${i}`,
+        tenant,
+        'io',
+      ],
+      usernameTokens: [],
+    });
+    await User.collection.insertMany([
+      ...Array.from({ length: 300 }, (_, i) => doc(i < 2 ? 'Johnny' : 'Anna', i, 'tenant-3')),
+      ...Array.from({ length: 300 }, (_, i) => doc('Johnny', i, `tenant-${10 + (i % 10)}`)),
+    ]);
+    const filter = buildUserSearchFilter('johnny')!;
+    const explain = (await tenantStorage.run({ tenantId: 'tenant-3' }, () =>
+      User.find(filter).explain('executionStats').exec(),
+    )) as unknown as { executionStats: { nReturned: number; totalKeysExamined: number } };
+    expect(explain.executionStats.nReturned).toBe(2);
+    expect(explain.executionStats.totalKeysExamined).toBeLessThanOrEqual(10);
   });
 });

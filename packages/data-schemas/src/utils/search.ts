@@ -106,6 +106,19 @@ export function computeSearchTokenSet(
 
 type UpdateDoc = Record<string, unknown>;
 
+/**
+ * The indexes behind each token field. Tenant first serves tenant-scoped
+ * searches with an equality seek before the prefix range; token first serves
+ * unscoped ones (single-tenant deployments run without a tenant context), which
+ * could not use the tenant-first index at all.
+ */
+export function searchTokenIndexes(field: SearchTokenField): Array<Record<string, 1>> {
+  return [
+    { tenantId: 1, [field.tokens]: 1 },
+    { [field.tokens]: 1, tenantId: 1 },
+  ];
+}
+
 /** Mongoose drops `undefined` assignments from an update, so they write nothing. */
 function writes(doc: UpdateDoc | undefined, key: string): doc is UpdateDoc {
   return doc != null && key in doc && doc[key] !== undefined;
@@ -178,7 +191,7 @@ export function withSearchTokens<T>(
       write('$set', field.tokens, computeSearchTokens(field.kind, set[field.source]));
     } else if (writes(source, field.source)) {
       write(null, field.tokens, computeSearchTokens(field.kind, source[field.source]));
-    } else if (unset && field.source in unset) {
+    } else if (writes(unset, field.source)) {
       write('$set', field.tokens, []);
     } else {
       written = false;

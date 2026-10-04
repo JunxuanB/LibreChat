@@ -114,6 +114,11 @@ describe('withSearchTokens', () => {
     expect(withSearchTokens(USER_SEARCH_TOKEN_FIELDS, update)).toBe(update);
   });
 
+  it('ignores an undefined $unset, which Mongoose also drops', () => {
+    const update = { $unset: { name: undefined } };
+    expect(withSearchTokens(USER_SEARCH_TOKEN_FIELDS, update)).toBe(update);
+  });
+
   it('initializes every unwritten token field on upsert inserts', () => {
     expect(
       withSearchTokens(USER_SEARCH_TOKEN_FIELDS, { $set: { name: 'Al' } }, { upsert: true }),

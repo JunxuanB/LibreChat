@@ -2,6 +2,7 @@ import type { AnyBulkWriteOperation, Document } from 'mongodb';
 import type { Connection } from 'mongoose';
 import type { SearchTokenField } from '~/utils/search';
 import {
+  searchTokenIndexes,
   computeSearchTokenSet,
   USER_SEARCH_TOKEN_FIELDS,
   GROUP_SEARCH_TOKEN_FIELDS,
@@ -62,13 +63,15 @@ export async function backfillSearchTokens(
     const collection = connection.db!.collection(name);
     if (!options.dryRun) {
       /** Deployments running with `MONGO_AUTO_INDEX` off never build schema indexes, and
-       *  without these the token filters would scan the collection. Same spec and default
-       *  name as the schema declaration, so this is a no-op where Mongoose already built it. */
+       *  without these the token filters would scan the collection. Same specs and default
+       *  names as the schema declaration, so this is a no-op where Mongoose already built them. */
       for (const field of fields) {
-        await buildIndexWithRetry(
-          () => collection.createIndex({ [field.tokens]: 1, tenantId: 1 }),
-          `createIndex(${name}.${field.tokens})`,
-        );
+        for (const index of searchTokenIndexes(field)) {
+          await buildIndexWithRetry(
+            () => collection.createIndex(index),
+            `createIndex(${name}.${Object.keys(index).join('_')})`,
+          );
+        }
       }
     }
     result.pending[name] = 0;

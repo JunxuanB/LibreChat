@@ -115,10 +115,18 @@ describe('backfillSearchTokens', () => {
         'nameTokens_1_tenantId_1',
         'emailTokens_1_tenantId_1',
         'usernameTokens_1_tenantId_1',
+        'tenantId_1_nameTokens_1',
+        'tenantId_1_emailTokens_1',
+        'tenantId_1_usernameTokens_1',
       ]),
     );
     expect(groupIndexes).toEqual(
-      expect.arrayContaining(['nameTokens_1_tenantId_1', 'emailTokens_1_tenantId_1']),
+      expect.arrayContaining([
+        'nameTokens_1_tenantId_1',
+        'emailTokens_1_tenantId_1',
+        'tenantId_1_nameTokens_1',
+        'tenantId_1_emailTokens_1',
+      ]),
     );
   });
 
