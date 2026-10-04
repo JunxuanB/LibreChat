@@ -15,7 +15,20 @@ jest.mock('../AgentList', () => ({
     mockSelect = onSelect;
     return null;
   },
-  AgentRow: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  AgentRow: ({
+    children,
+    onRemove,
+    removeLabel,
+  }: {
+    children: ReactNode;
+    onRemove: () => void;
+    removeLabel: string;
+  }) => (
+    <div>
+      {children}
+      <button type="button" onClick={onRemove} aria-label={removeLabel} />
+    </div>
+  ),
   AgentSelectInline: () => null,
   agentIcon: () => null,
   useSelectableAgents: () => ({ options: [], getAgent: () => undefined }),
@@ -51,4 +64,14 @@ test('commits a handoff before immediate submission without touching non-handoff
   await waitFor(() =>
     expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ edges }), expect.anything()),
   );
+});
+
+test('shows and removes implicit handoffs while retaining implicit fan-out direct edges', () => {
+  const implicit: GraphEdge = { from: 'parent', to: 'child', prompt: 'Keep this' };
+  const fanout: GraphEdge = { from: 'parent', to: ['left', 'right'] };
+  render(<Harness edges={[fanout, implicit]} />);
+  expect(screen.getAllByRole('button', { name: 'com_ui_agent_handoff_remove' })).toHaveLength(1);
+  expect(mockGetValues('edges')).toEqual([fanout, implicit]);
+  fireEvent.click(screen.getByRole('button', { name: 'com_ui_agent_handoff_remove' }));
+  expect(mockGetValues('edges')).toEqual([fanout]);
 });

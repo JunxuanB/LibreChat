@@ -1,8 +1,8 @@
 import type { AgentSubagentsConfig, GraphEdge } from 'librechat-data-provider';
 import type { FormSelection } from '../selectors';
 import type { AgentItem } from '../types';
+import { isHandoffEdge, removeOrchestration } from '../orchestration';
 import { hasConfigurableSettings } from '../configurable';
-import { removeOrchestration } from '../orchestration';
 import { deriveSelectedItems } from '../selectors';
 import { computeToggleAction } from '../mutations';
 
@@ -78,4 +78,20 @@ test('removal explicitly disables subagents and preserves their settings and unr
   });
   expect(subagents.enabled).toBe(true);
   expect(removeOrchestration(undefined, [handoff])).toEqual({ subagents: undefined, edges: [] });
+});
+
+test.each<[GraphEdge, boolean]>([
+  [{ from: 'parent', to: 'child' }, true],
+  [{ from: ['parent'], to: ['child'] }, true],
+  [{ from: ['left', 'right'], to: 'child' }, true],
+  [{ from: 'parent', to: ['left', 'right'] }, false],
+  [{ from: 'parent', to: ['left', 'right'], condition: () => true }, true],
+  [{ from: 'parent', to: ['left', 'right'], edgeType: 'handoff' }, true],
+  [{ from: 'parent', to: 'child', edgeType: 'direct' }, false],
+])('matches runtime classification for %j', (edge, expected) => {
+  expect(isHandoffEdge(edge)).toBe(expected);
+  expect(deriveSelectedItems({ ...form, edges: [edge] }, [item], [])).toEqual(
+    expected ? [item] : [],
+  );
+  expect(removeOrchestration(undefined, [edge]).edges).toEqual(expected ? [] : [edge]);
 });

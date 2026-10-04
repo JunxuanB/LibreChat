@@ -11,6 +11,7 @@ import {
   AgentSelectInline,
   useSelectableAgents,
 } from './AgentList';
+import { isHandoffEdge } from '../Tools/items/orchestration';
 import OrchestrationPattern from './OrchestrationPattern';
 import { useLocalize } from '~/hooks';
 import { CountPill } from './ui';
@@ -32,12 +33,9 @@ const getTargetAgentId = (to: string | string[]): string => (Array.isArray(to) ?
 const AgentHandoffs: React.FC<AgentHandoffsProps> = ({ field, currentAgentId }) => {
   const localize = useLocalize();
   const [expandedIndices, setExpandedIndices] = useState<Set<number>>(new Set());
-  const edges = useMemo(
-    () => (field.value ?? []).filter((edge) => edge.edgeType === 'handoff'),
-    [field.value],
-  );
+  const edges = useMemo(() => (field.value ?? []).filter(isHandoffEdge), [field.value]);
   const setEdges = (next: GraphEdge[]) => {
-    field.onChange([...(field.value ?? []).filter((edge) => edge.edgeType !== 'handoff'), ...next]);
+    field.onChange([...(field.value ?? []).filter((edge) => !isHandoffEdge(edge)), ...next]);
   };
 
   const { options, getAgent } = useSelectableAgents({ currentAgentId });
