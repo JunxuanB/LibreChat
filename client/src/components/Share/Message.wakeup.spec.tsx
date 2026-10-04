@@ -1,0 +1,163 @@
+import { Provider } from 'jotai';
+import { RecoilRoot } from 'recoil';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ContentTypes, dataService, EModelEndpoint } from 'librechat-data-provider';
+import type { TMessage } from 'librechat-data-provider';
+import { ShareMessagesProvider } from './ShareMessagesProvider';
+import { ShareContext } from '~/Providers/ShareContext';
+import MessagesView from './MessagesView';
+
+jest.mock('librechat-data-provider', () => {
+  const actual = jest.requireActual('librechat-data-provider');
+  return {
+    ...actual,
+    dataService: { ...actual.dataService, getAIEndpoints: jest.fn().mockResolvedValue({}) },
+  };
+});
+
+jest.mock('~/hooks', () => ({
+  useLocalize: () => (key: string) => key,
+  useAttachments: () => ({ attachments: [], searchResults: [] }),
+  useExpandCollapse: jest.requireActual('~/hooks/Messages/useExpandCollapse').default,
+  useLazyCollapseBody: jest.requireActual('~/hooks/Messages/useLazyCollapseBody').default,
+}));
+jest.mock('~/hooks/MCP', () => ({
+  useMCPIconMap: () => new Map(),
+  useMCPServerNames: () => [],
+}));
+jest.mock('~/components/Chat/Messages/MinimalHoverButtons', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('~/components/Chat/Messages/Content/SearchContent', () => ({
+  __esModule: true,
+  default: ({ message }: { message: TMessage }) => <div>{message.text}</div>,
+  rendersMarkdownLite: () => false,
+}));
+jest.mock('~/components/Chat/Messages/Content/MessageContent', () => ({
+  __esModule: true,
+  default: ({ text }: { text: string }) => <div>{text}</div>,
+}));
+jest.mock('~/components/Chat/Messages/Content/MarkdownLite', () => ({
+  __esModule: true,
+  default: ({ content }: { content: string }) => <div>{content}</div>,
+}));
+jest.mock('~/components/Chat/Messages/Content/ToolOutput', () => ({
+  StackedToolIcons: () => null,
+  ToolIcon: () => null,
+  getToolIconType: () => '',
+  getMCPServerName: () => '',
+  OutputRenderer: ({ text }: { text: string }) => <div>{text}</div>,
+}));
+
+const prompt = (status = 'completed', subagentType = 'self') =>
+  `A detached subagent task has ${status}. Continue the parent task using its durable result below.\n${JSON.stringify(
+    {
+      background_task_id: 'task',
+      subagent_thread_id: 'thread',
+      subagent_type: subagentType,
+      status,
+      result: 'Shared durable result.',
+    },
+  )}`;
+
+function renderShared(text: string, content = false) {
+  const wake: TMessage = {
+    messageId: 'wake',
+    parentMessageId: null,
+    conversationId: 'original',
+    isCreatedByUser: true,
+    text,
+    ...(content ? { content: [{ type: ContentTypes.TEXT, text }] } : {}),
+  };
+  const reply: TMessage = {
+    messageId: 'reply',
+    parentMessageId: 'wake',
+    conversationId: 'original',
+    isCreatedByUser: false,
+    text: 'Parent continuation.',
+    sender: 'Historical Parent',
+    endpoint: EModelEndpoint.agents,
+    model: 'agent_deleted',
+    iconURL: '/historical.png',
+  };
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <Provider>
+        <RecoilRoot>
+          <ShareContext.Provider value={{ isSharedConvo: true, shareId: 'share' }}>
+            <ShareMessagesProvider messages={[wake, reply]}>
+              <MessagesView messagesTree={[wake]} conversationId="shared-view" />
+            </ShareMessagesProvider>
+          </ShareContext.Provider>
+        </RecoilRoot>
+      </Provider>
+    </QueryClientProvider>,
+  );
+  return queryClient;
+}
+
+beforeEach(() => jest.mocked(dataService.getAIEndpoints).mockClear());
+
+it.each([false, true])(
+  'renders the actual public self wake-up author and task card (content: %s)',
+  (content) => {
+    const text = prompt();
+    const queryClient = renderShared(text, content);
+    expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { hidden: true })).toHaveAttribute('src', '/historical.png');
+    expect(screen.getByTestId('message-body')).toHaveClass('border', 'border-border-medium');
+    expect(screen.queryByText(text)).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'com_ui_wakeup_subagent_completed' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Shared durable result.')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'com_ui_wakeup_view_activity' }),
+    ).not.toBeInTheDocument();
+    expect(dataService.getAIEndpoints).not.toHaveBeenCalled();
+    expect(queryClient.isFetching()).toBe(0);
+  },
+);
+
+it.each(['error', 'cancelled'])('renders a public subagent %s outcome', (status) => {
+  renderShared(prompt(status, 'reviewer'));
+  expect(screen.getByRole('heading', { name: 'reviewer' })).toBeInTheDocument();
+  expect(
+    screen.getByRole('button', {
+      name:
+        status === 'error' ? 'com_ui_wakeup_subagent_errored' : 'com_ui_wakeup_subagent_cancelled',
+    }),
+  ).toBeInTheDocument();
+});
+
+it('renders background-tool wake-ups as system task cards', () => {
+  const text = `A background tool task has finished. Continue using its durable result below.\n${JSON.stringify(
+    [
+      {
+        background_task_id: 'task',
+        tool_call_id: 'call',
+        tool: 'bash',
+        status: 'completed',
+        result: 'Tool result.',
+      },
+    ],
+  )}`;
+  renderShared(text);
+  expect(screen.getByRole('heading', { name: 'com_ui_system_event' })).toBeInTheDocument();
+  expect(screen.queryByText(text)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'com_ui_wakeup_task_finished' }));
+  expect(screen.getByText('Tool result.')).toBeInTheDocument();
+});
+
+it.each([false, true])('keeps an ordinary public user message (content: %s)', (content) => {
+  renderShared('Ordinary shared prompt.', content);
+  expect(screen.getByText('Ordinary shared prompt.')).toBeInTheDocument();
+  expect(screen.queryByTestId('wakeup-panel')).not.toBeInTheDocument();
+  expect(
+    screen.getByRole('heading', { name: 'com_ui_prompt: com_ui_user', hidden: true }),
+  ).toHaveClass('sr-only');
+});
