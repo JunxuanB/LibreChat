@@ -25,6 +25,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { ClientCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import type { TMCPAppOperationLimits } from 'librechat-data-provider';
 import type { MCPClientCapabilityProfile } from './capabilities';
+import type { MCPRequestScopeRunner } from './signal';
 import type { MCPOAuthTokens } from './oauth/types';
 import type * as t from './types';
 import {
@@ -40,6 +41,7 @@ import {
   getMCPDispatchSignal,
   holdMCPRequestFailure,
   outsideMCPRequestScope,
+  captureMCPRequestScope,
 } from './signal';
 import {
   createMCPAppSSEEventGuard,
@@ -1127,6 +1129,7 @@ export class MCPConnection extends EventEmitter {
   private readonly requestAuthorizationController?: AbortController;
   private readonly requestAuthorization: { error?: unknown; closed: boolean } = { closed: false };
   private readonly pendingRequests = new Set<Promise<unknown>>();
+  private readonly sdkRequestScopes = new Map<string | number, MCPRequestScopeRunner>();
   private oauthRequired = false;
   private oauthRecovery = false;
   private readonly useSSRFProtection: boolean;
@@ -2494,18 +2497,35 @@ export class MCPConnection extends EventEmitter {
         this.lastPingTime = Date.now();
       }
       const method = 'method' in msg ? msg.method : undefined;
+      const id = 'id' in msg ? msg.id : undefined;
+      if (
+        this.resolveRequestHeaders &&
+        method &&
+        (typeof id === 'string' || typeof id === 'number')
+      ) {
+        const scope: MCPRequestScopeRunner | undefined = captureMCPRequestScope(() => {
+          if (this.sdkRequestScopes.get(id) === scope) this.sdkRequestScopes.delete(id);
+        });
+        if (scope) this.sdkRequestScopes.set(id, scope);
+      }
+      if ('method' in msg && msg.method === 'notifications/cancelled' && msg.params) {
+        const cancelledId = msg.params.requestId;
+        if (typeof cancelledId === 'string' || typeof cancelledId === 'number') {
+          const scope = this.sdkRequestScopes.get(cancelledId);
+          if (scope) return scope(() => originalSend(msg));
+        }
+      }
       if (method === 'tools/call') {
         await assertToolApprovalTransportEpoch(
           this.serverName,
           this.oauthTokens?.credential_set_id ?? null,
         );
       }
-      const id = 'id' in msg ? (msg as { id: string | number | null }).id : undefined;
       logger.debug(
         `${this.getLogPrefix()} Transport sending: method=${method ?? 'response'} id=${id ?? 'none'}`,
       );
-      // Protocol cancellation and autonomous initialized/SSE work have no caller admission.
-      return 'method' in msg && !('id' in msg)
+      // Only initialization opens an autonomous stream; cancellation retains its caller cutoff.
+      return method === 'notifications/initialized'
         ? outsideMCPRequestScope(() => originalSend(msg))
         : originalSend(msg);
     };

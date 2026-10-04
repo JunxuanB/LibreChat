@@ -86,6 +86,8 @@ export interface OAuthTestServerOptions {
   echoHandler?: (message: string) => string | Promise<string>;
   /** Observes MCP resource requests, including unauthenticated and cancellation POSTs. */
   onResourceRequest?: (request: http.IncomingMessage) => void;
+  /** Observes parsed resource RPC methods without consuming the SDK's request body. */
+  onRPCRequest?: (method: string) => void;
 }
 
 export interface OAuthTokenRequestRecord {
@@ -525,7 +527,13 @@ export async function createOAuthMCPServer(
       notifyToolsChanged.add(() => mcp.server.sendToolListChanged());
     }
 
-    await transport.handleRequest(req, res);
+    const body: unknown =
+      options.onRPCRequest && req.method === 'POST'
+        ? JSON.parse(await readRequestBody(req))
+        : undefined;
+    if (body && typeof body === 'object' && 'method' in body && typeof body.method === 'string')
+      options.onRPCRequest?.(body.method);
+    await transport.handleRequest(req, res, body);
 
     if (transport.sessionId && !sessions.has(transport.sessionId)) {
       sessions.set(transport.sessionId, transport);

@@ -334,7 +334,6 @@ export class MCPConnectionFactory {
       serverName: basic.serverName,
       config: (basic.serverDefinition ?? basic.serverConfig) as t.ParsedServerConfig,
       context: options?.requestScopedConnections,
-      signal: options?.signal,
     });
     const scheduledConfig = await resolveScheduledMCPBearerConfig({
       user: options?.user,

@@ -1616,129 +1616,220 @@ it.each(['authority denial', 'HTTP rejection'] as const)(
   30_000,
 );
 
-it('carries a reused connection caller cancellation through the actual SDK send handoff', async () => {
-  const f = await fixture();
-  const executed: string[] = [];
-  const server = await createOAuthMCPServer({
-    echoHandler: async (message) => {
-      executed.push(message);
-      return message;
-    },
-  });
-  const context = createMCPRequestContext();
-  const manager = new MCPManager();
-  const user = { id: f.owner, role: 'USER' } as IUser;
-  const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
-    ci: true,
-    ttl: 30_000,
-  });
-  let stall = false,
-    held = false;
-  let release!: () => void, entered!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const started = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  const record = jest.fn(async () => true);
-  const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
-    isAppServerConfig: async () => false,
-    resolveAllowlists: async () => ({
-      allowedDomains: ['127.0.0.1'],
-      allowedAddresses: [`127.0.0.1:${server.port}`],
-      useSSRFProtection: false,
-    }),
-  } as unknown as MCPServersRegistry);
-  let cancelled: Promise<unknown> | undefined, sibling: Promise<unknown> | undefined;
-  try {
-    attachScheduledMCPBearer(
-      context,
-      f.identity,
-      {
-        bind: (identity) => ({
-          identity,
-          reject: () => {},
-          resolve: async (payload) => {
-            if (stall && !payload.selection && !held) {
-              held = true;
-              entered();
-              await gate;
-            }
-            return { ...payload.config, headers: { Authorization: 'Bearer sdk-caller-only' } };
-          },
-        }),
-      },
-      'invoke',
-      undefined,
-      { onFailure: record },
-    );
-    server.issuedTokens.add('sdk-caller-only');
-    server.tokenIssueTimes.set('sdk-caller-only', Date.now());
-    const definition: ParsedServerConfig = {
-      type: 'streamable-http',
-      url: server.url,
-      requiresOAuth: false,
-      source: 'yaml',
-      headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
-    };
-    const connection = await manager.getConnection({
-      user,
-      serverName: 'Files',
-      serverConfig: definition,
-      flowManager,
-      requestScopedConnections: context,
-    });
-    await connection.fetchToolsSnapshot();
+it.each(['reused caller', 'creating caller', 'SDK deadline'] as const)(
+  'isolates %s cutoff through the actual SDK send handoff',
+  async (mode) => {
+    const f = await fixture();
+    const executed: string[] = [];
+    const dispatched: string[] = [];
     const controller = new AbortController();
-    const call = (message: string, signal?: AbortSignal) =>
-      manager.callTool({
+    const server = await createOAuthMCPServer({
+      onRPCRequest: (method) => dispatched.push(method),
+      echoHandler: async (message) => {
+        executed.push(message);
+        return message;
+      },
+    });
+    const context = createMCPRequestContext();
+    const manager = new MCPManager();
+    const user = { id: f.owner, role: 'USER' } as IUser;
+    const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
+      ci: true,
+      ttl: 30_000,
+    });
+    let stall = false,
+      held = false;
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const record = jest.fn(async () => true);
+    const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+      isAppServerConfig: async () => false,
+      resolveAllowlists: async () => ({
+        allowedDomains: ['127.0.0.1'],
+        allowedAddresses: [`127.0.0.1:${server.port}`],
+        useSSRFProtection: false,
+      }),
+    } as unknown as MCPServersRegistry);
+    let cancelled: Promise<unknown> | undefined, sibling: Promise<unknown> | undefined;
+    try {
+      attachScheduledMCPBearer(
+        context,
+        f.identity,
+        {
+          bind: (identity) => ({
+            identity,
+            reject: () => {},
+            resolve: async (payload) => {
+              if (stall && !payload.selection && !held) {
+                held = true;
+                entered();
+                await gate;
+              }
+              return { ...payload.config, headers: { Authorization: 'Bearer sdk-caller-only' } };
+            },
+          }),
+        },
+        'invoke',
+        undefined,
+        { onFailure: record },
+      );
+      server.issuedTokens.add('sdk-caller-only');
+      server.tokenIssueTimes.set('sdk-caller-only', Date.now());
+      const definition: ParsedServerConfig = {
+        type: 'streamable-http',
+        url: server.url,
+        requiresOAuth: false,
+        source: 'yaml',
+        headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+      };
+      const connection = await manager.getConnection({
         user,
         serverName: 'Files',
         serverConfig: definition,
-        provider: 'openai',
         flowManager,
-        toolName: 'echo',
-        toolArguments: { message },
         requestScopedConnections: context,
-        scheduledBearerInvocation: bindScheduledMCPBearerInvocation(context, 'root', 'echo'),
-        options: { signal, timeout: 2000 },
+        signal: mode === 'creating caller' ? controller.signal : undefined,
       });
-    const transport = Reflect.get(connection, 'transport');
-    const send = transport.send.bind(transport);
-    jest.spyOn(transport, 'send').mockImplementation((...args: unknown[]) => {
-      const message = args[0] as { method?: string; params?: { arguments?: { message?: string } } };
-      if (
-        message.method === 'tools/call' &&
-        message.params?.arguments?.message === 'cancelled-caller'
-      )
-        stall = true;
-      return send(...args);
-    });
-    cancelled = call('cancelled-caller', controller.signal).catch((error) => error);
-    await started;
-    sibling = call('sibling-caller');
-    controller.abort();
-    const cancelledError = await cancelled;
-    expect(Reflect.get(cancelledError as object, 'code')).toBe(-32001);
-    release();
-    await sibling;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executed).toEqual(['sibling-caller']);
-    expect(record).not.toHaveBeenCalled();
-    expect(context.cleanupStarted).toBe(false);
-    expect(context.connections.size).toBe(1);
-    expect(Reflect.get(connection, 'shouldStopReconnecting')).toBe(false);
-    await call('later-caller');
-    expect(executed).toEqual(['sibling-caller', 'later-caller']);
-  } finally {
-    release();
-    await cancelled;
-    await sibling?.catch(() => undefined);
-    await cleanupMCPRequestContext(context);
-    registry.mockRestore();
-    MCPConnection.clearCooldown('Files');
-    await server.close();
-    await f.close();
-  }
-}, 30_000);
+      await connection.fetchToolsSnapshot();
+      const call = (message: string, signal?: AbortSignal) =>
+        manager.callTool({
+          user,
+          serverName: 'Files',
+          serverConfig: definition,
+          provider: 'openai',
+          flowManager,
+          toolName: 'echo',
+          toolArguments: { message },
+          requestScopedConnections: context,
+          scheduledBearerInvocation: bindScheduledMCPBearerInvocation(context, 'root', 'echo'),
+          options: {
+            signal,
+            timeout: mode === 'SDK deadline' && message === 'cancelled-caller' ? 40 : 2000,
+          },
+        });
+      const transport = Reflect.get(connection, 'transport');
+      const send = transport.send.bind(transport);
+      jest.spyOn(transport, 'send').mockImplementation((...args: unknown[]) => {
+        const message = args[0] as {
+          method?: string;
+          params?: { arguments?: { message?: string } };
+        };
+        if (
+          message.method === 'tools/call' &&
+          message.params?.arguments?.message === 'cancelled-caller'
+        )
+          stall = true;
+        return send(...args);
+      });
+      cancelled = call('cancelled-caller', controller.signal).catch((error) => error);
+      await started;
+      sibling = call('sibling-caller');
+      if (mode !== 'SDK deadline') controller.abort();
+      const cancelledError = await cancelled;
+      expect(Reflect.get(cancelledError as object, 'code')).toBe(-32001);
+      release();
+      await sibling;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(executed).toEqual(['sibling-caller']);
+      expect(record).not.toHaveBeenCalled();
+      expect(context.cleanupStarted).toBe(false);
+      expect(context.connections.size).toBe(1);
+      expect(Reflect.get(connection, 'shouldStopReconnecting')).toBe(false);
+      await call('later-caller');
+      expect(executed).toEqual(['sibling-caller', 'later-caller']);
+      expect(dispatched).not.toContain('notifications/cancelled');
+    } finally {
+      release();
+      await cancelled;
+      await sibling?.catch(() => undefined);
+      await cleanupMCPRequestContext(context);
+      registry.mockRestore();
+      MCPConnection.clearCooldown('Files');
+      await server.close();
+      await f.close();
+    }
+  },
+  30_000,
+);
+
+redisDescribe('retained creation recovery across worker loss', () => {
+  it('repairs a retained creation from its durable Mongo run after the creator exits before indexing', async () => {
+    const redis = new Redis({ path: process.env.B2_REDIS_SOCKET!, lazyConnect: true });
+    await redis.connect();
+    const f = await fixture(new RedisJobStore(redis, { runningTtl: 1 }), true);
+    let worker: ReturnType<typeof spawn> | undefined;
+    try {
+      await f.store.deleteJob(f.job.streamId, f.job.createdAt);
+      const metadata = {
+        preserveForScheduleReconcile: true,
+        providerExecutionId: 'unexposed-provider',
+        scheduleId: f.schedule.id,
+        scheduledFor: f.scheduledFor.toISOString(),
+        agent_id: 'root',
+      };
+      worker = spawn(
+        process.execPath,
+        [
+          '-e',
+          `const Redis=require('ioredis');const {RedisJobStore}=require('./dist/index.cjs');
+        const redis=new Redis({path:process.argv[1]});const store=new RedisJobStore(redis,{runningTtl:1});
+        store.reconcileJobMembership=async()=>{process.stdout.write('committed\\n');await new Promise(()=>{});};
+        store.createJob(process.argv[2],process.argv[3],process.argv[2],undefined,JSON.parse(process.argv[4])).catch(()=>process.exit(2));
+        setInterval(()=>{},1000);`,
+          process.env.B2_REDIS_SOCKET!,
+          f.job.streamId,
+          f.owner,
+          JSON.stringify(metadata),
+        ],
+        { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      await new Promise<void>((resolve, reject) => {
+        worker!.stdout!.once('data', () => resolve());
+        worker!.once('error', reject);
+        worker!.once('exit', () => reject(new Error('Creator failed before commit')));
+      });
+      const hash = await redis.hgetall(`stream:{${f.job.streamId}}:job`);
+      expect(hash).toMatchObject({ status: 'running', preserveForScheduleReconcile: '1' });
+      const member = JSON.stringify([f.job.streamId, Number(hash.createdAt)]);
+      expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(0);
+      const exited = once(worker, 'exit');
+      worker.kill('SIGKILL');
+      await exited;
+      // The owning Mongo occurrence names this exact conversation before generation creation.
+      expect(
+        await f.database.models.ScheduleRun.findOne({
+          scheduleId: f.schedule.id,
+          scheduledFor: f.scheduledFor,
+        }).lean(),
+      ).toMatchObject({ status: 'started', conversationId: f.job.streamId });
+      const restarted = new RedisJobStore(redis, { runningTtl: 1 });
+      expect(await restarted.getJob(f.job.streamId)).toMatchObject({
+        createdAt: Number(hash.createdAt),
+        preserveForScheduleReconcile: true,
+      });
+      expect(await redis.sismember('stream:schedule_reconcile:v1', member)).toBe(1);
+      expect(await redis.hget(`stream:{${f.job.streamId}}:job`, '__scheduleMembershipEpoch')).toBe(
+        hash.createdAt,
+      );
+      await redis.hset(`stream:{${f.job.streamId}}:job`, 'lastActiveAt', String(Date.now() - 5000));
+      await f.service.reconcileRetainedJobs();
+      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
+        { status: 'error' },
+      );
+      expect(await f.store.getJob(f.job.streamId)).toBeNull();
+    } finally {
+      if (worker && worker.exitCode == null && worker.signalCode == null) {
+        const exited = once(worker, 'exit');
+        worker.kill('SIGKILL');
+        await exited;
+      }
+      await f.close();
+      await redis.quit();
+    }
+  }, 30_000);
+});

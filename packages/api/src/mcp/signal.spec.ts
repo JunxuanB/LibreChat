@@ -2,6 +2,7 @@ import {
   withMCPRequestSignal,
   holdMCPRequestFailure,
   getMCPDispatchSignal,
+  captureMCPRequestScope,
   outsideMCPRequestScope,
 } from './signal';
 
@@ -145,4 +146,33 @@ describe('exact SDK admission scope', () => {
       await Promise.all([first, second]);
     }
   });
+});
+
+it('restores the originating scope for a cancellation emitted outside its async context', async () => {
+  const controller = new AbortController();
+  let released!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    released = resolve;
+  });
+  let run: ReturnType<typeof captureMCPRequestScope>;
+  const settled = jest.fn();
+  const pending = withMCPRequestSignal(
+    controller.signal,
+    async () => {
+      run = captureMCPRequestScope(settled);
+      await gate;
+    },
+    true,
+  );
+  try {
+    controller.abort();
+    expect(getMCPDispatchSignal()).toBeUndefined();
+    await run?.(async () => {
+      expect(getMCPDispatchSignal()?.aborted).toBe(true);
+    });
+  } finally {
+    released();
+    await pending;
+  }
+  expect(settled).toHaveBeenCalledTimes(1);
 });

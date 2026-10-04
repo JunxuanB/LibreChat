@@ -298,7 +298,7 @@ export function createScheduledMCPBearerHeaderResolver(
   },
 ): MCPRequestHeaderResolver | undefined {
   if (!input.context || !requiresScheduledMCPBearerConnection(input.context, input.config)) return;
-  const { context, config, serverName, signal: ownerSignal } = input;
+  const { context, config, serverName } = input;
   const user = input.user && Object.freeze({ id: input.user.id, tenantId: input.user.tenantId });
   const onFailure = failureRecorders.get(context);
   const pending = new Set<Promise<boolean>>();
@@ -306,10 +306,11 @@ export function createScheduledMCPBearerHeaderResolver(
   const assertOpen = () => {
     getMCPRequestSignal(context).throwIfAborted();
     scopeSignals.get(context)?.throwIfAborted();
-    ownerSignal?.throwIfAborted();
+
     if (context.quiesceStarted || context.cleanupStarted) throw new MCPRequestQuiescedError();
   };
   const resolver: MCPRequestHeaderResolver = async (signal) => {
+    const ownerSignal = scopeSignals.get(context);
     if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
     signal?.throwIfAborted();
     if (context.quiesceStarted) throw new MCPRequestQuiescedError();

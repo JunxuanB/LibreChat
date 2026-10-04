@@ -3,8 +3,19 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 interface MCPRequestScope {
   signal: AbortSignal;
   failure?: Promise<never>;
+  onSettled: Array<() => void>;
 }
 const requestScopes = new AsyncLocalStorage<MCPRequestScope>();
+
+export type MCPRequestScopeRunner = (operation: () => Promise<void>) => Promise<void>;
+
+/** Abort listeners execute in the aborter's context, so SDK cancellation needs explicit attribution. */
+export function captureMCPRequestScope(onSettled: () => void): MCPRequestScopeRunner | undefined {
+  const scope = requestScopes.getStore();
+  if (!scope) return;
+  scope.onSettled.push(onSettled);
+  return (operation) => requestScopes.run(scope, operation);
+}
 
 /** SDK options.signal is not forwarded into transport.send. This signal fences only pre-dispatch work. */
 export function getMCPDispatchSignal(): AbortSignal | undefined {
@@ -18,7 +29,7 @@ export function holdMCPRequestFailure(failure: Promise<never>): void {
   void failure.catch(() => undefined);
 }
 
-/** Autonomous SDK notifications/stream recovery do not inherit a finished caller's cutoff. */
+/** Autonomous initialization/stream recovery does not inherit a finished caller's cutoff. */
 export function outsideMCPRequestScope<T>(operation: () => T): T {
   return requestScopes.exit(operation);
 }
@@ -43,6 +54,7 @@ export async function withMCPRequestSignal<T>(
     const dispatch = new AbortController();
     const scope: MCPRequestScope = {
       signal: controller ? AbortSignal.any([controller.signal, dispatch.signal]) : dispatch.signal,
+      onSettled: [],
     };
     return await requestScopes.run(scope, async () => {
       try {
@@ -56,6 +68,7 @@ export async function withMCPRequestSignal<T>(
         throw error;
       } finally {
         dispatch.abort();
+        for (const settled of scope.onSettled) settled();
       }
     });
   } finally {

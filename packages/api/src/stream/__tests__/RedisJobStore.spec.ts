@@ -1417,3 +1417,80 @@ it('withholds a newly retained provider when its recovery index cannot be confir
     }),
   ).rejects.toThrow('Created job membership could not be verified');
 });
+
+describe('retained creation read repair', () => {
+  const hash = {
+    streamId: 'unindexed',
+    userId: 'owner',
+    createdAt: '100',
+    status: 'running',
+    generationProtocolVersion: '2',
+    preserveForScheduleReconcile: '1',
+    providerDrained: '1',
+  };
+  const client = (read: jest.Mock, add = jest.fn().mockResolvedValue(1)) => ({
+    isCluster: true,
+    hgetall: read,
+    sadd: add,
+    srem: jest.fn().mockResolvedValue(1),
+    eval: jest.fn().mockResolvedValue(1),
+  });
+  it('repairs a legacy orphan and stamps its exact epoch after confirming membership', async () => {
+    const redis = client(jest.fn().mockResolvedValue(hash));
+    const store = new RedisJobStore(redis as unknown as Cluster);
+    await expect(store.getJob('unindexed')).resolves.toMatchObject({
+      createdAt: 100,
+      status: 'running',
+    });
+    expect(redis.sadd).toHaveBeenCalledWith(
+      'stream:schedule_reconcile:v1',
+      JSON.stringify(['unindexed', 100]),
+    );
+    const commit = redis.eval.mock.calls.find((call) =>
+      String(call[0]).includes('__scheduleMembershipEpoch'),
+    );
+    expect(commit?.slice(1)).toEqual([1, 'stream:{unindexed}:job', '100']);
+    expect(commit?.[0]).toContain('"createdAt") ~= ARGV[1]');
+  });
+  it('keeps an unavailable index retryable without marking discovery confirmed', async () => {
+    const redis = client(
+      jest.fn().mockResolvedValue(hash),
+      jest.fn().mockRejectedValue(new Error('Index unavailable')),
+    );
+    const store = new RedisJobStore(redis as unknown as Cluster);
+    await expect(store.getJob('unindexed')).rejects.toThrow(
+      'Retained creation membership recovery failed',
+    );
+    expect(
+      redis.eval.mock.calls.some((call) => String(call[0]).includes('__scheduleMembershipEpoch')),
+    ).toBe(false);
+  });
+  it('repairs and stamps the successor rather than a replaced snapshot', async () => {
+    const newer = { ...hash, createdAt: '200', userId: 'successor' };
+    const redis = client(jest.fn().mockResolvedValueOnce(hash).mockResolvedValue(newer));
+    const store = new RedisJobStore(redis as unknown as Cluster);
+    await expect(store.getJob('unindexed')).resolves.toMatchObject({
+      createdAt: 200,
+      userId: 'successor',
+    });
+    expect(redis.sadd).toHaveBeenCalledWith(
+      'stream:schedule_reconcile:v1',
+      JSON.stringify(['unindexed', 200]),
+    );
+    const commits = redis.eval.mock.calls.filter((call) =>
+      String(call[0]).includes('__scheduleMembershipEpoch'),
+    );
+    expect(commits).toHaveLength(1);
+    expect(commits[0]?.slice(1)).toEqual([1, 'stream:{unindexed}:job', '200']);
+  });
+  it('adds no index round trip to already-confirmed retained reads', async () => {
+    const redis = client(
+      jest.fn().mockResolvedValue({ ...hash, __scheduleMembershipEpoch: '100' }),
+    );
+    const store = new RedisJobStore(redis as unknown as Cluster);
+    await expect(store.getJob('unindexed')).resolves.toMatchObject({ createdAt: 100 });
+    expect(redis.hgetall).toHaveBeenCalledTimes(1);
+    expect(redis.sadd).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+});

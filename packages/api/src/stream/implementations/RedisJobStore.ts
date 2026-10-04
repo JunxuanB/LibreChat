@@ -599,6 +599,7 @@ const JOB_CREATE_LUA =
   'if replacedConversationId then redis.call("HSET", KEYS[1], "__replacedConversationId", replacedConversationId) end end ' +
   'if #replacementChain > 0 then redis.call("HSET", KEYS[1], "__replacedGenerations", cjson.encode(replacementChain)) end ' +
   'if ARGV[10] ~= "2" then redis.call("HDEL", KEYS[1], "checkpointNamespace") end ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then redis.call("HSET", KEYS[1], "__scheduleMembershipPending", "1") end ' +
   'expireScheduleJob(KEYS[1], ttl) ' +
   'redis.call("SET", KEYS[7], tostring(createdAt), "EX", ttl + generationEpochGraceTtl) ' +
   'if ARGV[8] ~= "" then local claimRaw = redis.call("GET", KEYS[10]) ' +
@@ -650,6 +651,13 @@ const JOB_UPDATE_LUA =
   'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") == "1" then redis.call("PERSIST", KEYS[1]) ' +
   'elseif releaseRetention and (terminal == "complete" or terminal == "error" or terminal == "aborted") then expireScheduleJob(KEYS[1], tonumber(ARGV[3])) end end ' +
   'return 1';
+
+/** A durable creation/read acknowledges only its own indexed epoch, never a replacement. */
+const SCHEDULE_MEMBERSHIP_COMMIT_LUA =
+  'if redis.call("HGET", KEYS[1], "createdAt") ~= ARGV[1] then return 0 end ' +
+  'if redis.call("HGET", KEYS[1], "preserveForScheduleReconcile") ~= "1" then return 0 end ' +
+  'redis.call("HSET", KEYS[1], "__scheduleMembershipEpoch", ARGV[1]) ' +
+  'redis.call("HDEL", KEYS[1], "__scheduleMembershipPending") return 1';
 
 /** Owner membership must outlive every paused job and must never shorten a peer's TTL. */
 const OWNER_MEMBERSHIP_RECONCILE_LUA =
@@ -2319,6 +2327,8 @@ export class RedisJobStore implements IJobStoreV2 {
       // chain before deciding whether it is safe to proceed.
       throw new Error('Created job membership could not be verified');
     }
+    if (currentJob.preserveForScheduleReconcile === true)
+      await this.commitScheduleMembership(streamId, currentJob.createdAt);
     this.clearPredecessorLocalState(streamId, currentJob.createdAt);
 
     if (replacedJob != null) {
@@ -2337,7 +2347,28 @@ export class RedisJobStore implements IJobStoreV2 {
     if (!data || Object.keys(data).length === 0) {
       return null;
     }
-    return this.deserializeJob(data);
+    const job = this.deserializeJob(data);
+    if (
+      job.preserveForScheduleReconcile === true &&
+      data.__scheduleMembershipEpoch !== data.createdAt
+    ) {
+      // Durable Mongo run identities can find a hash after its creator died before cross-slot writes.
+      const recovered = await this.reconcileJobMembership(streamId, { initialJob: job });
+      if (recovered === undefined) throw new Error('Retained creation membership recovery failed');
+      if (recovered?.preserveForScheduleReconcile === true)
+        await this.commitScheduleMembership(streamId, recovered.createdAt);
+      return recovered;
+    }
+    return job;
+  }
+
+  private async readJob(streamId: string): Promise<SerializableJobData | null> {
+    const data = await this.redis.hgetall(KEYS.job(streamId));
+    return data && Object.keys(data).length > 0 ? this.deserializeJob(data) : null;
+  }
+
+  private async commitScheduleMembership(streamId: string, createdAt: number): Promise<void> {
+    await this.redis.eval(SCHEDULE_MEMBERSHIP_COMMIT_LUA, 1, KEYS.job(streamId), String(createdAt));
   }
 
   async acknowledgeReplacedJobs(
@@ -2770,7 +2801,7 @@ export class RedisJobStore implements IJobStoreV2 {
         );
       }
       await Promise.all(operations);
-      return this.getJob(streamId);
+      return this.readJob(streamId);
     }
 
     const pipeline = this.redis.pipeline();
@@ -2850,7 +2881,7 @@ export class RedisJobStore implements IJobStoreV2 {
     let currentJob = options.initialJob ?? null;
     try {
       if (options.initialJob === undefined) {
-        currentJob = await this.getJob(streamId);
+        currentJob = await this.readJob(streamId);
       }
 
       for (let attempt = 0; attempt < MEMBERSHIP_RECONCILE_MAX_ATTEMPTS; attempt++) {
