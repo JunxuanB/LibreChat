@@ -281,19 +281,21 @@ test.describe('Lia mascot', () => {
     if (!composer) {
       throw new Error('The composer has no box');
     }
-    const before = await bodyBox(page);
-    /* Toward the roomier side of the composer. */
-    const key =
-      before.x + before.width / 2 > composer.x + composer.width / 2 ? 'ArrowLeft' : 'ArrowRight';
-    for (let i = 0; i < 3; i++) {
-      await page.keyboard.press(key);
+    /* She stops at the end of the free span she stands in, and where the greeting cuts it short
+     * depends on the fonts, so walk her both ways and measure the ground she covered. */
+    const xs = [(await bodyBox(page)).x];
+    for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowRight'] as const) {
+      for (let i = 0; i < 3; i++) {
+        await page.keyboard.press(key);
+      }
+      await expect(control).toHaveAccessibleName('Lia: Lands with a thumbs up');
+      /* The landing outranks a pet, so let it finish (1.6 s) before the next key. */
+      await page.waitForTimeout(2000);
+      const box = await bodyBox(page);
+      expect(box.y + box.height).toBeLessThanOrEqual(composer.y + 4);
+      xs.push(box.x);
     }
-    await expect(control).toHaveAccessibleName('Lia: Lands with a thumbs up');
-    await page.waitForTimeout(2000);
-    const after = await bodyBox(page);
-    const moved = after.x - before.x;
-    expect(key === 'ArrowLeft' ? -moved : moved).toBeGreaterThan(40);
-    expect(after.y + after.height).toBeLessThanOrEqual(composer.y + 4);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(40);
 
     await page.keyboard.press('Enter');
     await expect(control).toHaveAccessibleName('Lia: Gets petted');
