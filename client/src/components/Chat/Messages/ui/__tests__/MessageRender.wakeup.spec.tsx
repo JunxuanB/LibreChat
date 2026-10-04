@@ -4,6 +4,8 @@ import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ParentSubagentSummary, TMessage } from 'librechat-data-provider';
 import type { TMessageChatContext } from '~/common';
+import { ShareMessagesProvider } from '~/components/Share/ShareMessagesProvider';
+import { ShareContext } from '~/Providers/ShareContext';
 import MessageRender from '../MessageRender';
 
 const mockAgentsMap = {
@@ -97,7 +99,7 @@ const backgroundWakeup = [
   ]),
 ].join('\n');
 
-function renderMessage(text: string, parentModel = 'agent_lia') {
+function renderMessage(text: string, parentModel = 'agent_lia', shared = false) {
   const queryClient = new QueryClient();
   queryClient.setQueryData(
     [QueryKeys.messages, 'conversation-1'],
@@ -119,10 +121,28 @@ function renderMessage(text: string, parentModel = 'agent_lia') {
     isCreatedByUser: true,
     text,
   } as unknown as TMessage;
+  const row = <MessageRender message={message} chatContext={chatContext} currentEditId={null} />;
+  const sharedReply: TMessage = {
+    messageId: 'shared-reply',
+    parentMessageId: 'wake',
+    conversationId: 'original-shared-conversation',
+    text: 'Parent continuation',
+    isCreatedByUser: false,
+    endpoint: 'agents',
+    model: parentModel,
+    sender: 'Shared Historical Parent',
+    iconURL: '/shared-historical.png',
+  };
   return render(
     <QueryClientProvider client={queryClient}>
       <RecoilRoot>
-        <MessageRender message={message} chatContext={chatContext} currentEditId={null} />
+        {shared ? (
+          <ShareContext.Provider value={{ isSharedConvo: true, shareId: 'share-1' }}>
+            <ShareMessagesProvider messages={[message, sharedReply]}>{row}</ShareMessagesProvider>
+          </ShareContext.Provider>
+        ) : (
+          row
+        )}
       </RecoilRoot>
     </QueryClientProvider>,
   );
@@ -179,6 +199,21 @@ describe('MessageRender wake-up rows', () => {
     expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
     expect(screen.getByTestId('author-face')).toHaveAttribute('data-icon', '/historical.png');
   });
+
+  it.each(['agent_reviewer', 'agent_deleted'])(
+    'reads an unindexed public self wake-up author from the shared transcript (%s)',
+    (parentModel) => {
+      mockChildren.clear();
+      renderMessage(subagentWakeup('self'), parentModel, true);
+      const name = parentModel === 'agent_reviewer' ? 'Code Reviewer' : 'Shared Historical Parent';
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+      expect(screen.getByTestId('author-face')).toHaveAttribute(
+        'data-icon',
+        '/shared-historical.png',
+      );
+      expect(screen.queryByRole('heading', { name: 'Lia' })).not.toBeInTheDocument();
+    },
+  );
 
   it.each(['agent_reviewer', 'agent_research_team'])(
     'preserves the explicit graph alias %s without resolving a saved agent',

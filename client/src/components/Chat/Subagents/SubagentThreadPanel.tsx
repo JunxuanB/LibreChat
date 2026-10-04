@@ -231,7 +231,10 @@ export default function SubagentThreadPanel({ selection }: { selection: ActiveSu
    *  be attributed to the newly selected task. */
   const threadView = data?.threadId === threadId ? data : undefined;
   const childKind =
-    threadView?.subagentKind ?? progress?.subagentKind ?? selection.subagentIdentity?.subagentKind;
+    threadView?.subagentKind ??
+    progress?.subagentKind ??
+    selection.subagentIdentity?.subagentKind ??
+    byThreadId.get(threadId)?.subagentKind;
   const isSelfSpawn = isSelfSpawnType(selection.subagentType, childKind);
   const foregroundAgentId =
     childKind === 'graph'

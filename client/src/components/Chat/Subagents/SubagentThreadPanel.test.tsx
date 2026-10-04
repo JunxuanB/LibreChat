@@ -680,6 +680,49 @@ describe('SubagentThreadPanel', () => {
     },
   );
 
+  it.each([false, true])(
+    'preserves indexed graph identity before query success (failed: %s)',
+    (failed) => {
+      const child: ParentSubagentSummary = {
+        threadId: 'child-thread',
+        parentMessageId: 'parent-message',
+        subagentType: 'self',
+        subagentKind: 'graph',
+        title: 'self',
+        origin: 'tool',
+        status: 'completed',
+        latestTaskId: 'task',
+        tasks: [{ taskId: 'task', status: 'completed' }],
+        tasksTruncated: false,
+      };
+      mockParentChildrenByThread.set(child.threadId, child);
+      queryClient.setQueryData<TMessage[]>(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            messageId: 'parent-message',
+            parentMessageId: null,
+            conversationId: 'parent-conversation',
+            isCreatedByUser: false,
+            endpoint: EModelEndpoint.agents,
+            model: 'agent_deleted',
+            sender: 'Historical Parent',
+            iconURL: '/historical-parent.png',
+            text: '',
+          },
+        ],
+      );
+      mockUseSubagentThreadQuery.mockReturnValue({ isLoading: !failed, isError: failed });
+      const { container } = render(
+        <Root>
+          <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+        </Root>,
+      );
+      expect(screen.getByRole('heading', { name: 'self' })).toBeInTheDocument();
+      expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeNull();
+    },
+  );
+
   it('resolves a missing historical parent after its reply arrives and retains that author', async () => {
     queryClient.setQueryData<TMessage[]>([QueryKeys.messages, 'parent-conversation'], []);
     mockUseSubagentThreadQuery.mockReturnValue({
