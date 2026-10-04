@@ -6,6 +6,7 @@ import type {
   TImportJob,
 } from 'librechat-data-provider';
 import type { TranslationKeys } from '~/hooks';
+import { IMPORT_ERROR_KEYS } from './errors';
 import useAutoFocus from './useAutoFocus';
 import { useLocalize } from '~/hooks';
 
@@ -14,19 +15,6 @@ const TERMINAL_PHASES = new Set<TImportPhase>(['completed', 'failed', 'cancelled
 const PHASE_LABEL_KEYS: Partial<Record<TImportPhase, TranslationKeys>> = {
   conversations: 'com_ui_import_phase_conversations',
   assets: 'com_ui_import_phase_assets',
-};
-
-const IMPORT_ERROR_KEYS: Record<string, TranslationKeys> = {
-  'Unsupported import type': 'com_ui_import_conversation_file_type_error',
-  'The uploaded archive exceeds the allowed size limits':
-    'com_ui_import_conversation_archive_too_large',
-  'This JSON file is too large to import on its own. Compress it into a .zip and upload that instead':
-    'com_ui_import_conversation_json_too_large',
-  'The uploaded archive is corrupt or could not be read':
-    'com_ui_import_conversation_archive_corrupt',
-  'A storage error occurred while processing the import':
-    'com_ui_import_conversation_storage_error',
-  'The import could not be completed': 'com_ui_import_conversation_failed',
 };
 
 const IMPORT_REPORT_ERROR_KEYS: Record<TImportErrorCode, TranslationKeys> = {

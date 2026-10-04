@@ -13,15 +13,13 @@ import {
 import { readActiveJobId, writeActiveJobId } from './storage';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { NotificationSeverity } from '~/common';
+import { IMPORT_ERROR_KEYS } from './errors';
 import { useLocalize } from '~/hooks';
 import Dropzone from './Dropzone';
 import Progress from './Progress';
 import Loading from './Loading';
 import Summary from './Summary';
 import Lost from './Lost';
-
-const JSON_FILE_TOO_LARGE_MESSAGE =
-  'This JSON file is too large to import on its own. Compress it into a .zip and upload that instead';
 
 /** Phases the job will never move out of. Once one is reached the panel has
  * nothing left to rejoin, so the id must stop being remembered. */
@@ -33,13 +31,7 @@ function getUploadErrorMessage(error: unknown): string | undefined {
 }
 
 function getUploadErrorKey(message: string | undefined) {
-  if (message === 'Unsupported import type') {
-    return 'com_ui_import_conversation_file_type_error';
-  }
-  if (message === JSON_FILE_TOO_LARGE_MESSAGE) {
-    return 'com_ui_import_conversation_json_too_large';
-  }
-  return 'com_ui_import_conversation_upload_error';
+  return (message && IMPORT_ERROR_KEYS[message]) || 'com_ui_import_conversation_upload_error';
 }
 
 export default function Import() {

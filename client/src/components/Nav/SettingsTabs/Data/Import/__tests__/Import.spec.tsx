@@ -770,6 +770,23 @@ describe('Import panel', () => {
     );
   });
 
+  it('names a corrupt archive instead of the generic upload failure', () => {
+    render(<Import />);
+
+    act(() => {
+      capturedUploadOptions.onError?.({
+        response: { data: { message: 'The uploaded archive is corrupt or could not be read' } },
+      });
+    });
+
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'The uploaded archive is corrupt or could not be read',
+        severity: 'error',
+      }),
+    );
+  });
+
   it('shows a generic toast for any other upload failure', () => {
     render(<Import />);
 
