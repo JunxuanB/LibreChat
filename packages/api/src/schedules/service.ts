@@ -372,8 +372,18 @@ export function createSchedulesService(
   // Recovery evidence only: no authorization or bearer is cached here.
   const pendingBearerFailures = new Map<
     string,
-    Parameters<SchedulesService['recordMCPToolAuthFailure']>[0]
+    Parameters<SchedulesService['recordMCPToolAuthFailure']>[0] & {
+      admitted: boolean;
+      outcomes: ScheduleMCPOutcome[];
+    }
   >();
+  async function eraseSettledSchedule(scheduleId: string): Promise<boolean> {
+    for (const pending of pendingBearerFailures.values()) {
+      if (pending.identity?.scheduleId === scheduleId) return false;
+    }
+    return methods.eraseScheduleIfDrained(scheduleId);
+  }
+
   const receiptKey = (stream: string, epoch: number): string => JSON.stringify([stream, epoch]);
   const outcomeKey = (outcome: ScheduleMCPOutcome): string =>
     JSON.stringify([
@@ -534,6 +544,7 @@ export function createSchedulesService(
 
   const engineDeps: ScheduleEngineDeps = {
     reconcileRetainedJobs,
+    eraseSettledSchedule,
     preflightMCP: deps.preflightMCP,
     methods,
     getLimits,
@@ -836,6 +847,7 @@ export function createSchedulesService(
       clearReconciledJob: engineDeps.clearReconciledJob,
       abortScheduledJob: engineDeps.abortScheduledJob,
       reconcileRetainedJobs,
+      eraseSettledSchedule,
       // If topology itself prevented arming, this process's missing job says
       // nothing about peer liveness. If only index creation failed, the topology
       // proof still holds and the existing owner-death backstop remains valid.
@@ -983,8 +995,16 @@ export function createSchedulesService(
               mcp_permission_denied: 4,
             }[value.code]
           : 0;
-      if (!previous || priority(error) >= priority(previous.error))
-        pendingBearerFailures.set(key, { ...input, identity: Object.freeze({ ...identity }) });
+      const incoming = error.outcomes;
+      const outcomes = mergeReceipts(previous?.outcomes ?? [], incoming);
+      const admitted = previous?.admitted === true && outcomes.length === previous.outcomes.length;
+      const retained = previous && priority(previous.error) > priority(error) ? previous : input;
+      pendingBearerFailures.set(key, {
+        ...retained,
+        identity: Object.freeze({ ...identity }),
+        admitted,
+        outcomes,
+      });
     }
     const store = GenerationJobManager.getJobStore();
     const job = await store?.getJob(streamId);
@@ -1012,17 +1032,23 @@ export function createSchedulesService(
       server: serverName,
     };
     if (!bearer) return methods.recordMCPToolAuthFailure(payload);
-    const pendingError = pendingBearerFailures.get(key)?.error;
+    const pendingReceipt = pendingBearerFailures.get(key);
+    if (pendingReceipt?.admitted) return true;
+    const pendingError = pendingReceipt?.error;
     const receiptError = pendingError instanceof ScheduledMCPBearerError ? pendingError : error;
-    const outcomes = mergeReceipts(readScheduleMCPOutcomes(job.scheduleOutcomeError), [
-      ...receiptError.outcomes,
-      ...error.outcomes,
-    ]);
+    const admittedOutcomes = mergeReceipts(
+      pendingReceipt?.outcomes ?? receiptError.outcomes,
+      error.outcomes,
+    );
+    const outcomes = mergeReceipts(
+      readScheduleMCPOutcomes(job.scheduleOutcomeError),
+      admittedOutcomes,
+    );
     const encoded = encodeReceipts(outcomes);
     const writes = await Promise.allSettled([
       methods.recordMCPToolAuthFailure({
         ...payload,
-        outcomes: mergeReceipts(receiptError.outcomes, error.outcomes),
+        outcomes: admittedOutcomes,
       }),
       GenerationJobManager.updateMetadata(
         streamId,
@@ -1047,6 +1073,10 @@ export function createSchedulesService(
       (writes[0].status === 'fulfilled' && writes[0].value) ||
       (store?.durableScheduleReceipts === true && writes[1].status === 'fulfilled' && retained)
     ) {
+      const current = pendingBearerFailures.get(key);
+      if (current)
+        current.admitted =
+          mergeReceipts(admittedOutcomes, current.outcomes).length === admittedOutcomes.length;
       return true;
     }
     return false;
@@ -1174,11 +1204,16 @@ export function createSchedulesService(
       streamId && jobCreatedAt != null ? receiptKey(streamId, jobCreatedAt) : undefined;
     const pending = receipt && pendingBearerFailures.get(receipt);
     if (pending && pending.identity?.scheduleId === scheduleId) {
-      try {
-        if (!(await recordMCPToolAuthFailure(pending))) return false;
-      } catch {
-        return false;
+      if (!pending.admitted) {
+        try {
+          if (!(await recordMCPToolAuthFailure(pending))) return false;
+        } catch {
+          return false;
+        }
       }
+      const acknowledged = receipt ? pendingBearerFailures.get(receipt) : undefined;
+      if (!acknowledged?.admitted) return false;
+      mcp = mergeReceipts(mcp, acknowledged.outcomes);
     }
     if (streamId && jobCreatedAt != null) {
       try {
@@ -1188,7 +1223,7 @@ export function createSchedulesService(
           job.scheduleId === scheduleId &&
           new Date(job.scheduledFor ?? '').getTime() === new Date(scheduledFor).getTime()
         ) {
-          mcp = readScheduleMCPReceipts(job.scheduleOutcomeError);
+          mcp = mergeReceipts(mcp, readScheduleMCPReceipts(job.scheduleOutcomeError));
         }
       } catch {
         return false;
@@ -1301,26 +1336,17 @@ export function createSchedulesService(
           autoDisableAfterFailures: limits.autoDisableAfterFailures,
           balanceSkipDisableThreshold: BALANCE_SKIP_DISABLE_THRESHOLD,
         });
-        if (terminal && receipt) pendingBearerFailures.delete(receipt);
-        // ERASE-ON-SETTLE: whichever process records a run's terminal outcome also
-        // attempts the deferred erase of a deleting schedule. This is what makes a
-        // delete's `draining` state converge in EVERY topology — the clustered
-        // entrypoint runs no reconciler, so without this the hidden schedule (and its
-        // prompt, which has no TTL) survived its last run indefinitely there. A cheap
-        // guarded no-op for live schedules (the erase filters on `deleting: true`).
-        if (terminal) {
-          await methods.eraseScheduleIfDrained(scheduleId).catch((err) => {
-            logger.warn(`[schedules] erase-on-settle failed for ${scheduleId}:`, err);
-          });
-        }
         if (terminal && streamId && jobCreatedAt != null) {
-          await GenerationJobManager.updateMetadata(
-            streamId,
-            { preserveForScheduleReconcile: false },
-            jobCreatedAt,
-          ).catch((err) => {
-            logger.warn('[schedules] failed to release terminal outcome evidence:', err);
-          });
+          try {
+            await GenerationJobManager.updateMetadata(
+              streamId,
+              { preserveForScheduleReconcile: false },
+              jobCreatedAt,
+            );
+          } catch (error) {
+            logger.warn('[schedules] failed to release terminal outcome evidence:', error);
+            return false;
+          }
 
           // A paused occurrence can be aborted while its provider is already drained.
           // In that case the manager's normal drain-time cleanup has already passed;
@@ -1340,6 +1366,18 @@ export function createSchedulesService(
               logger.warn('[schedules] failed to clear settled generation evidence:', err);
             });
           }
+        }
+        if (terminal && receipt) pendingBearerFailures.delete(receipt);
+        // ERASE-ON-SETTLE: whichever process records a run's terminal outcome also
+        // attempts the deferred erase of a deleting schedule. This is what makes a
+        // delete's `draining` state converge in EVERY topology — the clustered
+        // entrypoint runs no reconciler, so without this the hidden schedule (and its
+        // prompt, which has no TTL) survived its last run indefinitely there. A cheap
+        // guarded no-op for live schedules (the erase filters on `deleting: true`).
+        if (terminal) {
+          await eraseSettledSchedule(scheduleId).catch((err) => {
+            logger.warn(`[schedules] erase-on-settle failed for ${scheduleId}:`, err);
+          });
         }
         return true;
       } catch (err) {
@@ -1924,7 +1962,7 @@ export function createSchedulesService(
         return 'unconfirmed';
       }
     }
-    const erased = await methods.eraseScheduleIfDrained(scheduleId).catch((err) => {
+    const erased = await eraseSettledSchedule(scheduleId).catch((err) => {
       logger.warn(`[schedules] erase failed for ${scheduleId}:`, err);
       return false;
     });

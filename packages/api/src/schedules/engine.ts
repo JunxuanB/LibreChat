@@ -392,7 +392,11 @@ export function startScheduleEngine(deps: ScheduleEngineDeps): ScheduleEngine {
       await runAsSystem(async () => {
         const deleting = await deps.methods.getDeletingSchedules(RECONCILE_BATCH);
         for (const schedule of deleting) {
-          await deps.methods.eraseScheduleIfDrained(schedule.id).catch(() => undefined);
+          await (
+            deps.eraseSettledSchedule
+              ? deps.eraseSettledSchedule(schedule.id)
+              : deps.methods.eraseScheduleIfDrained(schedule.id)
+          ).catch(() => undefined);
         }
         // Rotate the window (never-attempted first) so a batch of undrainable rows
         // cannot re-fill it every pass and starve the rows behind them.

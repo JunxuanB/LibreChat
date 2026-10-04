@@ -119,6 +119,15 @@ afterEach(() => jest.restoreAllMocks());
 const staleAt = () => new Date(Date.now() - 20 * 60_000);
 
 describe('armed-engine retained-job recovery', () => {
+  it('uses the host erasure acknowledgement barrier instead of raw storage erasure', async () => {
+    const methods = makeMethods(makeClaimedSchedule());
+    methods.getDeletingSchedules.mockResolvedValue([{ id: 'deleting' }] as never);
+    const eraseSettledSchedule = jest.fn(async () => false);
+    await reconcileOnce(makeDeps(methods, { eraseSettledSchedule }));
+    expect(eraseSettledSchedule).toHaveBeenCalledWith('deleting');
+    expect(methods.eraseScheduleIfDrained).not.toHaveBeenCalled();
+  });
+
   it('retries held-job settlement independently of active and unbookkept Mongo rows', async () => {
     const methods = makeMethods(makeClaimedSchedule());
     const reconcileRetainedJobs = jest.fn(async () => undefined);

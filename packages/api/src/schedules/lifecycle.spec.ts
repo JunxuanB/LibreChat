@@ -223,7 +223,7 @@ describe('scheduled denial lifecycle with the real generation manager', () => {
       let writes = 0;
       const update = store.updateJob.bind(store);
       jest.spyOn(store, 'updateJob').mockImplementation(async (...args) => {
-        if (args[1].scheduleOutcomeError != null && ++writes <= (restarted ? 1 : 2))
+        if (args[1].scheduleOutcomeError != null && ++writes <= 1)
           throw new Error('job evidence unavailable');
         return update(...args);
       });

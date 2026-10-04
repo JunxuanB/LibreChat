@@ -34,12 +34,14 @@ const TERMINAL_JOB_OUTCOMES: Record<string, 'success' | 'error' | 'interrupted' 
 
 export interface ScheduleErasureSweep {
   stop: () => void;
+  sweep: () => Promise<void>;
 }
 
 export interface ScheduleErasureDeps {
   abortScheduledJob: ScheduleEngineDeps['abortScheduledJob'];
   /** Retries held job outcomes even after the run's Mongo bookkeeping committed. */
   reconcileRetainedJobs?: () => Promise<void>;
+  eraseSettledSchedule?: ScheduleEngineDeps['eraseSettledSchedule'];
   methods: Pick<
     ScheduleMethods,
     | 'getDeletingSchedules'
@@ -426,7 +428,11 @@ export function startScheduleErasureSweep(deps: ScheduleErasureDeps): ScheduleEr
           await settleAbandonedRuns(deps, schedule.id).catch((err) => {
             logger.warn(`[schedules] abandoned-run pass failed for ${schedule.id}:`, err);
           });
-          await deps.methods.eraseScheduleIfDrained(schedule.id).catch((err) => {
+          await (
+            deps.eraseSettledSchedule
+              ? deps.eraseSettledSchedule(schedule.id)
+              : deps.methods.eraseScheduleIfDrained(schedule.id)
+          ).catch((err) => {
             logger.warn(`[schedules] erasure sweep failed for ${schedule.id}:`, err);
           });
         }
@@ -465,6 +471,7 @@ export function startScheduleErasureSweep(deps: ScheduleErasureDeps): ScheduleEr
   schedule();
 
   const engineSweep: ScheduleErasureSweep = {
+    sweep,
     stop: () => {
       stopped = true;
       if (timer) {
