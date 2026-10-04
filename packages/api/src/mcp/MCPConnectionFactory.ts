@@ -40,6 +40,12 @@ import {
   toCatalogConnectionConfig,
 } from './utils';
 import {
+  resolveScheduledMCPBearerConfig,
+  createScheduledMCPBearerHeaderResolver,
+  isScheduledMCPBearer,
+  ScheduledMCPBearerError,
+} from '~/schedules/bearer';
+import {
   isDirectOpenIDBearerRecoveryEnabled,
   resolveDirectOpenIDBearerConfig,
   usesDirectOpenIDBearerRecovery,
@@ -49,11 +55,6 @@ import {
   isMCPTransportAuthenticationError,
   MCPAuthenticationRejectedError,
 } from './errors';
-import {
-  resolveScheduledMCPBearerConfig,
-  isScheduledMCPBearer,
-  ScheduledMCPBearerError,
-} from '~/schedules/bearer';
 import { PENDING_STALE_MS, FlowStateNotFoundError, normalizeExpiresAt } from '~/flow/manager';
 import { createLazyOboUpstreamTokenProvider, awaitOboOperation } from '~/mcp/oauth/obo';
 import { preProcessGraphTokens } from '~/utils/graph';
@@ -98,6 +99,7 @@ export class MCPConnectionFactory {
   protected readonly allowedAddresses?: string[] | null;
   protected readonly ephemeralConnection: boolean;
   protected readonly directBearerRecoveryEnabled: boolean;
+  private readonly resolveRequestHeaders?: t.MCPRequestHeaderResolver;
   protected readonly capabilityProfile: t.BasicConnectionOptions['capabilityProfile'];
   protected readonly operationLimits: t.BasicConnectionOptions['operationLimits'];
 
@@ -326,6 +328,13 @@ export class MCPConnectionFactory {
     basic: t.BasicConnectionOptions,
     options?: t.OAuthConnectionOptions | t.UserConnectionContext,
   ): Promise<t.BasicConnectionOptions> {
+    const resolveRequestHeaders = createScheduledMCPBearerHeaderResolver({
+      user: options?.user,
+      serverName: basic.serverName,
+      config: (basic.serverDefinition ?? basic.serverConfig) as t.ParsedServerConfig,
+      context: options?.requestScopedConnections,
+      signal: options?.signal,
+    });
     const scheduledConfig = await resolveScheduledMCPBearerConfig({
       user: options?.user,
       serverName: basic.serverName,
@@ -360,22 +369,25 @@ export class MCPConnectionFactory {
             directBearerSourceConfig,
           };
 
+    const connectionBasic = resolveRequestHeaders
+      ? { ...preparedBasic, resolveRequestHeaders }
+      : preparedBasic;
     if (basic.dbSourced || !options?.graphTokenResolver) {
-      return preparedBasic;
+      return connectionBasic;
     }
 
-    const serverConfig = await preProcessGraphTokens(preparedBasic.serverConfig, {
+    const serverConfig = await preProcessGraphTokens(connectionBasic.serverConfig, {
       user: options.user,
       graphTokenResolver: options.graphTokenResolver,
       scopes: process.env.GRAPH_API_SCOPES,
     });
 
-    return serverConfig === preparedBasic.serverConfig
-      ? preparedBasic
+    return serverConfig === connectionBasic.serverConfig
+      ? connectionBasic
       : {
-          ...preparedBasic,
+          ...connectionBasic,
           serverConfig,
-          serverDefinition: preparedBasic.serverDefinition ?? basic.serverConfig,
+          serverDefinition: connectionBasic.serverDefinition ?? basic.serverConfig,
         };
   }
 
@@ -442,6 +454,7 @@ export class MCPConnectionFactory {
         useSSRFProtection: this.useSSRFProtection,
         allowedAddresses: this.allowedAddresses,
         ephemeralConnection: this.ephemeralConnection,
+        resolveRequestHeaders: this.resolveRequestHeaders,
         ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
         ...(this.operationLimits && { operationLimits: this.operationLimits }),
         ...(this.directBearerRecoveryEnabled && { directBearerRecoveryEnabled: true }),
@@ -611,6 +624,7 @@ export class MCPConnectionFactory {
       useSSRFProtection: this.useSSRFProtection,
       allowedAddresses: this.allowedAddresses,
       ephemeralConnection: this.ephemeralConnection,
+      resolveRequestHeaders: this.resolveRequestHeaders,
       ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
       ...(this.operationLimits && { operationLimits: this.operationLimits }),
     });
@@ -647,6 +661,7 @@ export class MCPConnectionFactory {
     options?: t.OAuthConnectionOptions | t.UserConnectionContext,
   ) {
     this.serverDefinition = basic.serverDefinition ?? basic.serverConfig;
+    this.resolveRequestHeaders = basic.resolveRequestHeaders;
     this.serverConfig = basic.skipEnvProcessing
       ? basic.serverConfig
       : processMCPEnv({
@@ -808,6 +823,7 @@ export class MCPConnectionFactory {
       useSSRFProtection: this.useSSRFProtection,
       allowedAddresses: this.allowedAddresses,
       ephemeralConnection: this.ephemeralConnection,
+      resolveRequestHeaders: this.resolveRequestHeaders,
       ...(this.capabilityProfile && { capabilityProfile: this.capabilityProfile }),
       ...(this.operationLimits && { operationLimits: this.operationLimits }),
       ...(this.directBearerRecoveryEnabled && {

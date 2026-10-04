@@ -299,6 +299,7 @@ describe('initializeClient — processAgent ACL gate', () => {
         },
         restored ? 'resume' : 'invoke',
         expect.any(AbortSignal),
+        { manual: false },
       );
       const invocation = bindScheduledMCPBearerInvocation(
         getMCPRequestContext(req),

@@ -1035,6 +1035,7 @@ const SSE_REQUEST_HEADERS = {
 };
 
 interface MCPConnectionParams {
+  resolveRequestHeaders?: t.MCPRequestHeaderResolver;
   serverName: string;
   serverConfig: t.MCPOptions;
   userId?: string;
@@ -1088,6 +1089,8 @@ export class MCPConnection extends EventEmitter {
   private transportCredentialSetId: string | null = null;
   private oauthTokens?: MCPOAuthTokens | null;
   private requestHeaders?: Record<string, string> | null;
+  private readonly resolveRequestHeaders?: t.MCPRequestHeaderResolver;
+  private readonly requestAuthorization: { error?: unknown; closed: boolean } = { closed: false };
   private oauthRequired = false;
   private oauthRecovery = false;
   private readonly useSSRFProtection: boolean;
@@ -1259,6 +1262,7 @@ export class MCPConnection extends EventEmitter {
   constructor(params: MCPConnectionParams) {
     super();
     this.options = params.serverConfig;
+    this.resolveRequestHeaders = params.resolveRequestHeaders;
     this.serverName = params.serverName;
     this.capabilityProfile = params.capabilityProfile ?? STANDARD_MCP_CAPABILITY_PROFILE;
     this.operationLimits = params.operationLimits;
@@ -1320,6 +1324,9 @@ export class MCPConnection extends EventEmitter {
     const agents = this.agents;
     const logPrefix = this.getLogPrefix();
     const rejectDirectBearerAuthentication = this.directBearerRecoveryEnabled;
+    const authorizeHeaders = this.resolveRequestHeaders
+      ? this.authorizeRequestHeaders.bind(this)
+      : undefined;
     const thisAppProfile = this.capabilityProfile === MCP_APPS_CAPABILITY_PROFILE;
     const appOperationLimits = this.operationLimits;
     const effectiveTimeout = timeout || DEFAULT_TIMEOUT;
@@ -1408,7 +1415,11 @@ export class MCPConnection extends EventEmitter {
       const { urlString, resolvedInit } = await resolveFetchInput(input, init);
 
       const isGet = (resolvedInit?.method ?? 'GET').toUpperCase() === 'GET';
-      const requestHeaders = getHeaders();
+      const authorized =
+        authorizeHeaders && (resolvedInit?.method ?? 'GET').toUpperCase() !== 'DELETE'
+          ? await authorizeHeaders(resolvedInit?.signal ?? undefined)
+          : undefined;
+      const requestHeaders = authorized ? { ...getHeaders(), ...authorized } : getHeaders();
       /**
        * Headers that originated from user/server configuration — runtime
        * `setRequestHeaders` plus any keys baked into the transport at
@@ -1536,6 +1547,24 @@ export class MCPConnection extends EventEmitter {
         currentUrlString = targetUrl.href;
       }
     };
+  }
+
+  private async authorizeRequestHeaders(
+    signal?: AbortSignal,
+  ): Promise<Record<string, string> | undefined> {
+    if (!this.resolveRequestHeaders) return;
+    try {
+      if (this.requestAuthorization.closed) throw new Error('MCP connection is closed');
+      const headers = await this.resolveRequestHeaders(signal);
+      signal?.throwIfAborted();
+      if (this.requestAuthorization.closed) throw new Error('MCP connection is closed');
+      return headers;
+    } catch (error) {
+      // A fresh checkout may authorize later; transport/OAuth retries cannot bypass denial.
+      this.requestAuthorization.error = error;
+      this.shouldStopReconnecting = true;
+      throw error;
+    }
   }
 
   private emitError(_error: unknown, errorContext: string): void {
@@ -1686,9 +1715,13 @@ export class MCPConnection extends EventEmitter {
                   resolvedInit?.headers,
                   headers,
                 );
-                const liveHeaders = this.directBearerRecoveryEnabled
+                const authorized = this.resolveRequestHeaders
+                  ? await this.authorizeRequestHeaders(resolvedInit?.signal ?? undefined)
+                  : undefined;
+                let liveHeaders = this.directBearerRecoveryEnabled
                   ? this.getRequestHeaders()
                   : undefined;
+                if (authorized) liveHeaders = { ...this.getRequestHeaders(), ...authorized };
                 if (liveHeaders) {
                   for (const key of Object.keys(fetchHeaders)) {
                     const normalized = key.toLowerCase();
@@ -2148,6 +2181,12 @@ export class MCPConnection extends EventEmitter {
         if (this.isDisposed) {
           throw error;
         }
+        if (this.requestAuthorization.error !== undefined) {
+          this.lastConnectionCheckError = this.requestAuthorization.error;
+          this.connectionState = 'error';
+          this.emit('connectionChange', 'error');
+          throw this.requestAuthorization.error;
+        }
         // Check if it's a rate limit error - stop immediately to avoid making it worse
         if (this.isRateLimitError(error)) {
           /**
@@ -2552,6 +2591,7 @@ export class MCPConnection extends EventEmitter {
   /** Permanently tears down a connection that will never be reused. */
   public async dispose(): Promise<void> {
     this.isDisposed = true;
+    this.requestAuthorization.closed = true;
     this.clearToolListRefreshRetry();
     this.shouldStopReconnecting = true;
     this.removeAllListeners();

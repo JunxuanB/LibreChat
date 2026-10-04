@@ -13,7 +13,11 @@ import type {
   ScheduledMCPResourceBearerResolver,
   ScheduledMCPFailure,
 } from './authorization/contract';
-import type { ParsedServerConfig, RequestScopedMCPConnectionStore } from '~/mcp/types';
+import type {
+  ParsedServerConfig,
+  RequestScopedMCPConnectionStore,
+  MCPRequestHeaderResolver,
+} from '~/mcp/types';
 import type { ScheduleMCPEnrollmentResolver } from './authorization/service';
 import type { ScheduledTokenContext } from './context';
 import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
@@ -34,6 +38,7 @@ export interface ScheduledMCPBearerHost {
     identity: ScheduledMCPIdentity,
     stage: 'activation' | 'invoke' | 'resume',
     signal?: AbortSignal,
+    options?: { manual?: boolean },
   ) => ScheduledBearerScope;
 }
 interface BearerInput {
@@ -59,7 +64,9 @@ export function createScheduledMCPBearerHost(deps: {
 }): ScheduledMCPBearerHost {
   const now = deps.now ?? Date.now;
   return {
-    bind(identity, stage, ownerSignal) {
+    bind(identity, stage, ownerSignal, options) {
+      const manual = options?.manual === true;
+      const mintStage = stage === 'activation' ? 'activation' : 'mint';
       const captured = Object.freeze(scheduledMCPIdentitySchema.parse(identity));
       const cached = new Map<string, { token: string; expiresAtMs: number }>();
       const flights = new Map<string, Promise<{ token: string; expiresAtMs: number }>>();
@@ -83,6 +90,7 @@ export function createScheduledMCPBearerHost(deps: {
               resource: target.resource,
               selection,
               stage: phase,
+              ...(manual && { manual: true }),
             },
             { signal },
           ),
@@ -172,14 +180,16 @@ export function createScheduledMCPBearerHost(deps: {
               let pending = flights.get(key);
               if (!pending) {
                 pending = (async () => {
-                  for (const item of selections) await authorize(target, item, 'mint', ownerSignal);
+                  for (const item of selections)
+                    await authorize(target, item, mintStage, ownerSignal);
                   const result = await awaitOboOperation(
                     deps.resolveBearer(
                       {
                         identity: captured,
                         resource: { ...resource, credentialMode: 'resource_bearer' },
                         selection: selections[0],
-                        stage: 'mint',
+                        stage: mintStage,
+                        ...(manual && { manual: true }),
                       },
                       { signal: ownerSignal },
                     ),
@@ -249,12 +259,13 @@ export function attachScheduledMCPBearer(
   host?: ScheduledMCPBearerHost,
   stage: 'activation' | 'invoke' | 'resume' = 'invoke',
   signal?: AbortSignal,
+  options?: { manual?: boolean },
 ): void {
   if (scopes.has(context)) throw new ScheduledMCPBearerError('binding_mismatch', '');
   scopes.set(
     context,
     host
-      ? host.bind(identity, stage, signal)
+      ? host.bind(identity, stage, signal, options)
       : {
           identity: Object.freeze({ ...identity }),
           async resolve(input) {
@@ -265,6 +276,36 @@ export function attachScheduledMCPBearer(
           reject() {},
         },
   );
+}
+
+/** Transport/session opens, SDK SSE retries and catalog refresh all use this closure. */
+export function createScheduledMCPBearerHeaderResolver(
+  input: BearerInput & {
+    context?: RequestScopedMCPConnectionStore;
+  },
+): MCPRequestHeaderResolver | undefined {
+  if (!input.context || !requiresScheduledMCPBearerConnection(input.context, input.config)) return;
+  const { context, config, serverName, signal: ownerSignal } = input;
+  const user = input.user && Object.freeze({ id: input.user.id, tenantId: input.user.tenantId });
+  return async (signal) => {
+    if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
+    signal?.throwIfAborted();
+    if (context.cleanupStarted) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
+    const resolved = await resolveScheduledMCPBearerConfig({
+      config,
+      serverName,
+      user,
+      signal,
+      context,
+    });
+    signal?.throwIfAborted();
+    if (context.cleanupStarted) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
+    const authorization = Object.entries(
+      'headers' in resolved ? (resolved.headers ?? {}) : {},
+    ).find(([name]) => name.toLowerCase() === 'authorization');
+    if (!authorization) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
+    return { authorization: authorization[1] };
+  };
 }
 
 export function isScheduledMCPBearer(context?: RequestScopedMCPConnectionStore): boolean {
@@ -356,6 +397,7 @@ export function prepareScheduledMCPBearer(input: {
     input.host,
     execution?.stage ?? (root ? 'resume' : 'invoke'),
     input.signal,
+    { manual: execution?.manual === true || (!execution && fire?.manual === true) },
   );
 }
 

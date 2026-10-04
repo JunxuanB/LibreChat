@@ -234,7 +234,11 @@ export interface DirectBearerRecoveryState {
   resolvedConfig?: MCPOptions;
 }
 
+/** Host-supplied live headers; transport requests cannot reuse a prior allow observation. */
+export type MCPRequestHeaderResolver = (signal?: AbortSignal) => Promise<Record<string, string>>;
+
 export interface BasicConnectionOptions {
+  resolveRequestHeaders?: MCPRequestHeaderResolver;
   serverName: string;
   serverConfig: MCPOptions;
   /** Original unresolved definition retained across asynchronous credential preprocessing. */

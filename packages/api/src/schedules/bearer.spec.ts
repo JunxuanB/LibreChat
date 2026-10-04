@@ -90,7 +90,7 @@ async function bearerFixture(serverConfig = config) {
       return true;
     },
     admitScheduleMCPConsent: async (input) =>
-      snapshot.enabled &&
+      (input.requireEnabled === false || snapshot.enabled) &&
       snapshot.configRevision === input.expectedConfigRevision &&
       snapshot.enrollment?.revision === input.revision &&
       snapshot.enrollment.consents.every(
@@ -165,6 +165,61 @@ it('defaults unattended direct-bearer connections to denial without contacting a
     resolveScheduledMCPBearerConfig({ context, config, user, serverName: 'Files' }),
   ).rejects.toMatchObject({ failure: { reason: 'provider_missing' } });
 });
+
+it('can probe activation and owner-manual use while disabled, but never automatic invocation', async () => {
+  const f = await bearerFixture();
+  f.snapshot.enabled = false;
+  const activation = createMCPRequestContext();
+  // Readiness uses activation to validate re-enable before the write enables the row.
+  attachScheduledMCPBearer(activation, identity, f.host, 'activation');
+  await expect(
+    resolveScheduledMCPBearerConfig({ ...f.input, context: activation }),
+  ).resolves.toMatchObject({ headers: { Authorization: 'Bearer resource-only' } });
+  expect(f.resolveBearer).toHaveBeenCalledWith(
+    expect.objectContaining({ stage: 'activation' }),
+    expect.anything(),
+  );
+  const manual = createMCPRequestContext();
+  attachScheduledMCPBearer(manual, identity, f.host, 'invoke', undefined, { manual: true });
+  await expect(
+    resolveScheduledMCPBearerConfig({ ...f.input, context: manual }),
+  ).resolves.toBeDefined();
+  expect(f.resolveBearer).toHaveBeenLastCalledWith(
+    expect.objectContaining({ stage: 'mint', manual: true }),
+    expect.anything(),
+  );
+  f.advance(60_001);
+  await expect(
+    resolveScheduledMCPBearerConfig({ ...f.input, context: manual }),
+  ).resolves.toBeDefined();
+  await expect(f.call()).rejects.toMatchObject({ failure: { reason: 'binding_mismatch' } });
+  const execution = createScheduleMCPExecution({
+    storage: f.storage,
+    loadAuthorization: async () => ({ authority: f.consent.authority }),
+  });
+  for (const allowed of [true, false]) {
+    const resumed = createMCPRequestContext();
+    await execution.attach(resumed, identity, 'resume', true, { manual: allowed });
+    prepareScheduledMCPBearer({
+      req: { user, _isScheduledFire: true, body: { manual: !allowed, agent_id: 'untrusted' } },
+      context: resumed,
+      host: f.host,
+    });
+    const attempt = resolveScheduledMCPBearerConfig({ ...f.input, context: resumed });
+    if (allowed) {
+      await expect(attempt).resolves.toBeDefined();
+      expect(f.resolveBearer).toHaveBeenLastCalledWith(
+        expect.objectContaining({ manual: true, identity }),
+        expect.anything(),
+      );
+    } else await expect(attempt).rejects.toMatchObject({ failure: { reason: 'binding_mismatch' } });
+  }
+  await f.revoke();
+  await expect(
+    resolveScheduledMCPBearerConfig({ ...f.input, context: manual }),
+  ).rejects.toMatchObject({ failure: { reason: 'consent_revoked' } });
+});
+
 it('checks authority on every cache hit while minting once for root, child and preflight use', async () => {
   const f = await bearerFixture();
   await expect(resolveScheduledMCPBearerConfig(f.input)).resolves.toMatchObject({
@@ -452,6 +507,57 @@ it('uses the host adapter at scheduled preflight and preserves missing-adapter d
 });
 
 describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
+  it.each(['revoke', 'expiry', 'automatic'] as const)(
+    'withholds automatic session reopening after %s without replay',
+    async (change) => {
+      let requests = 0;
+      const server = await createOAuthMCPServer({
+        onResourceRequest: (req) => {
+          if (req.method !== 'DELETE') requests++;
+        },
+      });
+      const definition: ParsedServerConfig = { ...config, url: server.url, requiresOAuth: false };
+      const f = await bearerFixture(definition);
+      server.issuedTokens.add('resource-only');
+      server.tokenIssueTimes.set('resource-only', Date.now());
+      const connection = await MCPConnectionFactory.create(
+        {
+          serverName: 'Files',
+          serverConfig: definition,
+          ephemeralConnection: true,
+          useSSRFProtection: false,
+        },
+        { user, requestScopedConnections: f.context },
+      );
+      try {
+        await connection.fetchToolsSnapshot();
+        if (change !== 'expiry') await f.revoke();
+        else f.advance(60 * 60_000 + 1);
+        const before = requests;
+        if (change === 'automatic') {
+          const connect = jest.spyOn(connection, 'connect');
+          await connection['handleReconnection']();
+          expect(connect).toHaveBeenCalledTimes(1);
+          await expect(connect.mock.results[0].value).rejects.toMatchObject({
+            failure: { reason: 'consent_revoked' },
+          });
+          connect.mockRestore();
+        } else
+          await expect(connection.connect()).rejects.toMatchObject({
+            failure: { reason: change === 'revoke' ? 'consent_revoked' : 'consent_expired' },
+          });
+        // Teardown DELETE is permitted; initialize and catalog requests are withheld.
+        expect(requests).toBe(before);
+        expect(f.resolveBearer).toHaveBeenCalledTimes(1);
+      } finally {
+        await connection.dispose();
+        await cleanupMCPRequestContext(f.context);
+        MCPConnection.clearCooldown('Files');
+        await server.close();
+      }
+    },
+  );
+
   it('runs headlessly across expiry, reconnect and restart without replaying rejected calls', async () => {
     const seen: string[] = [];
     let calls = 0;
@@ -896,6 +1002,18 @@ describe('scheduled resource bearer with real MCP SDK and HTTP', () => {
       await expect(
         preflight('root', user, { scheduleId: 'schedule', concurrency: 2 }),
       ).resolves.toEqual([{ server: 'Files', status: 'ready' }]);
+      f.snapshot.enabled = false;
+      for (const admission of [{ stage: 'activation' as const }, { manual: true }]) {
+        await expect(
+          preflight('root', user, { scheduleId: 'schedule', concurrency: 2, ...admission }),
+        ).resolves.toEqual([{ server: 'Files', status: 'ready' }]);
+      }
+      await expect(
+        preflight('root', user, { scheduleId: 'schedule', concurrency: 2 }),
+      ).rejects.toMatchObject({
+        outcomes: [expect.objectContaining({ reason: 'binding_mismatch' })],
+      });
+      f.snapshot.enabled = true;
       server.issuedTokens.clear();
       await expect(
         preflight('root', user, { scheduleId: 'schedule', concurrency: 2 }),

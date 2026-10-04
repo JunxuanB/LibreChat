@@ -31,6 +31,8 @@ export interface ScheduledMCPInvocation {
 export interface ScheduleMCPExecution {
   readonly identity: ScheduledMCPIdentity;
   readonly stage: 'activation' | 'invoke' | 'resume';
+  /** Trusted admission provenance retained through credential/session preparation. */
+  readonly manual?: boolean;
   readonly enrolled: boolean;
   /** Legacy admits only while enrollment is still absent; it never acquires a later grant. */
   readonly checkEnrollment: () => Promise<void>;
@@ -118,6 +120,7 @@ export function createScheduleMCPExecution(deps: ScheduleMCPExecutionDeps): {
     return Object.freeze({
       identity: capturedIdentity,
       stage,
+      ...(manual && { manual: true }),
       enrolled,
       checkEnrollment,
       bind(agentId: string | undefined, selectionName: string): ScheduledMCPInvocation {
