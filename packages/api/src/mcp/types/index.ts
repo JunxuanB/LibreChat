@@ -238,6 +238,8 @@ export interface DirectBearerRecoveryState {
 export type MCPRequestHeaderResolver = ((
   signal?: AbortSignal,
 ) => Promise<Record<string, string>>) & {
+  /** Synchronous completion/owner cutoff, checked beside dispatch with no intervening await. */
+  assertOpen?: () => void;
   /** Records asynchronous transport denials at the owning request boundary. */
   recordFailure?: (error: unknown) => Promise<void>;
   /** Pending owner evidence must be admitted before transport disposal completes. */

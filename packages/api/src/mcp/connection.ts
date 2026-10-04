@@ -1358,6 +1358,9 @@ export class MCPConnection extends EventEmitter {
       ? this.authorizeRequestHeaders.bind(this)
       : undefined;
     const trackRequest = this.resolveRequestHeaders ? this.trackRequest.bind(this) : undefined;
+    const assertDispatch = this.resolveRequestHeaders
+      ? this.assertRequestDispatch.bind(this)
+      : undefined;
     const reportRejection = this.resolveRequestHeaders?.recordFailure
       ? this.failRequestAuthorization.bind(this)
       : undefined;
@@ -1497,6 +1500,8 @@ export class MCPConnection extends EventEmitter {
             );
           }
         }
+        // No await may separate this cutoff from network admission.
+        if (reauthorize) assertDispatch?.(currentInit.signal ?? undefined);
         const response = await undiciFetch(currentUrlString, currentInit);
         if (
           (rejectDirectBearerAuthentication || (reportRejection && reauthorize)) &&
@@ -1619,6 +1624,13 @@ export class MCPConnection extends EventEmitter {
       () => this.pendingRequests.delete(request),
     );
     return request;
+  }
+
+  private assertRequestDispatch(signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    if (this.requestAuthorization.closed) throw new MCPRequestQuiescedError();
+    this.requestAuthorizationController?.signal.throwIfAborted();
+    this.resolveRequestHeaders?.assertOpen?.();
   }
 
   private async authorizeRequestHeaders(
@@ -1822,12 +1834,15 @@ export class MCPConnection extends EventEmitter {
                       }
                     }
                   }
-                  const response = await undiciFetch(urlString, {
+                  const requestInit: UndiciRequestInit = {
                     ...resolvedInit,
                     redirect: 'manual',
                     dispatcher: getSSEDispatcher(urlString),
                     headers: fetchHeaders,
-                  });
+                  };
+                  if (this.resolveRequestHeaders)
+                    this.assertRequestDispatch(requestInit.signal ?? undefined);
+                  const response = await undiciFetch(urlString, requestInit);
                   if (
                     this.resolveRequestHeaders?.recordFailure &&
                     (response.status === 401 || response.status === 403)

@@ -60,6 +60,7 @@ interface ScheduledBearerScope {
   reject: (serverName: string) => void;
 }
 const scopes = new WeakMap<RequestScopedMCPConnectionStore, ScheduledBearerScope>();
+const scopeSignals = new WeakMap<RequestScopedMCPConnectionStore, AbortSignal>();
 type BearerFailureRecorder = (error: ScheduledMCPBearerError) => Promise<boolean>;
 const failureRecorders = new WeakMap<RequestScopedMCPConnectionStore, BearerFailureRecorder>();
 
@@ -272,6 +273,7 @@ export function attachScheduledMCPBearer(
   if (scopes.has(context)) throw new ScheduledMCPBearerError('binding_mismatch', '');
   const requestSignal = getMCPRequestSignal(context);
   signal = signal ? AbortSignal.any([signal, requestSignal]) : requestSignal;
+  scopeSignals.set(context, signal);
   if (options?.onFailure) failureRecorders.set(context, options.onFailure);
   scopes.set(
     context,
@@ -301,6 +303,12 @@ export function createScheduledMCPBearerHeaderResolver(
   const onFailure = failureRecorders.get(context);
   const pending = new Set<Promise<boolean>>();
   const reports = new WeakMap<object, Promise<boolean>>();
+  const assertOpen = () => {
+    getMCPRequestSignal(context).throwIfAborted();
+    scopeSignals.get(context)?.throwIfAborted();
+    ownerSignal?.throwIfAborted();
+    if (context.quiesceStarted || context.cleanupStarted) throw new MCPRequestQuiescedError();
+  };
   const resolver: MCPRequestHeaderResolver = async (signal) => {
     if (ownerSignal) signal = signal ? AbortSignal.any([ownerSignal, signal]) : ownerSignal;
     signal?.throwIfAborted();
@@ -322,6 +330,7 @@ export function createScheduledMCPBearerHeaderResolver(
     if (!authorization) throw new ScheduledMCPBearerError('binding_mismatch', serverName);
     return { authorization: authorization[1] };
   };
+  resolver.assertOpen = assertOpen;
   if (onFailure)
     resolver.recordFailure = async (cause) => {
       const rejection = isMCPTransportAuthenticationError(cause);
