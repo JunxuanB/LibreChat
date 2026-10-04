@@ -335,7 +335,7 @@ export default function Search() {
   }
 
   return (
-    <div className="bg-surface-primary-alt relative flex h-full w-full flex-col pt-4">
+    <div className="bg-surface-canvas relative flex h-full w-full flex-col pt-4">
       {/* The count is the page's one heading, and the live region at the same time:
           announced to a screen reader and read by everyone else, rather than said
           twice out of two nodes. Aligned to the column the results sit in. */}
@@ -368,7 +368,7 @@ export default function Search() {
           <Spinner className="text-text-primary" />
         </div>
       )}
-      <div className="from-surface-primary-alt pointer-events-none absolute right-0 bottom-0 left-0 h-[5%] bg-gradient-to-t to-transparent" />
+      <div className="from-surface-canvas pointer-events-none absolute right-0 bottom-0 left-0 h-[5%] bg-gradient-to-t to-transparent" />
     </div>
   );
 }
