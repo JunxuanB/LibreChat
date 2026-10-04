@@ -1,7 +1,11 @@
 import { logger } from '@librechat/data-schemas';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import type { SchedulesServiceDeps } from './service';
-import { createSchedulesService, recordScheduledMCPToolAuthFailure } from './service';
+import {
+  createSchedulesService,
+  recordScheduledMCPToolAuthFailure,
+  ScheduledMCPReceiptFencedError,
+} from './service';
 import { ScheduledMCPPolicyError } from './authorization/policy';
 import { OboTokenResolutionError } from '../mcp/oauth/obo';
 import { ScheduledMCPBearerError } from '../mcp/errors';
@@ -995,9 +999,9 @@ describe('scheduled OBO tool failure settlement', () => {
         },
       }),
     );
-    await expect(service.recordMCPToolAuthFailure({ ...input, jobCreatedAt: 43 })).resolves.toBe(
-      false,
-    );
+    await expect(
+      service.recordMCPToolAuthFailure({ ...input, jobCreatedAt: 43 }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it.each(['consent_revoked', 'tool_policy_denied', 'credential_rejected'] as const)(
@@ -2586,6 +2590,156 @@ it('stops a stalled receipt attempt on shutdown without acknowledging persistenc
   } finally {
     release(false);
     controller.abort();
+    signal.mockRestore();
+  }
+});
+
+it.each(['false', 'throw'] as const)(
+  'holds A3 policy failures behind durable admission when the recorder returns %s',
+  async (mode) => {
+    jest.useFakeTimers();
+    const error = new ScheduledMCPPolicyError('tool_policy_denied', 'Files', 'child');
+    const input = {
+      error,
+      streamId: 'policy-admission',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: null,
+        agentId: 'root',
+        invocationMode: 'delegated' as const,
+      },
+    };
+    let durable = false,
+      returned = false;
+    const record = jest.fn(async () => {
+      if (!durable && mode === 'throw') throw new Error('Receipt unavailable');
+      return durable;
+    });
+    const first = recordScheduledMCPToolAuthFailure(input, () => record);
+    const duplicate = recordScheduledMCPToolAuthFailure(input, () => record);
+    const observed = first.then((value) => {
+      returned = true;
+      return value;
+    });
+    try {
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(returned).toBe(false);
+      expect(duplicate).toBe(first);
+      expect(record.mock.calls.length).toBeGreaterThan(1);
+      durable = true;
+      await jest.advanceTimersByTimeAsync(30_000);
+      await expect(observed).resolves.toBe(true);
+    } finally {
+      durable = true;
+      await jest.runAllTimersAsync();
+      await Promise.all([first, duplicate, observed]);
+      jest.useRealTimers();
+    }
+  },
+);
+
+it('does not coalesce different A3 diagnoses for the same exact generation', async () => {
+  jest.useFakeTimers();
+  let durable = false;
+  const record = jest.fn(async () => durable);
+  const input = {
+    streamId: 'policy-diagnoses',
+    jobCreatedAt: 42,
+    userId: 'owner',
+    serverName: 'Files',
+    identity: {
+      scheduleId: 's1',
+      ownerId: 'owner',
+      tenantId: null,
+      agentId: 'root',
+      invocationMode: 'delegated' as const,
+    },
+  };
+  const first = recordScheduledMCPToolAuthFailure(
+    { ...input, error: new ScheduledMCPPolicyError('tool_policy_denied', 'Files', 'child') },
+    () => record,
+  );
+  const second = recordScheduledMCPToolAuthFailure(
+    { ...input, error: new ScheduledMCPPolicyError('binding_mismatch', 'Files', 'child') },
+    () => record,
+  );
+  try {
+    expect(second).not.toBe(first);
+    durable = true;
+    await jest.advanceTimersByTimeAsync(30_000);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+  } finally {
+    durable = true;
+    await jest.runAllTimersAsync();
+    await Promise.all([first, second]);
+    jest.useRealTimers();
+  }
+});
+
+it('fences a foreign or replaced A3 receipt instead of retrying an impossible admission', async () => {
+  const record = jest.fn(async () => {
+    throw new ScheduledMCPReceiptFencedError();
+  });
+  await expect(
+    recordScheduledMCPToolAuthFailure(
+      {
+        error: new ScheduledMCPPolicyError('tool_policy_denied', 'Files', 'child'),
+        streamId: 'retired-policy',
+        jobCreatedAt: 42,
+        userId: 'owner',
+        serverName: 'Files',
+        identity: {
+          scheduleId: 's1',
+          ownerId: 'owner',
+          tenantId: null,
+          agentId: 'root',
+          invocationMode: 'delegated',
+        },
+      },
+      () => record,
+    ),
+  ).rejects.toMatchObject({ name: 'AbortError' });
+  expect(record).toHaveBeenCalledTimes(1);
+});
+
+it('interrupts an A3 admission wait at shutdown without a model-visible policy result', async () => {
+  const controller = new AbortController();
+  const signal = jest
+    .spyOn(jest.requireActual('../app/shutdown'), 'getShutdownSignal')
+    .mockReturnValue(controller.signal);
+  const record = jest.fn(async () => false);
+  const pending = recordScheduledMCPToolAuthFailure(
+    {
+      error: new ScheduledMCPPolicyError('tool_policy_denied', 'Files', 'child'),
+      streamId: 'policy-shutdown',
+      jobCreatedAt: 42,
+      userId: 'owner',
+      serverName: 'Files',
+      identity: {
+        scheduleId: 's1',
+        ownerId: 'owner',
+        tenantId: null,
+        agentId: 'root',
+        invocationMode: 'delegated',
+      },
+    },
+    () => record,
+    async () => ({ baseMs: 60_000, maxMs: 60_000 }),
+  );
+  const outcome = pending.catch((error) => error);
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
+    expect(record).toHaveBeenCalledTimes(1);
+  } finally {
+    controller.abort();
+    await outcome;
     signal.mockRestore();
   }
 });

@@ -1,27 +1,47 @@
+import { z } from 'zod';
+import { Keyv } from 'keyv';
 import Redis from 'ioredis';
 import mongoose from 'mongoose';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
+import { ToolNode } from '@librechat/agents';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { DynamicStructuredTool } from '@langchain/core/tools';
+import { AIMessage } from '@librechat/agents/langchain/messages';
 import { createModels, createMethods } from '@librechat/data-schemas';
+import type { ScheduledMCPTarget, ScheduledMCPReadOnlyPolicy } from 'librechat-data-provider';
 import type { IScheduleRun, IUser } from '@librechat/data-schemas';
 import type { IJobStoreV2, ScheduleProviderOwner } from '~/stream/interfaces/IJobStore';
+import type { ScheduledMCPBearerResult } from './authorization/contract';
+import type { MCPOAuthTokens } from '~/mcp/oauth/types';
 import type { SchedulesServiceDeps } from './service';
 import type { ParsedServerConfig } from '~/mcp/types';
+import {
+  attachScheduledMCPBearer,
+  ScheduledMCPBearerError,
+  createScheduledMCPBearerHost,
+  bindScheduledMCPBearerInvocation,
+} from './bearer';
 import {
   createMCPRequestContext,
   cleanupMCPRequestContext,
   quiesceMCPRequestContext,
 } from '~/mcp/request';
+import { createScheduleMCPExecution, bindScheduledMCPInvocation } from './authorization/execution';
+import { getScheduledMCPPolicyRevision, ScheduledMCPPolicyError } from './authorization/policy';
 import { InMemoryEventTransport } from '~/stream/implementations/InMemoryEventTransport';
 import { createSchedulesService, recordScheduledMCPToolAuthFailure } from './service';
+import { getScheduledMCPConfigurationRevision } from './authorization/configuration';
 import { createOAuthMCPServer } from '~/mcp/__tests__/helpers/oauthTestServer';
 import { InMemoryJobStore } from '~/stream/implementations/InMemoryJobStore';
-import { attachScheduledMCPBearer, ScheduledMCPBearerError } from './bearer';
+import { createScheduleMCPConsentService } from './authorization/service';
+import { MCPServersRegistry } from '~/mcp/registry/MCPServersRegistry';
 import { RedisJobStore } from '~/stream/implementations/RedisJobStore';
 import { GenerationJobManager } from '~/stream/GenerationJobManager';
 import { MCPConnectionFactory } from '~/mcp/MCPConnectionFactory';
+import { FlowStateManager } from '~/flow/manager';
 import { MCPConnection } from '~/mcp/connection';
+import { MCPManager } from '~/mcp/MCPManager';
 
 async function fixture(
   store: IJobStoreV2 = new InMemoryJobStore({ ttlAfterComplete: 0 }),
@@ -922,3 +942,207 @@ it('tears down a real session after a fenced receipt without touching its succes
     await f.close();
   }
 }, 30_000);
+
+it.each(['root', 'child'])(
+  "withholds an accepted B2 bearer's A3 denial from %s ToolNode until durable admission",
+  async (agentId) => {
+    const f = await fixture();
+    const provider = jest.fn(async () => 'Should not execute');
+    const server = await createOAuthMCPServer({ echoHandler: provider });
+    const context = createMCPRequestContext();
+    const manager = new MCPManager();
+    const user = { id: f.owner, role: 'USER' } as IUser;
+    const flowManager = new FlowStateManager<MCPOAuthTokens | null>(new Keyv(), {
+      ci: true,
+      ttl: 30_000,
+    });
+    let available = false;
+    let resultReturned = false;
+    let pending: Promise<unknown> | undefined;
+    const registry = jest.spyOn(MCPServersRegistry, 'getInstance').mockReturnValue({
+      isAppServerConfig: async () => false,
+      resolveAllowlists: async () => ({
+        allowedDomains: ['127.0.0.1'],
+        allowedAddresses: [`127.0.0.1:${server.port}`],
+        useSSRFProtection: false,
+      }),
+    } as unknown as MCPServersRegistry);
+    try {
+      const definition: ParsedServerConfig = {
+        type: 'streamable-http',
+        url: server.url,
+        requiresOAuth: false,
+        source: 'yaml',
+        headers: { Authorization: 'Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}' },
+      };
+      const policy: Record<string, ScheduledMCPReadOnlyPolicy> = {
+        Files: { tools: { echo: { effect: 'read_only', definitionSha256: '0'.repeat(64) } } },
+      };
+      const target: ScheduledMCPTarget = {
+        resource: {
+          serverName: 'Files',
+          url: server.url,
+          credentialMode: 'resource_bearer',
+          issuer: 'https://issuer.test/',
+          audience: 'files',
+          scopes: ['read'],
+          configurationRevision: '',
+        },
+        permittedTools: [
+          { agentId: 'root', tools: ['echo'] },
+          { agentId: 'child', tools: ['echo'] },
+        ],
+        policyRevision: '',
+      };
+      target.resource.configurationRevision = getScheduledMCPConfigurationRevision(
+        definition,
+        target.resource,
+      );
+      target.policyRevision = getScheduledMCPPolicyRevision(target.permittedTools, policy.Files);
+      const resolveEnrollment = async () => structuredClone([target]);
+      const consent = createScheduleMCPConsentService({
+        storage: f.methods,
+        resolveEnrollment,
+        getLimits: async () => ({ enabled: true, maxLifetimeHours: 24 }),
+        canUse: async () => true,
+        checkToolPolicy: async () => true,
+      });
+      const offer = await consent.view(f.identity);
+      await consent.confirm(f.identity, {
+        offerDigest: offer.offer!.digest,
+        expectedRevision: offer.revision,
+        lifetimeHours: 1,
+      });
+      const bearer = jest.fn(
+        async (): Promise<ScheduledMCPBearerResult> => ({
+          state: 'ready',
+          accessToken: 'policy-only',
+          expiresAtMs: Date.now() + 60_000,
+          issuer: target.resource.issuer!,
+          audience: target.resource.audience!,
+          resourceUrl: server.url,
+        }),
+      );
+      attachScheduledMCPBearer(
+        context,
+        f.identity,
+        createScheduledMCPBearerHost({
+          authority: consent.authority,
+          resolveEnrollment,
+          resolveBearer: bearer,
+        }),
+      );
+      await createScheduleMCPExecution({
+        storage: f.methods,
+        loadAuthorization: async () => ({ authority: consent.authority, policy }),
+      }).attach(context, f.identity, 'invoke', true);
+      server.issuedTokens.add('policy-only');
+      server.tokenIssueTimes.set('policy-only', Date.now());
+      const persist = f.service.engineDeps.methods.recordMCPToolAuthFailure;
+      const writes = jest
+        .spyOn(f.service.engineDeps.methods, 'recordMCPToolAuthFailure')
+        .mockImplementation(async (input) => {
+          if (!available) throw new Error('Receipt storage unavailable');
+          return persist(input);
+        });
+      let failure: unknown;
+      const tool = new DynamicStructuredTool({
+        name: 'echo_mcp_Files',
+        description: 'Read',
+        schema: z.object({}),
+        func: async () => {
+          try {
+            return await manager.callTool({
+              user,
+              serverName: 'Files',
+              serverConfig: definition,
+              provider: 'openai',
+              toolName: 'echo',
+              toolArguments: { message: 'policy' },
+              flowManager,
+              requestScopedConnections: context,
+              scheduledBearerInvocation: bindScheduledMCPBearerInvocation(context, agentId, 'echo'),
+              scheduledMCPInvocation: bindScheduledMCPInvocation(context, agentId, 'echo'),
+            });
+          } catch (error) {
+            failure = error;
+            await recordScheduledMCPToolAuthFailure(
+              {
+                error,
+                identity: f.identity,
+                streamId: f.job.streamId,
+                jobCreatedAt: f.job.createdAt,
+                userId: f.owner,
+                serverName: 'Files',
+              },
+              () => f.service.recordMCPToolAuthFailure,
+            );
+            throw error;
+          }
+        },
+      });
+      pending = new ToolNode({ agentId, tools: [tool] })
+        .invoke(
+          {
+            messages: [
+              new AIMessage({
+                content: '',
+                tool_calls: [{ id: 'policy', name: tool.name, args: {} }],
+              }),
+            ],
+          },
+          { configurable: { run_id: 'scheduled-policy', thread_id: f.job.streamId } },
+        )
+        .then((value) => {
+          resultReturned = true;
+          return value;
+        });
+      const deadline = Date.now() + 3000;
+      while (writes.mock.calls.length === 0 && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(writes).toHaveBeenCalled();
+      expect(bearer).toHaveBeenCalledTimes(1);
+      expect(failure).toBeInstanceOf(ScheduledMCPPolicyError);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(resultReturned).toBe(false);
+      expect(provider).not.toHaveBeenCalled();
+      expect((await f.store.getJob(f.job.streamId))?.scheduleMCPFailure).toMatchObject({
+        reason: 'tool_policy_denied',
+        agentId,
+      });
+      expect(
+        (await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor))?.mcp,
+      ).toBeUndefined();
+      await expect(f.service.recordScheduleOutcome(f.outcome)).resolves.toBe(false);
+      available = true;
+      const result = await pending;
+      expect(JSON.stringify(result)).toContain('tool_policy_denied');
+      expect(await f.methods.getScheduleRunAbortState(f.schedule.id, f.scheduledFor)).toMatchObject(
+        {
+          status: 'started',
+          mcp: [expect.objectContaining({ reason: 'tool_policy_denied', agentId })],
+        },
+      );
+      await f.store.updateJob(
+        f.job.streamId,
+        { status: 'complete', completedAt: Date.now() },
+        f.job.createdAt,
+      );
+      await expect(f.service.recordScheduleOutcome(f.outcome)).resolves.toBe(true);
+      expect(await f.methods.getScheduleById(f.schedule.id)).toMatchObject({
+        enabled: false,
+        disabledReason: 'mcp_permission_denied',
+        lastRun: { status: 'error' },
+      });
+    } finally {
+      available = true;
+      await pending?.catch(() => undefined);
+      await cleanupMCPRequestContext(context);
+      registry.mockRestore();
+      MCPConnection.clearCooldown('Files');
+      await server.close();
+      await f.close();
+    }
+  },
+  30_000,
+);

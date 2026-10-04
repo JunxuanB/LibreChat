@@ -332,7 +332,7 @@ const receiptFlights = new WeakMap<
   Map<string, Promise<boolean>>
 >();
 
-/** Bearer failures do not become model tool errors until durable evidence exists. */
+/** Scheduled authorization failures cannot become model errors before durable admission. */
 export function recordScheduledMCPToolAuthFailure(
   input: ScheduleMCPFailureInput,
   getRecorder: () => SchedulesService['recordMCPToolAuthFailure'],
@@ -361,18 +361,13 @@ export function recordScheduledMCPToolAuthFailure(
   } catch (error) {
     return Promise.reject(error);
   }
-  if (input.error instanceof ScheduledMCPPolicyError)
-    return record(input).catch((error) => {
-      logger.warn('[schedules] could not persist MCP authorization failure receipt:', error);
-      return false;
-    });
   const key = JSON.stringify([
     input.streamId,
     input.jobCreatedAt,
     input.userId,
     input.identity,
     input.serverName,
-    input.error instanceof ScheduledMCPBearerError
+    input.error instanceof ScheduledMCPBearerError || input.error instanceof ScheduledMCPPolicyError
       ? input.error.outcomes
       : 'missing_upstream_provider',
   ]);
@@ -470,7 +465,7 @@ export function createScheduledMCPPolicyRecorder(
   const scope = Object.freeze({ ...job });
   return (error) => {
     if (scope.userId !== identity.ownerId || (scope.tenantId ?? null) !== identity.tenantId)
-      return Promise.resolve(false);
+      return Promise.reject(new ScheduledMCPReceiptFencedError());
     return record({
       error,
       identity,
@@ -1196,7 +1191,7 @@ export function createSchedulesService(
             identity.agentId !== job.agent_id)))
     ) {
       pendingBearerFailures.delete(key);
-      if (error instanceof ScheduledMCPBearerError) throw new ScheduledMCPReceiptFencedError();
+      if (bearer) throw new ScheduledMCPReceiptFencedError();
       return false;
     }
     if (error instanceof ScheduledMCPPolicyError && !pendingBearerFailures.has(key)) {
