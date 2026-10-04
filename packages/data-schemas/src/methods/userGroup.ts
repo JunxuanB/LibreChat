@@ -1017,11 +1017,11 @@ export function createUserGroupMethods(
   function calculateRelevanceScore(item: TPrincipalSearchResult, searchPattern: string): number {
     const normalizedPattern = normalizeSearchText(searchPattern);
 
-    /** Get searchable text based on type */
+    /** The fields each search matches on; a group's description is not one of them */
     const searchableFields =
       item.type === PrincipalType.USER
         ? [item.name, item.email, item.username].filter(Boolean)
-        : [item.name, item.email, item.description].filter(Boolean);
+        : [item.name, item.email].filter(Boolean);
 
     let maxScore = 0;
 

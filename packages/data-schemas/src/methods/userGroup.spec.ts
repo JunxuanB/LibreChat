@@ -1444,17 +1444,22 @@ describe('userGroup methods', () => {
       expect(score).toBe(100);
     });
 
-    it('checks description for GROUP type', () => {
-      const score = methods.calculateRelevanceScore(
+    it('ignores description for GROUP type, which search no longer matches', () => {
+      const weak = methods.calculateRelevanceScore(
         {
           type: PrincipalType.GROUP,
-          name: 'other',
-          description: 'alice team',
+          name: 'Corporate Platform',
+          description: 'plat',
           source: 'local',
         },
-        'alice',
+        'plat',
       );
-      expect(score).toBe(80);
+      const strong = methods.calculateRelevanceScore(
+        { type: PrincipalType.GROUP, name: 'Platform Team', source: 'local' },
+        'plat',
+      );
+      expect(weak).toBe(50);
+      expect(strong).toBeGreaterThan(weak);
     });
 
     it('picks the highest score across multiple fields', () => {
