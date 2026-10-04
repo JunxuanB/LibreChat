@@ -210,6 +210,8 @@ test.describe('agent handoffs', () => {
       await expect(handoffs).toBeVisible();
 
       await handoffs.getByRole('combobox', { name: 'Add agent' }).click();
+      await page.locator('input[placeholder="Search agent"]:visible').fill(specialistName);
+      await expect(page.locator('input[placeholder="Search agent"]:visible')).toBeFocused();
       await page.getByRole('option', { name: specialistName }).click();
       await expect(handoffs.getByText('1 / 10', { exact: true })).toBeVisible();
       await handoffs.getByRole('button', { name: 'Expand' }).click();
@@ -403,6 +405,8 @@ test.describe('agent handoffs', () => {
       const destinationDialog = page.getByRole('dialog', { name: 'Select agent' }).last();
       await expect(destinationDialog.getByRole('option', { name: firstName })).toBeVisible();
       await expect(destinationDialog.getByRole('option', { name: thirdName })).toBeVisible();
+      await destinationDialog.getByPlaceholder('Search agent').fill(firstName);
+      await expect(destinationDialog.getByPlaceholder('Search agent')).toBeFocused();
       await destinationDialog.getByRole('option', { name: firstName }).click();
 
       await addAgent.click();
