@@ -737,13 +737,16 @@ export const getViableUploadOptions = (
   if (every((type) => isProviderAttachType(type, ctx))) {
     options.push(undefined);
   }
+  /* `validateFiles` refuses a file search upload outside the endpoint allowlist, so a type
+   * the operator narrowed away must not be offered as a destination first. */
   if (
     ctx.fileSearchEnabled &&
     ctx.fileSearchAllowedByAgent &&
     every(
       (type) =>
         !type.startsWith('image/') &&
-        (checkType(type, retrievalMimeTypes) || checkType(type, proseDocumentMimeTypes)),
+        (checkType(type, retrievalMimeTypes) || checkType(type, proseDocumentMimeTypes)) &&
+        (ctx.endpointSupportedMimeTypes == null || checkType(type, ctx.endpointSupportedMimeTypes)),
     )
   ) {
     options.push(EToolResources.file_search);

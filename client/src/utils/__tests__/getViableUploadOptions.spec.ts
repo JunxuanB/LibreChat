@@ -64,6 +64,16 @@ describe('getViableUploadOptions', () => {
       ]);
     });
 
+    it('does not offer file search for a type the endpoint allowlist excludes', () => {
+      const ctx = baseCtx({ endpointSupportedMimeTypes: [/^application\/pdf$/] });
+      expect(getViableUploadOptions([file('application/rtf', 'notes.rtf')], ctx)).toEqual([
+        EToolResources.context,
+      ]);
+      expect(getViableUploadOptions([file(DOCX, 'report.docx')], ctx)).not.toContain(
+        EToolResources.file_search,
+      );
+    });
+
     it('routes a locally excluded document through explicitly configured OCR', () => {
       const parserRestrictedConfig = {
         text: { supportedMimeTypes: [/^[\w.-]+\/[\w.-]+$/] },
