@@ -40,6 +40,7 @@ const config = {
   secureImageLinks: true,
   sub2api: {
     enabled: true,
+    skillsEnabled: true,
     baseURL: base,
     publicURL: siteURL,
     timeoutMs: 8000,
@@ -52,7 +53,8 @@ const config = {
   interface: {
     customWelcome: '开始与你的 AI 对话',
     modelSelect: true,
-    parameters: true,
+    parameters: false,
+    skills: { use: true, create: true, share: false, public: false },
     multiConvo: false,
     bookmarks: true,
     memories: false,
@@ -67,6 +69,7 @@ const config = {
     marketplace: { use: false },
   },
   endpoints: {
+    agents: { capabilities: ['skills', 'context', 'ocr'], disableBuilder: true },
     custom: [
       {
         name: 'sub2api',

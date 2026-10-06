@@ -17,6 +17,8 @@ const smokeModel = imageMode ? 'gpt-image-2.5-sunburst' : 'gpt-6.1-sol';
 const png =
   'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAGUlEQVQokWMQCXhGEmIY1RAwGkoiwzVpAACemEoQZfDkSwAAAABJRU5ErkJggg==';
 const imageRequests = [];
+const skillCalls = [];
+const skillName = 'smoke-chat-workflow';
 let lastChatBody;
 const availableModels = imageMode ? [smokeModel] : ['gpt-image-2.5-sunburst', smokeModel];
 
@@ -64,6 +66,72 @@ const gateway = http.createServer(async (req, res) => {
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     lastChatBody = body;
+    // Skill priming adds meta user messages after the actual submitted turn.
+    const contentText = (message) =>
+      typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
+    const turnIndex = body.messages.findLastIndex(
+      (message) =>
+        message.role === 'user' &&
+        /请确认|请将这次对话|请自动调用|按选定|检查历史/.test(contentText(message)),
+    );
+    const userText = turnIndex >= 0 ? contentText(body.messages[turnIndex]) : '';
+    const createSkill = userText.includes('总结为一个 Skill 并保存');
+    const invokeSkill = userText.includes('自动调用保存的 Skill');
+    const toolName = createSkill ? 'create_file' : invokeSkill ? 'skill' : null;
+    const toolReturned = body.messages
+      .slice(turnIndex + 1)
+      .some((message) => message.role === 'tool');
+    if (toolName && !toolReturned) {
+      assert.ok(body.tools.some((tool) => tool.function.name === toolName));
+      assert.ok(!body.tools.some((tool) => tool.function.name === 'bash_tool'));
+      if (invokeSkill) assert.ok(JSON.stringify(body.messages).includes(skillName));
+      skillCalls.push(toolName);
+      const args = createSkill
+        ? {
+            path: `skills/${skillName}/SKILL.md`,
+            content: `---\nname: ${skillName}\ndescription: 在验证聊天对接时使用，检查持久化和恢复。\n---\n先检查对接，再验证记录恢复。`,
+          }
+        : { skillName };
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write(
+        `data: ${JSON.stringify({
+          id: 'chatcmpl-skill',
+          object: 'chat.completion.chunk',
+          model: smokeModel,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: 'assistant',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: `call_${toolName}_${skillCalls.length}`,
+                    type: 'function',
+                    function: { name: toolName, arguments: JSON.stringify(args) },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          id: 'chatcmpl-skill',
+          object: 'chat.completion.chunk',
+          model: smokeModel,
+          choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+        })}\n\n`,
+      );
+      return res.end('data: [DONE]\n\n');
+    }
+    const finalText = createSkill
+      ? 'Skill 已保存。'
+      : invokeSkill
+        ? '已自动调用 Skill。'
+        : '对接成功，聊天记录会保存在服务器。';
     const answer = {
       id: 'chatcmpl-smoke',
       object: 'chat.completion',
@@ -71,7 +139,7 @@ const gateway = http.createServer(async (req, res) => {
       choices: [
         {
           index: 0,
-          message: { role: 'assistant', content: '对接成功，聊天记录会保存在服务器。' },
+          message: { role: 'assistant', content: finalText },
           finish_reason: 'stop',
         },
       ],
@@ -153,6 +221,7 @@ async function main() {
       LOGIN_MAX: '100',
     },
   });
+  let browser;
   console.log(`Smoke server log: ${path.join(state, 'server.log')}`);
   try {
     let ready = false;
@@ -247,7 +316,7 @@ async function main() {
     );
     if (process.env.SUB2API_SMOKE_BROWSER === 'true') {
       const { chromium } = require('playwright');
-      const browser = await chromium.launch({ channel: 'chrome' });
+      browser = await chromium.launch({ channel: 'chrome' });
       const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
       page.on('pageerror', (error) => console.log('BROWSER ERROR:', error.message));
       await page.goto(`${origin}/login`);
@@ -262,9 +331,12 @@ async function main() {
           .getByTestId('model-selector-button')
           .getByText('gpt-6.1-sol', { exact: true })
           .waitFor();
-        await page.getByRole('combobox', { name: '推理强度' }).click();
-        await page.getByRole('option', { name: '超深度', exact: true }).click();
-        await page.screenshot({ path: path.join(state, 'mobile-reasoning.png'), fullPage: true });
+        const reasoning = page.getByRole('combobox', { name: '推理强度' });
+        await reasoning.click();
+        assert.equal(await page.getByRole('option').count(), 4);
+        await page.getByRole('option', { name: '高', exact: true }).click();
+        await reasoning.getByText('高', { exact: true }).waitFor();
+        assert.equal(await page.getByText('自定义参数', { exact: true }).count(), 0);
       }
       const composer = page.getByTestId('text-input');
       await composer.fill('请确认聊天对接正常。');
@@ -288,8 +360,69 @@ async function main() {
       }
       if (!imageMode) {
         assert.equal(lastChatBody.model, 'gpt-6.1-sol');
-        assert.equal(lastChatBody.reasoning_effort, 'ultra');
+        assert.equal(lastChatBody.reasoning_effort, 'high');
         console.log('PASS: default gpt-6.1-sol and user-selected reasoning effort reaches gateway');
+      }
+      if (!imageMode) {
+        const menu = page.getByRole('button', { name: '技能', exact: true });
+        await menu.click();
+        await page.getByRole('menuitem', { name: '总结并保存为 Skill' }).click();
+        assert.ok((await composer.inputValue()).includes('总结为一个 Skill 并保存'));
+        await composer.press('Enter');
+        await page
+          .getByTestId('screenshot-target')
+          .getByText('Skill 已保存。', { exact: true })
+          .waitFor({ timeout: 30000 });
+        const saved = await (
+          await fetch(`${origin}/api/skills?search=${skillName}`, { headers })
+        ).json();
+        assert.equal(saved.skills.length, 1);
+        const skillId = saved.skills[0]._id;
+        const detail = await (await fetch(`${origin}/api/skills/${skillId}`, { headers })).json();
+        assert.ok(detail.body.includes('先检查对接'));
+        const foreignHeaders = { Authorization: `Bearer ${other.token}`, 'User-Agent': userAgent };
+        const foreign = await (
+          await fetch(`${origin}/api/skills?search=${skillName}`, { headers: foreignHeaders })
+        ).json();
+        assert.equal(foreign.skills.length, 0);
+        assert.equal(
+          (await fetch(`${origin}/api/skills/${skillId}`, { headers: foreignHeaders })).status,
+          403,
+        );
+        await composer.fill('请自动调用保存的 Skill 验证聊天。');
+        await composer.press('Enter');
+        await page
+          .getByTestId('screenshot-target')
+          .getByText('已自动调用 Skill。', { exact: true })
+          .waitFor({ timeout: 30000 });
+        assert.deepEqual(skillCalls, ['create_file', 'skill']);
+        await menu.click();
+        await page.getByRole('menuitem', { name: '选择 Skill' }).click();
+        await page.getByText(skillName, { exact: true }).last().click();
+        await page.getByRole('button', { name: `移除 ${skillName}` }).waitFor();
+        await composer.fill('按选定的 Skill 验证聊天。');
+        await composer.press('Enter');
+        await page
+          .getByTestId('screenshot-target')
+          .getByText('对接成功，聊天记录会保存在服务器。', { exact: true })
+          .nth(1)
+          .waitFor({ timeout: 30000 });
+        assert.ok(JSON.stringify(lastChatBody.messages).includes('先检查对接'));
+        const reasoning = page.getByRole('combobox', { name: '推理强度' });
+        await reasoning.click();
+        await page.getByRole('option', { name: '低', exact: true }).click();
+        await reasoning.getByText('低', { exact: true }).waitFor();
+        await composer.fill('检查历史对话切换推理强度。');
+        await composer.press('Enter');
+        await page
+          .getByTestId('screenshot-target')
+          .getByText('对接成功，聊天记录会保存在服务器。', { exact: true })
+          .nth(2)
+          .waitFor({ timeout: 30000 });
+        assert.equal(lastChatBody.reasoning_effort, 'low');
+        console.log(
+          'PASS: Skill creation, automatic invocation, manual selection and cross-Key isolation; reasoning UI and payload stay synchronized',
+        );
       }
       const conversationURL = page.url();
       const otherHistory = await fetch(
@@ -381,6 +514,7 @@ async function main() {
         await secondPage
           .getByTestId('screenshot-target')
           .getByText('对接成功，聊天记录会保存在服务器。', { exact: true })
+          .first()
           .waitFor();
       }
       await secondPage.screenshot({ path: path.join(state, 'desktop-chat.png'), fullPage: true });
@@ -399,6 +533,7 @@ async function main() {
       await new Promise(() => {});
     }
   } finally {
+    await browser?.close();
     backend.kill('SIGTERM');
     gateway.close();
   }

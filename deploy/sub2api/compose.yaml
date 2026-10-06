@@ -4,7 +4,7 @@ name: sub2api-chat
 # 和 sub2api 部署在同一台机器；只需调整下面的三个地址/端口。
 services:
   init:
-    image: junxuanb/librechat:1.0.1
+    image: junxuanb/librechat:1.0.2
     command: ['node', '/app/deploy/sub2api/init.cjs']
     environment:
       SUB2API_URL: http://host.docker.internal:7777
@@ -14,7 +14,7 @@ services:
     restart: 'no'
 
   chat:
-    image: junxuanb/librechat:1.0.1
+    image: junxuanb/librechat:1.0.2
     entrypoint: ['/bin/sh', '/app/deploy/sub2api/start.sh']
     depends_on:
       init:

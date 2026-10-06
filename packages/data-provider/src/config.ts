@@ -2523,6 +2523,7 @@ export type TStartupConfig = {
     subtitle?: string;
     logo?: string;
     defaultModel?: string;
+    skillsEnabled?: boolean;
   };
   socialLogins?: string[];
   langfuseFanoutEnabled?: boolean;
@@ -3149,6 +3150,7 @@ export const configSchema = z.object({
       imageTimeoutMs: z.number().int().min(1000).max(900000).default(300000),
       imageMaxBytes: z.number().int().min(1024).max(52428800).default(20971520),
       defaultModel: z.string().min(1).default('gpt-6.1-sol'),
+      skillsEnabled: z.boolean().default(false),
     })
     .optional(),
   permissions: z.object({ maxWriteAttempts: permissionWriteAttemptsSchema }).optional(),

@@ -3069,5 +3069,9 @@
   "com_nav_mobile_drawer_strip": "Show chat beside the sidebar on mobile",
   "com_nav_mobile_drawer_strip_info": "The sidebar stops short of the edge so a strip of the conversation stays visible. Tapping it closes the sidebar.",
   "com_ui_sub2api_image_retry": "Unable to load image. Retry",
-  "com_ui_sub2api_ultra": "Ultra"
+  "com_ui_sub2api_ultra": "Ultra",
+  "com_ui_sub2api_skill_select": "Choose a Skill",
+  "com_ui_sub2api_skill_save": "Summarize as a Skill",
+  "com_ui_sub2api_skill_hint": "Ask AI to save reusable Skills. Relevant Skills can be used automatically, or selected here.",
+  "com_ui_sub2api_skill_prompt": "Summarize the reusable workflow, preferences, and lessons from this conversation as a Skill and save it. Use a concise SKILL.md with a name, a description that explains when to use it, and actionable instructions. Exclude API keys, credentials, and private conversation details. Save it using the available Skill tools, and confirm only after the save succeeds."
 }

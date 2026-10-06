@@ -9,9 +9,6 @@ const labels: Partial<Record<ReasoningEffort, TranslationKeys>> = {
   [ReasoningEffort.low]: 'com_ui_low',
   [ReasoningEffort.medium]: 'com_ui_medium',
   [ReasoningEffort.high]: 'com_ui_high',
-  [ReasoningEffort.xhigh]: 'com_ui_xhigh',
-  [ReasoningEffort.max]: 'com_ui_max',
-  [ReasoningEffort.ultra]: 'com_ui_sub2api_ultra',
 };
 
 export default function Reasoning({
@@ -32,7 +29,8 @@ export default function Reasoning({
     !/^gpt-6(?:\.\d+)?-(?:sol|luna)(?:-|$)/.test(conversation.model ?? '')
   )
     return null;
-  const value = conversation.reasoning_effort || 'auto';
+  const effort = conversation.reasoning_effort ?? '';
+  const value = effort in labels ? effort || 'auto' : ReasoningEffort.high;
   return (
     <Select
       value={value}
@@ -47,17 +45,11 @@ export default function Reasoning({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {Object.entries(labels)
-          .filter(
-            ([effort]) =>
-              effort !== ReasoningEffort.ultra ||
-              /^gpt-6\.1-sol(?:-|$)/.test(conversation.model ?? ''),
-          )
-          .map(([effort, label]) => (
-            <SelectItem key={effort || 'auto'} value={effort || 'auto'}>
-              {localize(label)}
-            </SelectItem>
-          ))}
+        {Object.entries(labels).map(([effort, label]) => (
+          <SelectItem key={effort || 'auto'} value={effort || 'auto'}>
+            {localize(label)}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );

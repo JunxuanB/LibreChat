@@ -202,6 +202,15 @@ export function createSub2API(deps: Dependencies): Integration {
         sendFailure(res, 403, 'SUB2API_PROVIDER_DISABLED');
         return;
       }
+      if (req.body?.endpoint === 'sub2api' && path.startsWith('/api/agents/')) {
+        req.body.ephemeralAgent = {
+          ...req.body.ephemeralAgent,
+          skills: config.skillsEnabled,
+        };
+        if (['xhigh', 'max', 'ultra'].includes(req.body.reasoning_effort)) {
+          req.body.reasoning_effort = 'high';
+        }
+      }
       next();
     } catch {
       sendFailure(res, 503, 'SUB2API_UNAVAILABLE');
@@ -247,6 +256,7 @@ export function createSub2API(deps: Dependencies): Integration {
       sub2api: {
         enabled: true,
         defaultModel: config.defaultModel,
+        skillsEnabled: config.skillsEnabled,
         siteUrl: resolveURL(config.publicURL),
         subtitle: publicSettings.site_subtitle,
         logo:

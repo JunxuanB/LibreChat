@@ -9,7 +9,7 @@ const secret = 'persistent-test-identity-secret-32-characters';
 const fingerprint = (key: string) =>
   createHmac('sha256', secret).update('sub2api:').update(key).digest('hex');
 
-function fixture(options: { enabled?: boolean; ttl?: number } = {}) {
+function fixture(options: { enabled?: boolean; ttl?: number; skillsEnabled?: boolean } = {}) {
   const config: AppConfig = {
     config: {
       version: '1.3.5',
@@ -18,6 +18,7 @@ function fixture(options: { enabled?: boolean; ttl?: number } = {}) {
         baseURL: 'http://gateway.invalid',
         publicURL: 'http://site.invalid',
         validationTtlMs: options.ttl ?? 30000,
+        skillsEnabled: options.skillsEnabled ?? false,
       },
     },
     fileStrategy: FileSources.local,
@@ -63,8 +64,8 @@ function fixture(options: { enabled?: boolean; ttl?: number } = {}) {
   app.put('/api/keys', (_req, res) => {
     res.sendStatus(201);
   });
-  app.post('/api/agents/chat', (_req, res) => {
-    res.sendStatus(200);
+  app.post('/api/agents/chat', (req, res) => {
+    res.json(req.body);
   });
   return { app, integration, fetchMock, getOrCreateSub2APIUser, updateUserKey, getUserKeyValues };
 }
@@ -159,6 +160,28 @@ describe('sub2api Token authentication', () => {
     expect(result.body.code).toBe('SUB2API_SWITCH_KEY_REQUIRED');
     await request(f.app).post('/api/agents/chat').send({ endpoint: 'openAI' }).expect(403);
     await request(f.app).post('/api/agents/chat').send({ endpoint: 'sub2api' }).expect(200);
+  });
+
+  it('enables configured Skill authoring on chat requests without changing the user role', async () => {
+    const f = fixture({ skillsEnabled: true });
+    const response = await request(f.app)
+      .post('/api/agents/chat')
+      .send({ endpoint: 'sub2api', ephemeralAgent: { skills: false }, reasoning_effort: 'ultra' })
+      .expect(200);
+    expect(response.body.ephemeralAgent).toEqual({ skills: true });
+    expect(response.body.reasoning_effort).toBe('high');
+    expect((await f.integration.startup()).sub2api?.skillsEnabled).toBe(true);
+    expect(f.getOrCreateSub2APIUser).not.toHaveBeenCalled();
+  });
+
+  it('keeps Skills disabled by default and retains supported reasoning settings', async () => {
+    const f = fixture();
+    const response = await request(f.app)
+      .post('/api/agents/chat')
+      .send({ endpoint: 'sub2api', ephemeralAgent: { skills: true }, reasoning_effort: 'low' })
+      .expect(200);
+    expect(response.body.ephemeralAgent.skills).toBe(false);
+    expect(response.body.reasoning_effort).toBe('low');
   });
 
   it('keeps the upstream login flow available when integration is disabled', async () => {

@@ -74,7 +74,7 @@ ENV BUILD_COMMIT=${BUILD_COMMIT}
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 ENV BUILD_DATE=${BUILD_DATE}
 LABEL org.opencontainers.image.source="https://github.com/JunxuanB/LibreChat" \
-      org.opencontainers.image.version="1.0.1" \
+      org.opencontainers.image.version="1.0.2" \
       org.opencontainers.image.revision=${BUILD_COMMIT}
 
 # Node API setup

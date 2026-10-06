@@ -65,6 +65,7 @@ import AudioRecorder from './AudioRecorder';
 import AutoPlayAudio from './AutoPlayAudio';
 import CollapseChat from './CollapseChat';
 import QuoteButton from './QuoteButton';
+import SkillsMenu from './SkillsMenu';
 import TokenUsage from './TokenUsage';
 import StopButton from './StopButton';
 import SendButton from './SendButton';
@@ -864,15 +865,28 @@ const ChatForm = memo(function ChatForm({
                 </div>
                 <Reasoning
                   conversation={conversation}
-                  enabled={
-                    startupConfig?.sub2api?.enabled === true &&
-                    startupConfig?.interface?.parameters === true
-                  }
+                  enabled={startupConfig?.sub2api?.enabled === true}
                   disabled={isSubmitting}
                 />
+                {startupConfig?.sub2api?.enabled === true &&
+                  startupConfig.sub2api.skillsEnabled === true && (
+                    <SkillsMenu
+                      index={index}
+                      disabled={disableInputs || isSubmitting}
+                      onSummarize={() => {
+                        const text = methods.getValues('text')?.trim();
+                        const prompt = localize('com_ui_sub2api_skill_prompt');
+                        methods.setValue('text', text ? `${text}\n\n${prompt}` : prompt, {
+                          shouldValidate: true,
+                        });
+                        focusTextArea();
+                      }}
+                    />
+                  )}
                 <BadgeRow
                   showEphemeralBadges={
                     !!endpoint &&
+                    startupConfig?.sub2api?.enabled !== true &&
                     !hideBadgeRow &&
                     !isAgentsEndpoint(endpoint) &&
                     !isAssistantsEndpoint(endpoint)
@@ -997,6 +1011,7 @@ function ChatFormWrapper({
       conversation?.assistant_id,
       conversation?.spec,
       conversation?.useResponsesApi,
+      conversation?.reasoning_effort,
       conversation?.model,
       conversation?.maxContextTokens,
       conversation?.codeApprovalMode,
